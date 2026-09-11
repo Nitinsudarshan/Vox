@@ -14,7 +14,10 @@ crate-type = ["staticlib", "rlib"]
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["tray-icon"] }
+# `protocol-asset` serves a meeting's recording to the webview so the player
+# in Meeting Detail can seek around it. Scoped at runtime to the vault's
+# meetings directory and nothing else — see `lib.rs`.
+tauri = { version = "2.0", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2.0"
 tauri-plugin-notification = "2.0"

@@ -163,6 +163,40 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle();
 
+            // Let the webview read a meeting's recording, and nothing else.
+            //
+            // The player in Meeting Detail needs to seek around a file that can
+            // be hundreds of megabytes, so it has to be served rather than
+            // handed over IPC. The scope is granted here at runtime, against
+            // the vault's `meetings/` directory, because that path is a user
+            // setting and cannot be a static entry in `tauri.conf.json`.
+            //
+            // Deliberately narrow. Meetily grants its window `fs:read-all` and
+            // `fs:write-all` alongside a nominally scoped `$APPDATA/*`, which
+            // makes the scope decorative; anything running in that webview can
+            // read the user's disk. One directory is the whole of what this
+            // feature needs.
+            //
+            // TODO(vault-relocation): `set_vault_dir` repoints `state.vault`
+            // but not `meeting_store`, so moving the vault already leaves
+            // meetings reading the old location (`commands.rs`, set_vault_path).
+            // This scope inherits that staleness. Fixing the store's repoint is
+            // what fixes both.
+            {
+                let state = app.state::<AppState>();
+                let meetings_dir = state.meeting_store.meetings_dir();
+                if let Err(error) = app
+                    .asset_protocol_scope()
+                    .allow_directory(&meetings_dir, true)
+                {
+                    tracing::warn!(
+                        "meeting audio playback unavailable: could not allow {}: {}",
+                        meetings_dir.display(),
+                        error
+                    );
+                }
+            }
+
             // First, and before anything that can fail: the main window is
             // configured hidden so "start minimized" does not flash the
             // control panel on screen, which means *something* has to show it.

@@ -271,4 +271,92 @@ describe('MeetingsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /change/i }));
     expect(onOpenSpeechSettings).toHaveBeenCalled();
   });
+  test('plays a stored recording and seeks to the line that was clicked', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting({ audio_path: '/vault/meetings/meeting-1/audio/recording.wav' }),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+          {
+            sequence: 1,
+            text: 'yes, go ahead',
+            start_seconds: 65,
+            end_seconds: 68,
+            channel: 'system',
+            no_speech_prob: 0.02,
+            recorded_at: '2026-09-10T09:01:05Z',
+          },
+        ],
+        summary: null,
+        notes: '',
+      },
+    });
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    const audio = (await screen.findByTestId('meeting-audio')) as HTMLAudioElement;
+    expect(screen.getByRole('button', { name: /play recording/i })).toBeInTheDocument();
+
+    // The timestamp on a line is the seek control — the transcript is how you
+    // get to a moment, not a separate scrubbing exercise.
+    fireEvent.click(screen.getByRole('button', { name: /play from 01:05/i }));
+    await waitFor(() => expect(audio.currentTime).toBe(65));
+  });
+
+  test('shows transcript and report together on a wide window', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: {
+          markdown: '# Weekly sync\n\nWe agreed to ship.',
+          status: 'completed',
+          template_id: 'general',
+          generated_at: '2026-09-10T10:00:00Z',
+          model: 'llama3.2:latest',
+          language: '',
+          error: null,
+        },
+        notes: '',
+      },
+    });
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    const both = await screen.findByRole('tab', { name: /both/i });
+    expect(both).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('shall we start')).toBeInTheDocument();
+    expect(screen.getByText(/we agreed to ship\./i)).toBeInTheDocument();
+  });
+
+  test('offers no seek control for a meeting with no saved recording', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    await screen.findByText('shall we start');
+
+    expect(screen.queryByTestId('meeting-audio')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /play from/i })).not.toBeInTheDocument();
+  });
 });
