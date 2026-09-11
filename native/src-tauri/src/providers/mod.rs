@@ -1,7 +1,9 @@
 mod ollama_manager;
 
+pub mod ollama_install;
+
 pub use ollama_manager::{
-    ensure_ollama_ready, list_installed_models, test_ollama_prompt, OllamaModelDetails,
+    ensure_ollama_ready, set_managed_binary, list_installed_models, test_ollama_prompt, OllamaModelDetails,
     OllamaPromptTestResult, OllamaStatus,
 };
 use serde::{Deserialize, Serialize};

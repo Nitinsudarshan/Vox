@@ -57,6 +57,7 @@ import { CaptureSettingsView } from './CaptureSettingsView';
 import { MeetingSettingsView } from './MeetingSettingsView';
 import { SpeechModelsView } from './SpeechModelsView';
 import { CloudProviderSettings } from './CloudProviderSettings';
+import { OllamaInstallCard } from './OllamaInstallCard';
 
 export type SettingsSection =
   | 'account'
@@ -1374,6 +1375,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         {/* 5. AI MODELS & STT SECTION */}
         {activeSection === 'advanced' && (
           <div className="space-y-6 animate-in fade-in-50">
+            {/* First, and only when it applies: without a local model nothing
+                below this can write a report. Renders nothing once Ollama is
+                running. */}
+            <OllamaInstallCard />
+
             {/* Dedicated Diagnostics Redirect Banner */}
             <div className="p-4 rounded-lg border border-primary/20 bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">

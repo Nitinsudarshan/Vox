@@ -163,6 +163,17 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle();
 
+            // Prefer an Ollama that Vox installed over whatever is on PATH.
+            // Set once here rather than looked up per call: the capture path,
+            // the summary path and a settings command all ask "which binary",
+            // and three lookups is three places for the answer to differ.
+            {
+                let state = app.state::<AppState>();
+                providers::set_managed_binary(providers::ollama_install::managed_binary(
+                    &state.config_dir,
+                ));
+            }
+
             // Let the webview read a meeting's recording, and nothing else.
             //
             // The player in Meeting Detail needs to seek around a file that can
@@ -272,6 +283,8 @@ pub fn run() {
             commands::set_pill_window_mode,
             commands::ensure_local_llm_ready,
             commands::get_available_llm_models,
+            commands::get_ollama_install_plan,
+            commands::install_ollama,
             commands::test_llm_prompt,
             commands::ensure_stt_model_ready,
             commands::get_stt_decode_summary,
