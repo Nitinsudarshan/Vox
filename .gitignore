@@ -15,6 +15,9 @@ target/
 target-test/
 **/target-test/
 .relay/
+**/.relay/
+.vox/
+**/.vox/
 *.tsbuildinfo
 
 # Relay Capture browser-extension bundles — produced by
