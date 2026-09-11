@@ -1,0 +1,28 @@
+{
+  "id": "standup",
+  "name": "Daily Standup",
+  "description": "Per-person progress, plans and blockers, kept short.",
+  "sections": [
+    {
+      "heading": "Progress",
+      "instruction": "What each person reported completing. Group by person where the transcript identifies them; otherwise list the work.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Planned",
+      "instruction": "What each person said they are working on next.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Blockers",
+      "instruction": "Anything reported as blocked or at risk, and who is blocked on whom. Omit this section if nothing was raised.",
+      "style": "bullets",
+      "required": false
+    },
+    {
+      "heading": "Follow-ups",
+      "instruction": "Commitments made during the standup that need to happen outside it.",
+      "style": "checklist"
+    }
+  ]
+}

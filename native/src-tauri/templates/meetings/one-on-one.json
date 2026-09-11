@@ -1,0 +1,28 @@
+{
+  "id": "one-on-one",
+  "name": "One-on-One",
+  "description": "A private conversation's themes, agreements and follow-ups.",
+  "sections": [
+    {
+      "heading": "Themes",
+      "instruction": "The topics this conversation actually spent time on, in the order of the time spent on them.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Feedback Exchanged",
+      "instruction": "Feedback given in either direction, stated plainly and without softening or sharpening it. Omit if none was given.",
+      "style": "bullets",
+      "required": false
+    },
+    {
+      "heading": "Agreements",
+      "instruction": "What the two people agreed to, including anything either committed to change.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Follow-ups",
+      "instruction": "Actions either person owns before the next conversation.",
+      "style": "checklist"
+    }
+  ]
+}

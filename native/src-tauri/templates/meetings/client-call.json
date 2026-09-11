@@ -1,0 +1,33 @@
+{
+  "id": "client-call",
+  "name": "Client Call",
+  "description": "What the client asked for, what was promised, and what is outstanding.",
+  "sections": [
+    {
+      "heading": "Summary",
+      "instruction": "What this call was about and where it left things, in three to five sentences.",
+      "style": "prose"
+    },
+    {
+      "heading": "Client Needs",
+      "instruction": "What the client asked for or described as a problem. Use their framing, not a reinterpretation of it.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Commitments Made",
+      "instruction": "Anything promised to the client, with dates where dates were given. Be exact: a commitment recorded more strongly than it was made is worse than one recorded weakly.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Objections and Risks",
+      "instruction": "Concerns the client raised and anything that could derail the work. Omit if none.",
+      "style": "bullets",
+      "required": false
+    },
+    {
+      "heading": "Next Steps",
+      "instruction": "What happens next, who owns it, and by when.",
+      "style": "checklist"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "id": "interview",
+  "name": "Interview",
+  "description": "Signal from a candidate or user interview, kept separate from judgement.",
+  "sections": [
+    {
+      "heading": "Summary",
+      "instruction": "What was covered and the overall shape of the conversation. Do not offer a hiring or product recommendation here.",
+      "style": "prose"
+    },
+    {
+      "heading": "Topics Covered",
+      "instruction": "The questions asked and the areas explored.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Notable Responses",
+      "instruction": "Specific things the interviewee said that carry signal, quoted or closely paraphrased. Include the claim and its supporting detail together.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Questions They Asked",
+      "instruction": "What the interviewee wanted to know. Omit if they asked nothing.",
+      "style": "bullets",
+      "required": false
+    },
+    {
+      "heading": "Follow-ups",
+      "instruction": "Anything either side committed to after the call.",
+      "style": "checklist"
+    }
+  ]
+}

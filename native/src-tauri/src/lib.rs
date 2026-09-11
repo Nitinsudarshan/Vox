@@ -8,6 +8,7 @@ pub mod entities;
 pub mod hotkeys;
 pub mod identity;
 pub mod mcp;
+pub mod meetings;
 pub mod memory;
 pub mod oauth;
 pub mod overlay;

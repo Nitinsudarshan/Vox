@@ -1,0 +1,33 @@
+{
+  "id": "general",
+  "name": "General Meeting",
+  "description": "A balanced report: what was discussed, what was decided, and what happens next.",
+  "sections": [
+    {
+      "heading": "Summary",
+      "instruction": "Three to five sentences covering what this meeting was about and what came out of it. Write for someone who did not attend and will not read further.",
+      "style": "prose"
+    },
+    {
+      "heading": "Key Points",
+      "instruction": "The substantive points raised, one per bullet. Attribute a point to a speaker only when the transcript makes the speaker clear.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Decisions",
+      "instruction": "Decisions actually reached, with the reasoning given for each. A topic that was discussed but left open is not a decision — it belongs under Open Questions.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Action Items",
+      "instruction": "Concrete commitments someone made. Give the owner and any due date stated in the transcript. Do not invent an owner for an unowned task — write 'Unassigned'.",
+      "style": "checklist"
+    },
+    {
+      "heading": "Open Questions",
+      "instruction": "Questions raised and not resolved. Omit this section entirely if there were none.",
+      "style": "bullets",
+      "required": false
+    }
+  ]
+}
