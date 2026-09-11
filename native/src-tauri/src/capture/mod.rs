@@ -2,6 +2,7 @@ pub mod decode_history;
 pub mod device;
 pub mod evaluation;
 pub mod models;
+pub mod parakeet;
 pub mod rewrite;
 pub mod romanize;
 pub mod speech_health;
