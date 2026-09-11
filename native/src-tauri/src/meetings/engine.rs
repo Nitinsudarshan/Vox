@@ -218,12 +218,8 @@ impl MeetingEngine {
         }
 
         let models_dir = config_dir.join("models");
-        let model_path = resolve_meeting_model_path(
-            &models_dir,
-            settings.stt.whisper_model_path.as_deref(),
-        )
-        .filter(|path| path.exists())
-        .ok_or(MeetingEngineError::NoSpeechModel)?;
+        let model_path =
+            resolve_meeting_model_path(&models_dir, &settings.stt).ok_or(MeetingEngineError::NoSpeechModel)?;
 
         let id = format!("meeting-{}", uuid::Uuid::new_v4().simple());
         let title = title

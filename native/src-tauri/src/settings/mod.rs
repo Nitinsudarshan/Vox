@@ -120,6 +120,20 @@ pub struct SttSettings {
     /// Empty means `faithful`, the only style that cannot change meaning.
     #[serde(default, alias = "cleanupStyle")]
     pub cleanup_style: String,
+    /// Catalogue id of the model meetings are transcribed with.
+    ///
+    /// Separate from [`Self::whisper_model_path`], which dictation uses,
+    /// because the two surfaces want opposite things: push-to-talk is waiting
+    /// for the words and cannot afford a large model, while a meeting is
+    /// decoded in the background and can. Sharing one setting meant a user who
+    /// had chosen a fast dictation model was recording meetings with it too.
+    ///
+    /// `None` means "whatever is installed", resolved by
+    /// [`crate::capture::stt::resolve_meeting_model_path`] — which is what
+    /// stops a first recording from failing on a machine that has a perfectly
+    /// usable model under a different name.
+    #[serde(default, alias = "meetingModelId")]
+    pub meeting_model_id: Option<String>,
 }
 
 impl SttSettings {

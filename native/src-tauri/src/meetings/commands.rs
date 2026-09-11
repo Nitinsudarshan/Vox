@@ -558,15 +558,12 @@ fn batch_config(state: &State<'_, AppState>) -> Result<BatchConfig, CommandError
 
     let settings = state.settings.lock_or_recover().clone();
     let models_dir = state.config_dir.join("models");
-    let model_path =
-        resolve_meeting_model_path(&models_dir, settings.stt.whisper_model_path.as_deref())
-            .filter(|path| path.exists())
-            .ok_or_else(|| {
-                CommandError::new(
-                    "MEETING_NO_SPEECH_MODEL",
-                    "No speech model is installed. Install one under Settings › Speech.",
-                )
-            })?;
+    let model_path = resolve_meeting_model_path(&models_dir, &settings.stt).ok_or_else(|| {
+        CommandError::new(
+            "MEETING_NO_SPEECH_MODEL",
+            "No speech model is installed. Install one under Settings › Speech.",
+        )
+    })?;
 
     Ok(BatchConfig {
         model_path: model_path.to_string_lossy().to_string(),

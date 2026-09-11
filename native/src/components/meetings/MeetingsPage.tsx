@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/PageHeader';
 import { MeetingRecorder } from './MeetingRecorder';
+import { MeetingModelGate } from './MeetingModelGate';
 import { MeetingList } from './MeetingList';
 import { MeetingDetail } from './MeetingDetail';
 import * as meetings from '@/lib/meetings';
@@ -32,7 +33,12 @@ const STATUS_POLL_MS = 1000;
  * displaying, and re-reads after every mutation rather than patching its own
  * copy.
  */
-export const MeetingsPage: React.FC = () => {
+interface MeetingsPageProps {
+  /** Opens Settings › Speech, so a missing model can be installed from here. */
+  onOpenSpeechSettings?: () => void;
+}
+
+export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings }) => {
   const [status, setStatus] = React.useState<MeetingRecordingStatus>({
     active: false,
     elapsed_seconds: 0,
@@ -53,6 +59,8 @@ export const MeetingsPage: React.FC = () => {
   const [summaryProgress, setSummaryProgress] = React.useState<SummaryProgress | null>(null);
   const [query, setQuery] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  /** Bumped to force the model gate to re-read what is installed. */
+  const [modelGateNonce, setModelGateNonce] = React.useState(0);
   const [message, setMessage] = React.useState<{ kind: 'info' | 'error'; text: string } | null>(
     null,
   );
@@ -176,9 +184,18 @@ export const MeetingsPage: React.FC = () => {
 
   const handleStart = () =>
     run(async () => {
-      const meeting = await meetings.startMeeting();
-      setSelectedId(meeting.id);
-      await refreshList();
+      try {
+        const meeting = await meetings.startMeeting();
+        setSelectedId(meeting.id);
+        await refreshList();
+      } catch (error) {
+        // Re-read the catalogue on the way past. The gate is rendered from a
+        // snapshot taken when the page mounted, and the most likely reason a
+        // start fails is that the snapshot is stale — a model was deleted, or
+        // installed in Settings without coming back here.
+        setModelGateNonce((n) => n + 1);
+        throw error;
+      }
     });
 
   const handleStop = () =>
@@ -278,6 +295,11 @@ export const MeetingsPage: React.FC = () => {
           onPause={() => run(meetings.pauseMeeting)}
           onResume={() => run(meetings.resumeMeeting)}
           onStop={handleStop}
+        />
+        <MeetingModelGate
+          key={modelGateNonce}
+          onOpenSpeechSettings={onOpenSpeechSettings}
+          onModelInstalled={() => notify('info', 'Speech model installed. Recording is ready.')}
         />
         {message && (
           <p

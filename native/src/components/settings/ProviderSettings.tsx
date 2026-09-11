@@ -25,6 +25,7 @@ import {
   AlertCircle,
   RefreshCw,
   Mic,
+  AudioLines,
   Keyboard,
   Globe,
   Languages,
@@ -54,11 +55,13 @@ import { DeveloperSettingsView } from './DeveloperSettingsView';
 import { DictionarySnippetsSettings } from './DictionarySnippetsSettings';
 import { CaptureSettingsView } from './CaptureSettingsView';
 import { MeetingSettingsView } from './MeetingSettingsView';
+import { SpeechModelsView } from './SpeechModelsView';
 
 export type SettingsSection =
   | 'account'
   | 'general'
   | 'dictation'
+  | 'speech'
   | 'dictionary'
   | 'capture'
   | 'meetings'
@@ -89,6 +92,7 @@ const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'account', label: 'Account & Identity', icon: User },
   { id: 'general', label: 'General', icon: Sliders },
   { id: 'dictation', label: 'Dictation & Audio', icon: Mic },
+  { id: 'speech', label: 'Speech', icon: AudioLines },
   { id: 'dictionary', label: 'Dictionary & Snippets', icon: BookOpen },
   { id: 'capture', label: 'Web Capture', icon: Globe },
   { id: 'meetings', label: 'Meetings', icon: Users },
@@ -2392,6 +2396,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         )}
 
         {activeSection === 'capture' && <CaptureSettingsView />}
+
+        {activeSection === 'speech' && <SpeechModelsView />}
 
         {activeSection === 'meetings' && <MeetingSettingsView />}
 

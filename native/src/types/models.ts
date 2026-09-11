@@ -86,3 +86,48 @@ export interface SttDecodeSummary {
   auto_words_per_second_median: number;
   starved_decodes: number;
 }
+
+/**
+ * What a speech model costs to run, in the terms someone choosing one cares
+ * about. Mirrors `capture::models::ModelTier`.
+ */
+export type SpeechModelTier = 'fast' | 'balanced' | 'accurate' | 'maximum';
+
+/** One entry of the speech-model catalogue, crossed with what is on disk. */
+export interface SpeechModel {
+  id: string;
+  name: string;
+  filename: string;
+  path: string;
+  /** Bytes on disk when installed; the catalogue's estimate when not. */
+  size_bytes: number;
+  installed: boolean;
+  /** False for a `.bin` the user dropped into the models folder themselves. */
+  managed: boolean;
+  multilingual: boolean;
+  parameters_millions: number;
+  tier: SpeechModelTier;
+  blurb: string;
+}
+
+/** The whole catalogue, plus what each surface will actually use. */
+export interface SpeechModelCatalogue {
+  models_dir: string;
+  models: SpeechModel[];
+  active_meeting_model: string | null;
+  active_dictation_model: string | null;
+  recommended_meeting_model: string;
+}
+
+/**
+ * A download's progress, as it arrives on the `speech-model-download` event.
+ *
+ * `total_bytes` is null when the server sent no `Content-Length` — rare on
+ * Hugging Face, but a progress bar that assumes otherwise shows NaN.
+ */
+export type SpeechModelDownloadProgress =
+  | { state: 'downloading'; id: string; downloaded_bytes: number; total_bytes: number | null }
+  | { state: 'verifying'; id: string }
+  | { state: 'ready'; id: string; path: string }
+  | { state: 'failed'; id: string; message: string }
+  | { state: 'cancelled'; id: string };

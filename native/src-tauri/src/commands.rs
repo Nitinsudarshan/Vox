@@ -1672,6 +1672,172 @@ pub async fn test_stt_model(
     Ok(crate::capture::stt::test_stt_model_file(&model_path))
 }
 
+/// Writes one settings change through, without the whole `save_settings` ritual.
+///
+/// `save_settings` takes a complete document from the frontend and, on the way
+/// past, re-registers hotkeys, restarts the capture bridge and reconciles the
+/// OS launch entry. A command that changes one STT field wants none of that —
+/// and, more to the point, a round trip through the frontend's copy of the
+/// document would let a stale copy overwrite whatever else changed meanwhile.
+fn persist_settings(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<(), CommandError> {
+    settings
+        .save(&state.settings_path())
+        .map_err(|e| CommandError::new("CONFIG_SAVE_FAILED", &e.to_string()))?;
+    *state.settings.lock_or_recover() = settings.clone();
+    let _ = app.emit("settings-changed", &settings);
+    Ok(())
+}
+
+/// The event a speech-model download reports progress on.
+pub const SPEECH_MODEL_DOWNLOAD_EVENT: &str = "speech-model-download";
+
+/// The whole speech-model catalogue crossed with what is installed.
+///
+/// Supersedes [`get_available_stt_models`], which knew about three of the
+/// twelve whisper.cpp tiers and could not say which of them a meeting would
+/// actually use. Kept alongside it rather than replacing it outright because
+/// Diagnostics reads the older shape.
+#[tauri::command]
+pub async fn list_speech_models(
+    state: State<'_, AppState>,
+) -> Result<crate::capture::models::SpeechModelCatalogue, CommandError> {
+    use crate::capture::models;
+
+    let models_dir = state.config_dir.join("models");
+    let stt = state.settings.lock_or_recover().stt.clone();
+
+    let active_meeting_model =
+        crate::capture::stt::resolve_meeting_model_path(&models_dir, &stt).map(|path| {
+            models::by_path(&path)
+                .map(|m| m.id.to_string())
+                .unwrap_or_else(|| {
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                })
+        });
+
+    let active_dictation_model = crate::capture::stt::dictation_model_filename(&stt)
+        .and_then(|filename| models::by_filename(&filename).map(|m| m.id.to_string()));
+
+    Ok(models::SpeechModelCatalogue {
+        models_dir: models_dir.to_string_lossy().to_string(),
+        models: models::installed(&models_dir),
+        active_meeting_model,
+        active_dictation_model,
+        recommended_meeting_model: models::RECOMMENDED_MEETING_MODEL_ID.to_string(),
+    })
+}
+
+/// Fetches one catalogue model, emitting progress on
+/// [`SPEECH_MODEL_DOWNLOAD_EVENT`] as it goes.
+///
+/// Returns once the download finishes. The events are what make a 1.6 GB fetch
+/// bearable to watch; the returned `Result` is what tells the caller whether to
+/// re-read the catalogue. Downloading does not select the model — a larger
+/// model costs decode time on every utterance, so making it active stays a
+/// separate press.
+#[tauri::command]
+pub async fn download_speech_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<crate::capture::models::InstalledModel, CommandError> {
+    use crate::capture::models;
+
+    let models_dir = state.config_dir.join("models");
+    let emitter = app.clone();
+    models::download(&models_dir, &id, move |progress| {
+        let _ = emitter.emit(SPEECH_MODEL_DOWNLOAD_EVENT, &progress);
+    })
+    .await
+    .map_err(|e| CommandError::new("SPEECH_MODEL_DOWNLOAD_FAILED", &e.to_string()))?;
+
+    models::installed(&models_dir)
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| {
+            CommandError::new(
+                "SPEECH_MODEL_DOWNLOAD_FAILED",
+                "the download finished but the model is not on disk",
+            )
+        })
+}
+
+/// Asks a running download to stop. False when none was running.
+#[tauri::command]
+pub fn cancel_speech_model_download(id: String) -> bool {
+    crate::capture::models::cancel(&id)
+}
+
+/// Removes an installed model from disk.
+///
+/// Clears the meeting selection if it pointed here, so the next recording
+/// resolves to something that exists rather than failing on a model the user
+/// just deleted.
+#[tauri::command]
+pub async fn delete_speech_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<bool, CommandError> {
+    let models_dir = state.config_dir.join("models");
+    let removed = crate::capture::models::delete(&models_dir, &id)
+        .map_err(|e| CommandError::new("SPEECH_MODEL_DELETE_FAILED", &e.to_string()))?;
+
+    if removed {
+        let cleared = {
+            let mut settings = state.settings.lock_or_recover();
+            if settings.stt.meeting_model_id.as_deref() == Some(id.as_str()) {
+                settings.stt.meeting_model_id = None;
+                Some(settings.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(settings) = cleared {
+            persist_settings(&app, &state, settings)?;
+        }
+    }
+
+    Ok(removed)
+}
+
+/// Chooses the model meetings are transcribed with. `None` means "whatever is
+/// installed", resolved at the moment a recording starts.
+#[tauri::command]
+pub async fn set_meeting_speech_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Option<String>,
+) -> Result<(), CommandError> {
+    let id = id.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+
+    if let Some(ref id) = id {
+        let models_dir = state.config_dir.join("models");
+        let known = crate::capture::models::by_id(id)
+            .map(|m| m.path_in(&models_dir))
+            .unwrap_or_else(|| models_dir.join(id));
+        if !crate::capture::models::is_installed(&known) {
+            return Err(CommandError::new(
+                "SPEECH_MODEL_NOT_INSTALLED",
+                "that model is not installed yet",
+            ));
+        }
+    }
+
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        guard.stt.meeting_model_id = id;
+        guard.clone()
+    };
+    persist_settings(&app, &state, settings)
+}
+
 #[tauri::command]
 pub async fn copy_to_clipboard(text: String) -> Result<(), CommandError> {
     crate::hotkeys::injection::copy_to_clipboard(&text)

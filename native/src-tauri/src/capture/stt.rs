@@ -100,12 +100,81 @@ pub async fn ensure_managed_model(models_dir: &Path, filename: &str) -> Result<P
 /// *same* model a real recording would. A self-test that ran against a
 /// different model than the app uses would be worse than none: it would report
 /// green for a model the user never records with.
-pub fn resolve_meeting_model_path(models_dir: &Path, configured: Option<&str>) -> Option<PathBuf> {
-    if let Some(path) = configured.map(str::trim).filter(|p| !p.is_empty()) {
-        return Some(PathBuf::from(path));
+pub fn resolve_meeting_model_path(
+    models_dir: &Path,
+    stt_settings: &crate::settings::SttSettings,
+) -> Option<PathBuf> {
+    // 1. The model the user chose for meetings, if it is actually installed.
+    //    A chosen-then-deleted model falls through rather than failing: the
+    //    setting is a preference, not a promise about the filesystem.
+    if let Some(id) = stt_settings
+        .meeting_model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        if let Some(model) = crate::capture::models::by_id(id) {
+            let path = model.path_in(models_dir);
+            if crate::capture::models::is_installed(&path) {
+                return Some(path);
+            }
+        } else {
+            // An unmanaged file the user dropped in the models folder, chosen
+            // by filename.
+            let path = models_dir.join(id);
+            if crate::capture::models::is_installed(&path) {
+                return Some(path);
+            }
+        }
     }
-    let default_path = models_dir.join(DEFAULT_MODEL_FILENAME);
-    default_path.exists().then_some(default_path)
+
+    // 2. The path dictation is configured with, if it exists. Shared only as a
+    //    fallback — a user who set this before meetings existed still gets a
+    //    working recording.
+    if let Some(path) = stt_settings
+        .whisper_model_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+    {
+        if crate::capture::models::is_installed(&path) {
+            return Some(path);
+        }
+    }
+
+    // 3. Anything installed, best first.
+    //
+    //    This branch is why the "no speech model is installed" error used to
+    //    be wrong. The old resolution looked only for `ggml-small.bin`, so a
+    //    user who had downloaded Base for dictation — the fast-profile default,
+    //    and the only model many installs ever fetch — was told they had no
+    //    model at all while one sat in the same directory.
+    best_installed_model(models_dir)
+}
+
+/// The most accurate installed model, or `None` when the directory is empty.
+///
+/// "Best" is catalogue order reversed within the managed set: Large v3 beats
+/// Turbo beats Medium beats Small. An unmanaged file is used only when nothing
+/// managed is present, since nothing here knows how good it is.
+fn best_installed_model(models_dir: &Path) -> Option<PathBuf> {
+    use crate::capture::models::{self, ModelTier};
+
+    let listed = models::installed(models_dir);
+    let rank = |tier: ModelTier| match tier {
+        ModelTier::Maximum => 3,
+        ModelTier::Accurate => 2,
+        ModelTier::Balanced => 1,
+        ModelTier::Fast => 0,
+    };
+
+    listed
+        .iter()
+        .filter(|m| m.installed && m.managed)
+        .max_by_key(|m| rank(m.tier))
+        .or_else(|| listed.iter().find(|m| m.installed))
+        .map(|m| PathBuf::from(&m.path))
 }
 
 pub fn is_legacy_default_model(path: &Path) -> bool {
@@ -187,6 +256,28 @@ pub async fn ensure_default_model(models_dir: &Path) -> Result<PathBuf, SttError
 /// Ensures the fast base model is available for Universal Dictation Fast profile.
 pub async fn ensure_fast_model(models_dir: &Path) -> Result<PathBuf, SttError> {
     ensure_model_file(models_dir, FAST_MODEL_FILENAME, FAST_MODEL_URL).await
+}
+
+/// Which model file dictation would use, without fetching anything.
+///
+/// The read-only counterpart to [`resolve_dictation_model_path`], which
+/// downloads as a side effect of being asked. A settings screen listing what is
+/// installed must not start a download merely by rendering.
+pub fn dictation_model_filename(stt_settings: &crate::settings::SttSettings) -> Option<String> {
+    match stt_settings.dictation_quality {
+        crate::settings::DictationSttQuality::Fast => Some(FAST_MODEL_FILENAME.to_string()),
+        crate::settings::DictationSttQuality::Accurate => stt_settings
+            .whisper_model_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .and_then(|p| {
+                Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            })
+            .or_else(|| Some(DEFAULT_MODEL_FILENAME.to_string())),
+    }
 }
 
 /// Resolves the effective model path for Universal Dictation based on the user's Dictation quality preference.
@@ -2021,5 +2112,131 @@ mod tests {
         for window in [SttWindow::LongForm, SttWindow::ShortForm] {
             assert!(!SttLanguageConfig::from_settings(&bilingual_profile(), window).translate);
         }
+    }
+    /// A models directory that cleans itself up.
+    struct ModelDir(PathBuf);
+
+    impl ModelDir {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("vox_test_stt_{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn with(models: &[&str]) -> Self {
+            let dir = Self::new();
+            for filename in models {
+                let mut bytes = b"ggml".to_vec();
+                bytes.resize(2_000_000, b'x');
+                std::fs::write(dir.0.join(filename), bytes).unwrap();
+            }
+            dir
+        }
+    }
+
+    impl Drop for ModelDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_meeting_uses_an_installed_model_even_when_it_is_not_the_default() {
+        // The defect this exists for: resolution looked only for
+        // `ggml-small.bin`, so a machine that had fetched Base for dictation —
+        // the fast profile's model, and the only one many installs ever get —
+        // was told no speech model was installed.
+        let dir = ModelDir::with(&["ggml-base.bin"]);
+        let settings = crate::settings::SttSettings::default();
+
+        let resolved = resolve_meeting_model_path(&dir.0, &settings).unwrap();
+        assert!(resolved.ends_with("ggml-base.bin"));
+    }
+
+    #[test]
+    fn a_meeting_prefers_the_most_accurate_installed_model() {
+        let dir = ModelDir::with(&["ggml-base.bin", "ggml-small.bin", "ggml-large-v3-turbo.bin"]);
+        let settings = crate::settings::SttSettings::default();
+
+        let resolved = resolve_meeting_model_path(&dir.0, &settings).unwrap();
+        assert!(resolved.ends_with("ggml-large-v3-turbo.bin"));
+    }
+
+    #[test]
+    fn an_explicit_meeting_model_wins_over_the_most_accurate_one() {
+        let dir = ModelDir::with(&["ggml-base.bin", "ggml-large-v3-turbo.bin"]);
+        let settings = crate::settings::SttSettings {
+            meeting_model_id: Some("whisper-base".into()),
+            ..Default::default()
+        };
+
+        let resolved = resolve_meeting_model_path(&dir.0, &settings).unwrap();
+        assert!(resolved.ends_with("ggml-base.bin"));
+    }
+
+    #[test]
+    fn a_chosen_model_that_was_deleted_falls_through_rather_than_failing() {
+        let dir = ModelDir::with(&["ggml-base.bin"]);
+        let settings = crate::settings::SttSettings {
+            meeting_model_id: Some("whisper-large-v3".into()),
+            ..Default::default()
+        };
+
+        let resolved = resolve_meeting_model_path(&dir.0, &settings).unwrap();
+        assert!(resolved.ends_with("ggml-base.bin"));
+    }
+
+    #[test]
+    fn a_dictation_path_is_used_only_when_the_file_is_there() {
+        let dir = ModelDir::with(&["ggml-base.bin"]);
+        let ghost = dir.0.join("ggml-medium.bin");
+        let settings = crate::settings::SttSettings {
+            whisper_model_path: Some(ghost.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+
+        let resolved = resolve_meeting_model_path(&dir.0, &settings).unwrap();
+        assert!(resolved.ends_with("ggml-base.bin"));
+    }
+
+    #[test]
+    fn an_empty_models_directory_still_has_no_meeting_model() {
+        let dir = ModelDir::new();
+        let settings = crate::settings::SttSettings::default();
+        assert!(resolve_meeting_model_path(&dir.0, &settings).is_none());
+    }
+
+    #[test]
+    fn dictation_reports_the_file_it_would_use_without_fetching_it() {
+        use crate::settings::DictationSttQuality;
+
+        let fast = crate::settings::SttSettings {
+            dictation_quality: DictationSttQuality::Fast,
+            ..Default::default()
+        };
+        assert_eq!(
+            dictation_model_filename(&fast).as_deref(),
+            Some(FAST_MODEL_FILENAME)
+        );
+
+        let accurate = crate::settings::SttSettings {
+            dictation_quality: DictationSttQuality::Accurate,
+            ..Default::default()
+        };
+        assert_eq!(
+            dictation_model_filename(&accurate).as_deref(),
+            Some(DEFAULT_MODEL_FILENAME)
+        );
+
+        let pinned = crate::settings::SttSettings {
+            dictation_quality: DictationSttQuality::Accurate,
+            whisper_model_path: Some("/somewhere/ggml-medium.bin".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            dictation_model_filename(&pinned).as_deref(),
+            Some("ggml-medium.bin")
+        );
     }
 }
