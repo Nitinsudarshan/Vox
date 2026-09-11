@@ -56,6 +56,7 @@ import { DictionarySnippetsSettings } from './DictionarySnippetsSettings';
 import { CaptureSettingsView } from './CaptureSettingsView';
 import { MeetingSettingsView } from './MeetingSettingsView';
 import { SpeechModelsView } from './SpeechModelsView';
+import { CloudProviderSettings } from './CloudProviderSettings';
 
 export type SettingsSection =
   | 'account'
@@ -1659,110 +1660,10 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     </div>
                   ) : (
                     /* Cloud API Options */
-                    <div className="space-y-4">
-                      {/* Cloud Provider Select */}
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-medium text-foreground">
-                          Cloud Provider
-                        </label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { id: 'cloud_openai', label: 'OpenAI' },
-                            { id: 'cloud_gemini', label: 'Google Gemini' },
-                            { id: 'cloud_anthropic', label: 'Anthropic Claude' },
-                          ].map((prov) => (
-                            <button
-                              key={prov.id}
-                              type="button"
-                              onClick={() =>
-                                setSettings({
-                                  ...settings,
-                                  provider: {
-                                    ...settings.provider,
-                                    active_provider: prov.id as any,
-                                    cloud_model:
-                                      prov.id === 'cloud_gemini'
-                                        ? 'gemini-2.0-flash'
-                                        : prov.id === 'cloud_anthropic'
-                                        ? 'claude-3-5-sonnet-20241022'
-                                        : 'gpt-4o-mini',
-                                  },
-                                })
-                              }
-                              className={`p-2 rounded-lg border text-xs font-semibold transition-all ${
-                                settings.provider.active_provider === prov.id
-                                  ? 'border-primary bg-primary/10 text-foreground'
-                                  : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
-                              }`}
-                            >
-                              {prov.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* API Key */}
-                      <div>
-                        <label htmlFor="cloud-api-key" className="block text-xs font-medium text-foreground mb-1">
-                          API Secret Key
-                        </label>
-                        <Input
-                          id="cloud-api-key"
-                          type="password"
-                          value={settings.provider.cloud_api_key || ''}
-                          onChange={(e) =>
-                            setSettings({ ...settings, provider: { ...settings.provider, cloud_api_key: e.target.value } })
-                          }
-                          placeholder="sk-..."
-                          className="text-xs"
-                        />
-                      </div>
-
-                      {/* Cloud Model Selector */}
-                      <div className="space-y-2">
-                        <label className="block text-xs font-medium text-foreground">
-                          Cloud Model Selection
-                        </label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {(settings.provider.active_provider === 'cloud_gemini'
-                            ? ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']
-                            : settings.provider.active_provider === 'cloud_anthropic'
-                            ? ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229']
-                            : ['gpt-4o-mini', 'gpt-4o', 'o3-mini']
-                          ).map((mName) => (
-                            <button
-                              key={mName}
-                              type="button"
-                              onClick={() =>
-                                setSettings({
-                                  ...settings,
-                                  provider: { ...settings.provider, cloud_model: mName },
-                                })
-                              }
-                              className={`p-2 rounded-lg border text-xs font-mono transition-all ${
-                                settings.provider.cloud_model === mName
-                                  ? 'border-primary bg-primary/10 text-foreground font-bold'
-                                  : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
-                              }`}
-                            >
-                              {mName}
-                            </button>
-                          ))}
-                        </div>
-
-                        <div>
-                          <Input
-                            id="cloud-model-custom"
-                            value={settings.provider.cloud_model || ''}
-                            onChange={(e) =>
-                              setSettings({ ...settings, provider: { ...settings.provider, cloud_model: e.target.value } })
-                            }
-                            placeholder="Custom model name..."
-                            className="text-xs mt-1"
-                          />
-                        </div>
-                      </div>
-                    </div>
+                    <CloudProviderSettings
+                      provider={settings.provider}
+                      onChange={(next) => setSettings({ ...settings, provider: next })}
+                    />
                   )}
                 </div>
 
