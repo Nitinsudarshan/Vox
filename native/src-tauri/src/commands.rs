@@ -680,6 +680,31 @@ pub async fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
     Ok(devices)
 }
 
+/// The output devices a meeting can capture in loopback.
+///
+/// Separate from [`get_audio_devices`], which lists microphones and is what
+/// every other surface asks for. A meeting is the one recording where the
+/// output matters too: the far end of a call arrives through whichever device
+/// the user is listening on, and a laptop with a headset connected has more
+/// than one.
+#[tauri::command]
+pub async fn get_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+
+    let mut devices = Vec::new();
+    if let Ok(found) = host.output_devices() {
+        for device in found {
+            if let Ok(name) = device.name() {
+                let is_default = default_name.as_deref() == Some(&name);
+                devices.push(AudioDeviceInfo { name, is_default });
+            }
+        }
+    }
+    Ok(devices)
+}
+
 #[tauri::command]
 pub async fn get_kanban_cards(state: State<'_, AppState>) -> Result<Vec<KanbanCard>, CommandError> {
     state
@@ -1679,7 +1704,7 @@ pub async fn test_stt_model(
 /// OS launch entry. A command that changes one STT field wants none of that —
 /// and, more to the point, a round trip through the frontend's copy of the
 /// document would let a stale copy overwrite whatever else changed meanwhile.
-fn persist_settings(
+pub(crate) fn persist_settings(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: AppSettings,

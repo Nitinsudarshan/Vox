@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 
 import { MeetingsPage } from './MeetingsPage';
@@ -61,6 +61,12 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
       summary: null,
       notes: '',
     },
+    get_meeting_devices: { microphone: null, system_audio: null },
+    get_audio_devices: [
+      { name: 'Yeti Stereo Microphone', is_default: true },
+      { name: 'Headset (WH-1000XM4 Hands-Free AG Audio)', is_default: false },
+    ],
+    get_audio_output_devices: [{ name: 'Speakers (Realtek)', is_default: true }],
     list_speech_models: {
       models_dir: '/models',
       models: [
@@ -358,5 +364,81 @@ describe('MeetingsPage', () => {
 
     expect(screen.queryByTestId('meeting-audio')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /play from/i })).not.toBeInTheDocument();
+  });
+  test('offers a microphone and an output device before recording', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    const mic = (await screen.findByLabelText('Microphone')) as HTMLSelectElement;
+    const system = screen.getByLabelText('System audio from') as HTMLSelectElement;
+
+    // The first option is not a device: it means "resolve this the way every
+    // other surface does", which is what the app keeps doing until asked not to.
+    expect(mic.value).toBe('');
+    expect(within(mic).getByRole('option', { name: /system default/i })).toBeInTheDocument();
+    expect(
+      within(mic).getByRole('option', { name: /yeti stereo microphone \(default\)/i }),
+    ).toBeInTheDocument();
+    expect(within(system).getByRole('option', { name: /speakers \(realtek\)/i })).toBeInTheDocument();
+  });
+
+  test('remembers the chosen device and records with it', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    const mic = await screen.findByLabelText('Microphone');
+    fireEvent.change(mic, { target: { value: 'Yeti Stereo Microphone' } });
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('set_meeting_devices', {
+        devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /start recording/i }));
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('start_meeting', {
+        title: undefined,
+        captureSystemAudio: undefined,
+        devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
+      });
+    });
+  });
+
+  test('says a saved device is gone rather than quietly reading as the default', async () => {
+    mockBackend({
+      get_meeting_devices: { microphone: 'Unplugged USB Mic', system_audio: null },
+    });
+    render(<MeetingsPage />);
+
+    const mic = (await screen.findByLabelText('Microphone')) as HTMLSelectElement;
+    await waitFor(() => expect(mic.value).toBe('Unplugged USB Mic'));
+    expect(screen.getByText(/not connected — recording will fall back/i)).toBeInTheDocument();
+  });
+
+  test('names the devices a running recording opened', async () => {
+    mockBackend({
+      get_meeting_recording_status: {
+        ...idleStatus,
+        active: true,
+        meeting_id: 'meeting-1',
+        state: 'recording',
+        microphone_active: true,
+        microphone_heard: false,
+        system_audio_active: true,
+        system_audio_heard: true,
+        devices: {
+          microphone: 'Yeti Stereo Microphone',
+          system_audio: 'Speakers (Realtek)',
+        },
+      },
+    });
+    render(<MeetingsPage />);
+
+    // "Nothing heard yet" is how a wrong device is noticed; the name is what
+    // makes it actionable without leaving the app.
+    expect(await screen.findByText(/· Yeti Stereo Microphone/)).toBeInTheDocument();
+    expect(screen.getByText(/· Speakers \(Realtek\)/)).toBeInTheDocument();
+    expect(screen.getByText('nothing heard yet')).toBeInTheDocument();
   });
 });

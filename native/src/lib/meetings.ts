@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   Meeting,
   MeetingDetail,
+  MeetingDevices,
   MeetingListItem,
   MeetingRecordingStatus,
   MeetingSearchHit,
@@ -16,6 +17,7 @@ import type {
   MeetingTemplate,
   TranscriptSegment,
 } from '@/types/meetings';
+import type { AudioDeviceInfo } from '@/types';
 
 /** What a failed meeting command reports. */
 export interface MeetingCommandError {
@@ -47,8 +49,33 @@ export function meetingErrorMessage(error: unknown): string {
 export const startMeeting = (
   title?: string,
   captureSystemAudio?: boolean,
-): Promise<Meeting> =>
-  invoke('start_meeting', { title, captureSystemAudio });
+  devices?: MeetingDevices,
+): Promise<Meeting> => invoke('start_meeting', { title, captureSystemAudio, devices });
+
+/** The saved microphone/output choice for recordings. */
+export const getMeetingDevices = (): Promise<MeetingDevices> => invoke('get_meeting_devices');
+
+/**
+ * Remembers which devices recordings should open.
+ *
+ * A dedicated command rather than a whole-settings save: that round trip lets
+ * a stale copy of the document overwrite whatever else changed meanwhile.
+ */
+export const saveMeetingDevices = (devices: MeetingDevices): Promise<void> =>
+  invoke('set_meeting_devices', { devices });
+
+/** Microphones, as the recorder's picker lists them. */
+export const listInputDevices = (): Promise<AudioDeviceInfo[]> => invoke('get_audio_devices');
+
+/**
+ * Output devices, for the loopback source.
+ *
+ * A separate command because a meeting is the only recording where the output
+ * matters: the far end of a call arrives through whichever device the user is
+ * listening on.
+ */
+export const listOutputDevices = (): Promise<AudioDeviceInfo[]> =>
+  invoke('get_audio_output_devices');
 
 export const pauseMeeting = (): Promise<void> => invoke('pause_meeting');
 export const resumeMeeting = (): Promise<void> => invoke('resume_meeting');

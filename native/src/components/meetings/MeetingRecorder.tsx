@@ -7,14 +7,19 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import {
   MEETING_EVENTS,
+  type MeetingDevices,
   type MeetingLevels,
   type MeetingRecordingStatus,
 } from '@/types/meetings';
-import { formatTimestamp } from '@/lib/meetings';
+import { formatTimestamp, listInputDevices, listOutputDevices } from '@/lib/meetings';
+import type { AudioDeviceInfo } from '@/types';
 
 interface MeetingRecorderProps {
   status: MeetingRecordingStatus;
   busy: boolean;
+  /** The saved device choice, and the setter that persists it. */
+  devices: MeetingDevices;
+  onDevicesChange: (devices: MeetingDevices) => void;
   onStart: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -33,12 +38,24 @@ interface MeetingRecorderProps {
 export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
   status,
   busy,
+  devices,
+  onDevicesChange,
   onStart,
   onPause,
   onResume,
   onStop,
 }) => {
   const [levels, setLevels] = React.useState<MeetingLevels>({ mic: 0, system: 0 });
+  const [inputs, setInputs] = React.useState<AudioDeviceInfo[]>([]);
+  const [outputs, setOutputs] = React.useState<AudioDeviceInfo[]>([]);
+
+  // Enumerated once per mount rather than on every render of the picker: the
+  // list changes when hardware is plugged in, which is rare, and enumerating
+  // on a Windows audio host is not free.
+  React.useEffect(() => {
+    void listInputDevices().then(setInputs).catch(() => setInputs([]));
+    void listOutputDevices().then(setOutputs).catch(() => setOutputs([]));
+  }, []);
 
   React.useEffect(() => {
     const unlisten = listen<MeetingLevels>(MEETING_EVENTS.level, (event) => {
@@ -55,18 +72,45 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
 
   if (!isRecording) {
     return (
-      <Card className="p-5 flex flex-col sm:flex-row sm:items-center gap-4">
-        <div className="flex-1 min-w-0">
-          <h2 className="text-sm font-semibold text-foreground">Record a meeting</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Captures your microphone and this machine&apos;s audio together, transcribes on
-            device, and keeps both in your vault.
-          </p>
+      <Card className="p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-semibold text-foreground">Record a meeting</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Captures your microphone and this machine&apos;s audio together, transcribes on
+              device, and keeps both in your vault.
+            </p>
+          </div>
+          <Button onClick={onStart} disabled={busy} className="gap-2 shrink-0">
+            <Radio className="w-4 h-4" />
+            Start recording
+          </Button>
         </div>
-        <Button onClick={onStart} disabled={busy} className="gap-2 shrink-0">
-          <Radio className="w-4 h-4" />
-          Start recording
-        </Button>
+
+        {/* Chosen before the meeting, because the cost of the wrong device is
+            only visible after it — an hour of audio with an empty transcript. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <DevicePicker
+            icon={Mic}
+            label="Microphone"
+            devices={inputs}
+            value={devices.microphone ?? ''}
+            defaultLabel="System default"
+            onChange={(name) =>
+              onDevicesChange({ ...devices, microphone: name === '' ? null : name })
+            }
+          />
+          <DevicePicker
+            icon={MonitorSpeaker}
+            label="System audio from"
+            devices={outputs}
+            value={devices.system_audio ?? ''}
+            defaultLabel="Default output"
+            onChange={(name) =>
+              onDevicesChange({ ...devices, system_audio: name === '' ? null : name })
+            }
+          />
+        </div>
       </Card>
     );
   }
@@ -114,6 +158,7 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
         <LevelMeter
           icon={Mic}
           label="Microphone"
+          device={status.devices?.microphone}
           level={isPaused ? 0 : levels.mic}
           active={status.microphone_active}
           heard={status.microphone_heard}
@@ -121,6 +166,7 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
         <LevelMeter
           icon={MonitorSpeaker}
           label="System audio"
+          device={status.devices?.system_audio}
           level={isPaused ? 0 : levels.system}
           active={status.system_audio_active}
           heard={status.system_audio_heard}
@@ -156,6 +202,8 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
 interface LevelMeterProps {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
+  /** The device actually open on this channel, when one is. */
+  device?: string | null;
   level: number;
   active: boolean;
   heard: boolean;
@@ -169,12 +217,22 @@ interface LevelMeterProps {
  * open; active but never heard is the "wrong microphone" case, and is called
  * out in words rather than left to the bar.
  */
-const LevelMeter: React.FC<LevelMeterProps> = ({ icon: Icon, label, level, active, heard }) => (
+const LevelMeter: React.FC<LevelMeterProps> = ({
+  icon: Icon,
+  label,
+  device,
+  level,
+  active,
+  heard,
+}) => (
   <div className="flex items-center gap-3">
     <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-foreground' : 'text-muted-foreground/50'}`} />
     <div className="flex-1 min-w-0">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+        <span className="text-[11px] font-medium text-muted-foreground truncate">
+          {label}
+          {device && <span className="text-muted-foreground/70"> · {device}</span>}
+        </span>
         {!active && <span className="text-[10px] text-muted-foreground">not captured</span>}
         {active && !heard && (
           <span className="text-[10px] text-amber-600 dark:text-amber-400">nothing heard yet</span>
@@ -198,3 +256,67 @@ const LevelMeter: React.FC<LevelMeterProps> = ({ icon: Icon, label, level, activ
     </div>
   </div>
 );
+
+interface DevicePickerProps {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  devices: AudioDeviceInfo[];
+  /** The chosen name, or '' for "let Vox decide". */
+  value: string;
+  defaultLabel: string;
+  onChange: (name: string) => void;
+}
+
+/**
+ * One device choice.
+ *
+ * A native `select` rather than a styled dropdown: device names run to sixty
+ * characters of parenthesised driver detail, and the platform's own list
+ * handles that better than anything built here would.
+ *
+ * The empty option is first and is not a device — it means "resolve this the
+ * way every other surface does", which is what the app should keep doing until
+ * someone has a reason to disagree.
+ */
+const DevicePicker: React.FC<DevicePickerProps> = ({
+  icon: Icon,
+  label,
+  devices,
+  value,
+  defaultLabel,
+  onChange,
+}) => {
+  // A name saved when the device was plugged in survives it being unplugged:
+  // the recording falls back, and the picker should say what was chosen rather
+  // than silently reading as the default.
+  const missing = value !== '' && !devices.some((device) => device.name === value);
+
+  return (
+    <label className="block min-w-0">
+      <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground mb-1">
+        <Icon className="w-3.5 h-3.5 shrink-0" />
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={label}
+        className="w-full h-8 rounded-lg border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        <option value="">{defaultLabel}</option>
+        {missing && <option value={value}>{value} (not connected)</option>}
+        {devices.map((device) => (
+          <option key={device.name} value={device.name}>
+            {device.name}
+            {device.is_default ? ' (default)' : ''}
+          </option>
+        ))}
+      </select>
+      {missing && (
+        <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+          Not connected — recording will fall back to the default.
+        </span>
+      )}
+    </label>
+  );
+};

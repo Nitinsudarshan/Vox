@@ -71,6 +71,42 @@ pub struct MeetingLevels {
     pub system: f32,
 }
 
+/// Which devices one recording should open.
+///
+/// `None` on either side means "resolve it the way every other surface does" —
+/// the shared microphone preference, and the OS default output. A name that no
+/// longer matches anything falls back the same way rather than failing the
+/// recording: a user who unplugs the headset they recorded with last week
+/// wants to be recorded, not to be right about the device.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MeetingDevices {
+    /// Microphone, by the name `get_audio_devices` reports.
+    #[serde(default)]
+    pub microphone: Option<String>,
+    /// The output device to capture in loopback — what this machine plays.
+    #[serde(default)]
+    pub system_audio: Option<String>,
+}
+
+impl MeetingDevices {
+    /// Whether either side names a device.
+    pub fn is_empty(&self) -> bool {
+        self.microphone.is_none() && self.system_audio.is_none()
+    }
+}
+
+/// What was actually opened, so the surface can name it.
+///
+/// The recorder already reports whether each channel has *heard* anything,
+/// which is how a wrong device is noticed. Saying which device that is turns
+/// "the microphone bar never moved" into something the user can act on without
+/// opening system settings to guess.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct OpenedDevices {
+    pub microphone: Option<String>,
+    pub system_audio: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum MeetingCaptureError {
     #[error("no microphone or system audio device could be opened")]
@@ -96,10 +132,12 @@ pub struct MixedAudio {
 }
 
 /// What was actually bound when capture started.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 pub struct CaptureBinding {
     pub microphone: bool,
     pub system_audio: bool,
+    /// The device names behind those flags.
+    pub opened: OpenedDevices,
 }
 
 /// A running dual-stream capture.
@@ -127,6 +165,7 @@ impl DualCapture {
     pub fn start(
         app: Option<AppHandle>,
         capture_system_audio: bool,
+        devices: MeetingDevices,
     ) -> Result<(Self, std_mpsc::Receiver<MixedAudio>), MeetingCaptureError> {
         let (stop_tx, stop_rx) = std_mpsc::channel();
         let (audio_tx, audio_rx) = std_mpsc::channel();
@@ -146,6 +185,7 @@ impl DualCapture {
             sys_heard: sys_heard.clone(),
             app,
             capture_system_audio,
+            devices,
         };
 
         let thread = std::thread::Builder::new()
@@ -177,7 +217,7 @@ impl DualCapture {
     }
 
     pub fn binding(&self) -> CaptureBinding {
-        self.binding
+        self.binding.clone()
     }
 
     /// Whether each stream is still delivering callbacks. A stream that errors
@@ -243,6 +283,7 @@ struct LoopContext {
     sys_heard: Arc<AtomicBool>,
     app: Option<AppHandle>,
     capture_system_audio: bool,
+    devices: MeetingDevices,
 }
 
 fn run_capture_loop(
@@ -257,22 +298,20 @@ fn run_capture_loop(
     let mic_fifo: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::with_capacity(32_000)));
     let sys_fifo: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::with_capacity(32_000)));
 
-    let mic_stream = build_stream(
-        crate::capture::device::open_preferred(&host),
-        false,
-        &mic_fifo,
-        &ctx.mic_active,
-    );
-    let sys_stream = if ctx.capture_system_audio {
-        build_stream(
-            host.default_output_device(),
-            true,
-            &sys_fifo,
-            &ctx.sys_active,
-        )
+    let mic_device = resolve_input_device(&host, ctx.devices.microphone.as_deref());
+    let sys_device = if ctx.capture_system_audio {
+        resolve_output_device(&host, ctx.devices.system_audio.as_deref())
     } else {
         None
     };
+
+    let opened = OpenedDevices {
+        microphone: mic_device.as_ref().and_then(|d| d.name().ok()),
+        system_audio: sys_device.as_ref().and_then(|d| d.name().ok()),
+    };
+
+    let mic_stream = build_stream(mic_device, false, &mic_fifo, &ctx.mic_active);
+    let sys_stream = build_stream(sys_device, true, &sys_fifo, &ctx.sys_active);
 
     let has_mic = mic_stream.is_some();
     let has_sys = sys_stream.is_some();
@@ -284,6 +323,10 @@ fn run_capture_loop(
     let _ = init_tx.send(Ok(CaptureBinding {
         microphone: has_mic,
         system_audio: has_sys,
+        opened: OpenedDevices {
+            microphone: has_mic.then_some(opened.microphone).flatten(),
+            system_audio: has_sys.then_some(opened.system_audio).flatten(),
+        },
     }));
 
     let mut mic_level = 0.0f32;
@@ -409,6 +452,52 @@ fn drain_remaining(
         sys,
         discontinuity: false,
     }
+}
+
+/// The microphone to record, honouring a per-recording choice.
+///
+/// Without a name this is exactly what dictation does, so the two surfaces
+/// cannot disagree about which microphone is in use. With one, the named
+/// device — and, when that name matches nothing, the shared resolution again,
+/// because an unplugged choice should cost the choice and not the recording.
+fn resolve_input_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(wanted) = name.map(str::trim).filter(|n| !n.is_empty()) {
+        let found = host
+            .input_devices()
+            .ok()
+            .and_then(|mut devices| {
+                devices.find(|device| device.name().ok().as_deref() == Some(wanted))
+            });
+        if found.is_some() {
+            return found;
+        }
+        tracing::info!(
+            "meeting capture: microphone '{}' is not connected; falling back",
+            wanted
+        );
+    }
+    crate::capture::device::open_preferred(host)
+}
+
+/// The output device to capture in loopback — what this machine plays.
+///
+/// Named separately from the microphone because the far end of a call arrives
+/// through whichever output the user is actually listening on, and a laptop
+/// with a headset connected has more than one.
+fn resolve_output_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(wanted) = name.map(str::trim).filter(|n| !n.is_empty()) {
+        let found = host.output_devices().ok().and_then(|mut devices| {
+            devices.find(|device| device.name().ok().as_deref() == Some(wanted))
+        });
+        if found.is_some() {
+            return found;
+        }
+        tracing::info!(
+            "meeting capture: output device '{}' is not connected; falling back",
+            wanted
+        );
+    }
+    host.default_output_device()
 }
 
 /// Binds one capture stream, returning `None` if the device cannot be opened.
@@ -715,5 +804,35 @@ mod tests {
     #[test]
     fn rms_of_nothing_is_zero_rather_than_a_division_by_zero() {
         assert_eq!(rms_from_sum_sq(0.0, 0), 0.0);
+    }
+    #[test]
+    fn device_selection_is_empty_until_something_is_chosen() {
+        assert!(MeetingDevices::default().is_empty());
+        assert!(!MeetingDevices {
+            microphone: Some("Yeti".into()),
+            ..Default::default()
+        }
+        .is_empty());
+        assert!(!MeetingDevices {
+            system_audio: Some("Speakers".into()),
+            ..Default::default()
+        }
+        .is_empty());
+    }
+
+    #[test]
+    fn device_selection_round_trips_through_settings_json() {
+        // It is stored in `AppSettings`, so an older settings file with no
+        // `devices` key has to load rather than fail the whole document.
+        let parsed: MeetingDevices = serde_json::from_str("{}").unwrap();
+        assert!(parsed.is_empty());
+
+        let chosen = MeetingDevices {
+            microphone: Some("Yeti Stereo Microphone".into()),
+            system_audio: Some("Speakers (Realtek)".into()),
+        };
+        let round_tripped: MeetingDevices =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(round_tripped, chosen);
     }
 }
