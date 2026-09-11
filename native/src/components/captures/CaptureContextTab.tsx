@@ -30,7 +30,7 @@ export const CaptureContextTab: React.FC<CaptureContextTabProps> = ({
   analyzing,
   onAnalyze,
 }) => {
-  // The classification Relay derived from the URL at capture time, not a name
+  // The classification Vox derived from the URL at capture time, not a name
   // or substring match here. `application` is `"GitHub"`, so the old
   // `=== 'github'` test never matched, and the URL fallback treated any address
   // containing "github.com" — including `https://evil.example/?ref=github.com`
@@ -55,8 +55,8 @@ export const CaptureContextTab: React.FC<CaptureContextTabProps> = ({
         <h3 className="text-sm font-semibold text-foreground">Structured Context Unavailable</h3>
         <p className="mt-1.5 max-w-sm text-xs text-muted-foreground leading-relaxed">
           {isRepository
-            ? 'Relay has captured this repository, but has not yet extracted structured repository context.'
-            : 'Extract objectives, settled decisions, requirements, constraints, open questions, and next actions to preserve this work in Relay.'}
+            ? 'Vox has captured this repository, but has not yet extracted structured repository context.'
+            : 'Extract objectives, settled decisions, requirements, constraints, open questions, and next actions to preserve this work in Vox.'}
         </p>
         <button
           type="button"
@@ -93,8 +93,8 @@ export const CaptureContextTab: React.FC<CaptureContextTabProps> = ({
             <div className="space-y-0.5">
               <p className="font-semibold">Context based on a partial capture</p>
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Relay stopped reading before reaching the full repository contents or documentation.
-                This analytical model was derived only from the content Relay could reach; additional parts may be absent from this record.
+                Vox stopped reading before reaching the full repository contents or documentation.
+                This analytical model was derived only from the content Vox could reach; additional parts may be absent from this record.
               </p>
             </div>
           </div>
@@ -122,8 +122,8 @@ export const CaptureContextTab: React.FC<CaptureContextTabProps> = ({
           <div className="space-y-0.5">
             <p className="font-semibold">Context based on a partial capture</p>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Relay stopped reading before reaching the full document or conversation thread.
-              This analytical model was derived only from the content Relay could reach; earlier or later parts may be absent from this record.
+              Vox stopped reading before reaching the full document or conversation thread.
+              This analytical model was derived only from the content Vox could reach; earlier or later parts may be absent from this record.
             </p>
           </div>
         </div>

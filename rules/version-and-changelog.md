@@ -35,17 +35,17 @@ Never independently bump `VERSION` as part of a feature, bug fix, or refactoring
 
 ## 2. Canonical Version File (`VERSION`)
 
-The root-level `VERSION` file remains the canonical source of truth for Relay's **latest released version**.
+The root-level `VERSION` file remains the canonical source of truth for Vox's **latest released version**.
 
 - It does **not** represent the version of an individual development task or pull request.
-- If `VERSION` is `0.41.0`, it remains `0.41.0` while 10, 20, or 50 PRs are developed, merged, and integrated into `main`.
-- Only the release workflow updates `VERSION` when publishing a release (e.g. `0.41.0` → `0.42.0`).
+- If `VERSION` is `0.1.0`, it remains `0.1.0` while 10, 20, or 50 PRs are developed, merged, and integrated into `main`.
+- Only the release workflow updates `VERSION` when publishing a release (e.g. `0.1.0` → `0.1.1` or `0.2.0`).
 
 ---
 
 ## 3. Atomic Manifest Synchronization
 
-Relay maintains version consistency across five synchronized manifests:
+Vox maintains version consistency across five synchronized manifests:
 
 1. `VERSION` (canonical plain-text version at repo root)
 2. `package.json` (root monorepo manifest)
@@ -105,7 +105,7 @@ Development agents communicate what changed and its intended impact via **Conven
 
 ### Surface Tagging
 
-Where applicable, note the affected Relay surface in the scope or description:
+Where applicable, note the affected Vox surface in the scope or description:
 - `native` (desktop React frontend)
 - `tauri` or `backend` (Rust backend)
 - `extension` (companion browser extension)
@@ -124,15 +124,15 @@ Examples:
 
 ## 6. Multi-Agent Concurrent Safety
 
-Relay is developed concurrently across multiple tools and agents (local IDE, Antigravity, Cloud Code, ChatGPT).
+Vox is developed concurrently across multiple tools and agents (local IDE, Antigravity, Cloud Code, ChatGPT).
 
 Under this contract:
-1. **Agent A** and **Agent B** branch from `main` at `VERSION = 0.41.0`.
+1. **Agent A** and **Agent B** branch from `main` at `VERSION = 0.1.0`.
 2. Agent A implements feature X; Agent B fixes bug Y.
 3. Both agents run verification gates (`npm run verify:rules`, tests, linters).
 4. Neither agent modifies `VERSION` or `CHANGELOG.md`.
 5. Both branches merge cleanly without version conflict or changelog merge collisions.
-6. When ready, the release pipeline runs once, evaluates all merged changes, bumps `VERSION` to `0.42.0`, writes the comprehensive changelog, and tags the release.
+6. When ready, the release pipeline runs once, evaluates all merged changes, bumps `VERSION` to `0.2.0`, writes the comprehensive changelog, and tags the release.
 
 ---
 

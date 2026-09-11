@@ -1,4 +1,4 @@
-# Capture v2 — progressive traversal: research and design
+﻿# Capture v2 — progressive traversal: research and design
 
 Written against v0.26.0, before implementation. This is the research pass the
 work in v0.27.0 was built from: what a browser actually makes available when
@@ -26,19 +26,19 @@ with what risk**.
 ### The observation that reframed it
 
 A long prompt was pasted into Claude. Claude shortened the message and showed
-"Show more". Nobody clicked it. Relay captured, and the artifact reported:
+"Show more". Nobody clicked it. Vox captured, and the artifact reported:
 
 > ✓ The whole page was captured
 
 Two things were tangled together in that, and separating them is what the rest
 of this document is built on.
 
-**Was the content missing?** No. Claude's shortening is CSS, and Relay's block
+**Was the content missing?** No. Claude's shortening is CSS, and Vox's block
 walk reads `textContent`. Verified in Chromium (§2.5): a
 `-webkit-line-clamp: 3` box holding 2,904 characters returned all 2,904 from
 `textContent` *and* from `innerText`. The text was never missing. So the
 tempting fix — find "Show more", click it — would have been an interaction that
-bought nothing, on someone else's page, for content Relay already had.
+bought nothing, on someone else's page, for content Vox already had.
 
 **Was the claim defensible?** No, and this was the real defect. It was not
 caused by the truncation at all (§6). A successful extraction is not a complete
@@ -95,7 +95,7 @@ new costume.
 `content-visibility: auto` deserves a note: it skips rendering, but the nodes
 and their text stay in the DOM, so `textContent`-based extraction already sees
 them. It affects `innerText` (which is layout-dependent) but not the block
-walk. It is not a mechanism Relay has to defeat.
+walk. It is not a mechanism Vox has to defeat.
 
 ### 2.2 ChatGPT
 
@@ -123,7 +123,7 @@ ChatGPT is a **virtualizing** conversation surface.
 - Files the model produced are exposed as `sandbox:/mnt/data/<name>` links —
   an opaque reference, not a fetchable URL.[^sandbox]
 
-**Direct consequence for Relay**: v0.26.0's ChatGPT extractor uses
+**Direct consequence for Vox**: v0.26.0's ChatGPT extractor uses
 `[data-message-author-role]` as its primary selector, so on the published
 evidence it misses generated images entirely. The v2 extractor keys on the
 turn wrapper and reads the role from the descendant, which is both more
@@ -157,7 +157,7 @@ with ChatGPT would have produced the wrong engine.
   card.[^artifacts] Capturing artifact *source* therefore requires opening a
   panel — one at a time, changing the app's view state.
 
-**Direct consequence for Relay**: the traversal plan for Claude is
+**Direct consequence for Vox**: the traversal plan for Claude is
 expansion-heavy and scroll-light, and artifacts are recorded as
 discovered-but-not-captured rather than clicked open (§5).
 
@@ -197,7 +197,7 @@ not exist.
 
 **A closed `<details>` is where the ratio actually breaks.** Its body is in
 `textContent` and *not* in `innerText`, while its children report a normal
-computed `display` and a non-null `offsetParent` — so Relay's `isHidden` does
+computed `display` and a non-null `offsetParent` — so Vox's `isHidden` does
 not skip it and the block walk captures it. That is the right outcome for the
 content and the wrong one for the arithmetic: on a Claude-shaped fixture,
 `body.innerText` measured 5,230 characters against 5,297 of extractable text.
@@ -414,12 +414,12 @@ Against it, all four of:
 1. **It is not what the user asked for.** The gesture was "capture this page".
    Turning that into "download every file referenced by this page" is a
    different act with different consequences, and the brief says as much.
-2. **The payload contract forbids it.** The extension↔Relay contract is
+2. **The payload contract forbids it.** The extension↔Vox contract is
    text-only by design — it is what makes normalization a total function over
    untrusted input. Base64 bytes would be the first field in it that is not
    text-shaped, and the 8 MiB body limit would be spent by two screenshots.
 3. **It changes the privacy story.** Today a capture reads the tab the user
-   invoked it on. Fetching authenticated asset URLs makes Relay a client of
+   invoked it on. Fetching authenticated asset URLs makes Vox a client of
    the site's API, which is a materially larger claim to be making in a
    feature whose selling point is least privilege.
 4. **It is separable.** Metadata now, bytes later behind an explicit setting,
@@ -453,7 +453,7 @@ attachment  ├── name          image  ├── alt
 
 Blocks rather than side-tables because blocks are already the single ordered
 content vocabulary, already carry message association (they sit inside the
-message's own block list), and already degrade correctly on an older Relay —
+message's own block list), and already degrade correctly on an older Vox —
 unknown block types are skipped and counted. A parallel `attachments[]` array
 would have needed its own association field, its own ordering rule, and its
 own version-skew story, and would have duplicated the inline images the
@@ -463,14 +463,14 @@ Counts for the completeness model are derived by walking blocks, so they
 cannot drift from the content.
 
 A Claude artifact is an `attachment` block with `kind:
-assistant_generated`, whatever the card exposed, and a note that Relay does
+assistant_generated`, whatever the card exposed, and a note that Vox does
 not open side panels. `sandbox:/mnt/data/…` becomes `reference`, never `href`,
 because it is not a URL and must never reach a link renderer.
 
 ### 6.3 Images
 
 Provenance, content and interpretation are kept apart.
-Relay preserves the reference, the alt text, the caption, the dimensions and
+Vox preserves the reference, the alt text, the caption, the dimensions and
 the association with a message. It does not describe images, and it does not
 replace one with a description — visual analysis is an Analyse-stage concern
 and would be a source-faithfulness violation here.
@@ -524,8 +524,8 @@ The truncation was a red herring. Three things fix the actual fault:
    uses (`extractableTextLength`), so it is like-for-like;
 2. the ratio is clamped at 1, so an inverted comparison cannot pass a
    threshold;
-3. a page Relay has a site extractor for can never reach `full_document`
-   through the generic path. A known site that Relay failed to recognise is
+3. a page Vox has a site extractor for can never reach `full_document`
+   through the generic path. A known site that Vox failed to recognise is
    evidence *against* completeness — and this is the rule that would have caught
    the reported case on its own.
 
@@ -574,7 +574,7 @@ boundary (no shadow-DOM piercing, no cross-origin iframe access, no new
 permissions — `activeTab` and `scripting` already cover reading and clicking
 in the tab the user invoked capture on).
 
-Everything Relay already does on the way in — control-character and bidi
+Everything Vox already does on the way in — control-character and bidi
 stripping, non-`http(s)` target dropping, fence escaping, the mermaid
 downgrade, the filename allowlist — applies unchanged to the new block types,
 and `reference` is deliberately a plain string that no renderer treats as a
@@ -640,7 +640,7 @@ user's own:
    system prompt carries the boundary rule. Non-captures are unchanged — the
    user's own notes are the user's own words.
 2. **Talkback.** `render_context` heads its block *"CONTEXT — from the user's
-   own Relay data"*, and the grounded prompt says to answer only from the
+   own Vox data"*, and the grounded prompt says to answer only from the
    context. A retrieved web capture landed inside that framing with nothing
    marking it as external — the exact shape that turns a page's instructions
    into the user's. Now: `SourceType::Capture.is_external()` is true, external
@@ -687,7 +687,7 @@ source detector  →  traversal plan  →  reveal engine  →  extractor  →  m
                                             ↓
                                       normalization (Rust)
                                             ↓
-                                       Relay ingestion
+                                       Vox ingestion
 ```
 
 The separation that matters: **the engine knows how to expose content; the
@@ -712,7 +712,7 @@ registry line.
    record, a fifth coverage value — in `types.ts` and `mod.rs` together.
    `PROTOCOL_VERSION` stays at **1**: every change is additive, unknown fields
    deserialize to defaults and unknown blocks are skipped and counted, so a new
-   extension against an old Relay and an old extension against a new Relay both
+   extension against an old Vox and an old extension against a new Vox both
    degrade instead of failing. Bumping it would break both directions to
    express nothing.
 2. Engine: `traversal/{surface,settle,expand,engine,plans,types}.ts`.

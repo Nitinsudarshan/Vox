@@ -26,7 +26,7 @@ interface DictionarySnippetsSettingsProps {
 }
 
 const DEFAULT_SYSTEM_WORDS = [
-  'Relay',
+  'Vox',
   'Whisper',
   'Tauri',
   'Rust',
@@ -127,7 +127,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'relay-dictionary.txt';
+    a.download = 'vox-dictionary.txt';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -309,7 +309,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
               <Input
                 value={dictInput}
                 onChange={(e) => setDictInput(e.target.value)}
-                placeholder="Add words separated by commas — Relay, Supabase, John Snow, ARR"
+                placeholder="Add words separated by commas — Vox, Supabase, John Snow, ARR"
                 className="h-10 text-xs pl-3 pr-16 bg-muted/30 border-border focus:bg-background"
               />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground font-mono">
@@ -375,7 +375,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-foreground">Your dictionary is empty</h3>
                 <p className="text-xs text-muted-foreground max-w-sm">
-                  Add words Relay should always get right: technical terms, company names, acronyms, and proper nouns.
+                  Add words Vox should always get right: technical terms, company names, acronyms, and proper nouns.
                 </p>
               </div>
             </div>
@@ -424,7 +424,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
                 Learned corrections ({corrections.length})
               </p>
               <p className="text-[11px] text-muted-foreground leading-snug">
-                Added when you tick "Teach Relay this correction" while fixing a Voice Note.
+                Added when you tick "Teach Vox this correction" while fixing a Voice Note.
                 Applied to new transcripts; turn one off to stop it without losing it.
               </p>
             </div>
@@ -509,7 +509,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-foreground">The stuff you shouldn't have to say twice</h3>
               <p className="text-xs text-muted-foreground max-w-xl leading-relaxed">
-                Speak a trigger phrase during dictation and Relay automatically replaces it with whatever you saved — URLs, intros, sign-offs, and complex prompts.
+                Speak a trigger phrase during dictation and Vox automatically replaces it with whatever you saved — URLs, intros, sign-offs, and complex prompts.
               </p>
             </div>
             <Button
@@ -619,7 +619,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
                 <div className="space-y-1">
                   <h3 className="text-sm font-bold text-foreground">Create Spoken Snippet</h3>
                   <p className="text-xs text-muted-foreground">
-                    Define what you say, and what Relay expands it to when you speak.
+                    Define what you say, and what Vox expands it to when you speak.
                   </p>
                 </div>
 

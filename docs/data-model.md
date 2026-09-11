@@ -1,7 +1,7 @@
-# Relay — Data Model Specification
+﻿# Vox — Data Model Specification
 
 ## 1. Vault Markdown Note Schema
-Markdown files are stored in `.relay/vault/notes/<id>.md` with YAML frontmatter headers:
+Markdown files are stored in `.Vox/vault/notes/<id>.md` with YAML frontmatter headers:
 
 ```markdown
 ---
@@ -11,7 +11,7 @@ type: "meeting" | "scribble" | "trigger"
 created_at: "2026-08-19T01:50:00Z"
 updated_at: "2026-08-19T01:50:00Z"
 tags: ["meeting", "architecture"]
-source_audio: ".relay/audio/20260819_015000.wav"
+source_audio: ".Vox/audio/20260819_015000.wav"
 ---
 
 # Executive Summary
@@ -22,7 +22,7 @@ source_audio: ".relay/audio/20260819_015000.wav"
 ```
 
 ## 2. Kanban Card Schema
-Kanban tasks are represented as structured Markdown files in `.relay/vault/kanban/<id>.md`:
+Kanban tasks are represented as structured Markdown files in `.Vox/vault/kanban/<id>.md`:
 
 ```markdown
 ---
@@ -41,7 +41,7 @@ Implement Rust backend domain modules per `project-structure.md`.
 ```
 
 ## 3. Trigger Phrase Configuration Schema (`triggers.json`)
-Stored at `.relay/config/triggers.json`:
+Stored at `.Vox/config/triggers.json`:
 
 ```json
 {
@@ -69,7 +69,7 @@ Stored at `.relay/config/triggers.json`:
 ```
 
 ## 4. App Settings Configuration Schema (`settings.json`)
-Stored at `.relay/config/settings.json`. Mirrors the Rust `AppSettings` struct
+Stored at `.Vox/config/settings.json`. Mirrors the Rust `AppSettings` struct
 (`native/src-tauri/src/settings/mod.rs`) exactly — this is the real
 implemented shape, not an aspirational one:
 
@@ -98,12 +98,12 @@ implemented shape, not an aspirational one:
 
 `active_provider` is one of `"ollama" | "cloud_openai" | "cloud_gemini" | "cloud_anthropic"`.
 `stt.whisper_model_path` must point at a local GGML Whisper model file (not
-bundled with Relay) for any transcription — meeting/scribble capture, voice
+bundled with Vox) for any transcription — meeting/scribble capture, voice
 chat, and universal dictation — to work. `tts.*` are both optional; when
 either is unset, voice chat answers are text-only.
 
 ## 5. LanceDB Vector Record Schema
-Table `note_embeddings` inside LanceDB database `.relay/lancedb`:
+Table `note_embeddings` inside LanceDB database `.Vox/lancedb`:
 
 | Field | Type | Description |
 |---|---|---|
@@ -120,7 +120,7 @@ optional `capture` field populated. Captures live in their own directory so
 the Files surface — which lists `vault/files/` only — is unaffected:
 
 ```text
-.relay/vault/captures/<capture_id>/
+.Vox/vault/captures/<capture_id>/
   metadata.json                     # the VaultFile record
   original/<Sanitized-Title>.json   # the raw structured payload, written once
 ```
@@ -143,7 +143,7 @@ deliberately kept out of it:
   "application": "ChatGPT",
   "domain": "chatgpt.com",
   "url": "https://chatgpt.com/c/2b1f0e3a",
-  "page_title": "Designing Relay Capture",
+  "page_title": "Designing Vox Capture",
   "captured_at": "2026-02-14T09:30:12.884Z",
   "browser_captured_at": "2026-02-14T09:30:12.104Z",
   "browser": "Mozilla/5.0 ...",
@@ -182,11 +182,11 @@ improves.
 ## 7. Derived Data Schema
 
 Analysis output is stored **beside** a source artifact, never inside it. The
-source record (`metadata.json`) is what Relay captured; derived data is what
-Relay concluded, and re-analysing must never be able to rewrite the former.
+source record (`metadata.json`) is what Vox captured; derived data is what
+Vox concluded, and re-analysing must never be able to rewrite the former.
 
 ```text
-.relay/vault/captures/<source_id>/     (or vault/files/<source_id>/)
+.Vox/vault/captures/<source_id>/     (or vault/files/<source_id>/)
   metadata.json                        # the VaultFile record — source truth
   original/<Sanitized-Title>.json      # raw payload, written once
   context.json                         # SourceContext, the read path for the UI
@@ -225,7 +225,7 @@ Every derived record names the source it came from and how it was produced
 }
 ```
 
-`status` is the field that carries Relay's trust model, and its three
+`status` is the field that carries Vox's trust model, and its three
 meaningful values are not interchangeable:
 
 | Status | Meaning |
@@ -246,7 +246,7 @@ newer one.
 ### Regeneration policy
 
 Re-analysis **replaces** the record for a given `(source_id, derived_type)`
-pair and increments its `version`. Relay keeps the latest derived
+pair and increments its `version`. Vox keeps the latest derived
 representation, not a history — the same behaviour `context.json` always had,
 now stated and applied consistently. The source is never modified, so any
 analysis can be run again.
@@ -288,7 +288,7 @@ given in `docs/capture.md` §1.
 
 Two separate records, because they answer different questions.
 
-### Correction history (`.relay/vault/corrections/<note_id>.json`)
+### Correction history (`.Vox/vault/corrections/<note_id>.json`)
 
 Every phrase correction applied to one Voice Note, oldest first. The same
 sidecar shape as `merged_sources/<note_id>.json`, and for the same reason: a
@@ -316,7 +316,7 @@ than a stored copy of the note: no versioning system, and a full-editor change
 made in between is refused instead of being thrown away. The file is deleted
 when the stack empties.
 
-`learned` records whether the user ticked "Teach Relay this correction". It is
+`learned` records whether the user ticked "Teach Vox this correction". It is
 not recoverable from the note afterwards, and it is the difference between an
 ordinary edit and a standing rule.
 
@@ -324,7 +324,7 @@ ordinary edit and a standing rule.
 
 ```json
 {
-  "dictionary": ["Relay", "Whisper", "Supabase"],
+  "dictionary": ["Vox", "Whisper", "Supabase"],
   "vocabulary_corrections": [
     {
       "source": "super base",
@@ -342,10 +342,10 @@ is canonical words used to prime the recognizer *before* it guesses (via
 repairs a form the recognizer keeps producing *after* the fact, applied in
 `capture::text_normalize` ahead of the glossary so the user's specific rule
 wins over a fuzzy token match. Putting `"super base"` in `dictionary` would
-prime Relay to produce the very phrase being corrected.
+prime Vox to produce the very phrase being corrected.
 
 Empty by default: every entry was put there by the user ticking the box on a
-correction made inside Relay. Nothing is learned by watching what they type in
+correction made inside Vox. Nothing is learned by watching what they type in
 other applications — see `maybe_later.md` §13.
 
 `enabled: false` keeps an entry visible and stops it being applied, so a

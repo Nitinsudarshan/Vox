@@ -55,12 +55,12 @@ const VaultSetupPrompt: React.FC<VaultSetupPromptProps> = ({
       {recovery ? <ShieldCheck className="w-6 h-6" /> : <HardDrive className="w-6 h-6" />}
     </div>
     <h2 className="text-lg font-bold text-foreground mb-1">
-      {recovery ? 'Vault Access Required' : 'Choose Your Relay Vault Location'}
+      {recovery ? 'Vault Access Required' : 'Choose Your Vox Vault Location'}
     </h2>
     <p className="text-xs text-muted-foreground max-w-md mb-6 leading-relaxed">
       {recovery
         ? 'The configured Vault folder is missing or inaccessible. Re-select the folder or reset to default to view and store your Voice Notes.'
-        : 'Select where Relay stores your Voice Notes, scribbles, and transcripts on your computer.'}
+        : 'Select where Vox stores your Voice Notes, scribbles, and transcripts on your computer.'}
     </p>
 
     {error && (
@@ -75,7 +75,7 @@ const VaultSetupPrompt: React.FC<VaultSetupPromptProps> = ({
       </Button>
       {!recovery && (
         <Button onClick={onUseDefault} disabled={busy} size="sm" variant="outline">
-          Use Default Relay Vault
+          Use Default Vox Vault
         </Button>
       )}
     </div>
@@ -248,7 +248,7 @@ export const VoiceNotePage: React.FC = () => {
       await refreshLocation();
     } catch (err: any) {
       console.error('Failed to set default Vault Directory Location', err);
-      setError(err?.message || 'Could not use the default Relay Vault.');
+      setError(err?.message || 'Could not use the default Vox Vault.');
     } finally {
       setBusy(false);
     }
@@ -258,13 +258,13 @@ export const VoiceNotePage: React.FC = () => {
   // one-word fix should not require opening a textarea over the whole note.
   //
   // Two steps on purpose. Selecting a phrase offers what can be done with it —
-  // correcting it, or telling Relay the spelling is one to remember — and only
+  // correcting it, or telling Vox the spelling is one to remember — and only
   // "Correct" opens an input. Jumping straight to a text field would answer a
   // question the user has not been asked yet.
   const [selection, setSelection] = useState<PhraseSelection | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [replacement, setReplacement] = useState('');
-  const [teachRelay, setTeachRelay] = useState(false);
+  const [teachVox, setTeachVox] = useState(false);
   const [correcting, setCorrecting] = useState(false);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [undoState, setUndoState] = useState<
@@ -304,7 +304,7 @@ export const VoiceNotePage: React.FC = () => {
         setSelection(found);
         setCorrectionOpen(false);
         setReplacement('');
-        setTeachRelay(false);
+        setTeachVox(false);
         setCorrectionError(null);
         return;
       }
@@ -328,7 +328,7 @@ export const VoiceNotePage: React.FC = () => {
     setSelection(null);
     setCorrectionOpen(false);
     setReplacement('');
-    setTeachRelay(false);
+    setTeachVox(false);
     setCorrectionError(null);
     window.getSelection()?.removeAllRanges();
   };
@@ -348,7 +348,7 @@ export const VoiceNotePage: React.FC = () => {
         end: selection.end,
         original: selection.text,
         replacement: replacement.trim(),
-        learn: teachRelay,
+        learn: teachVox,
       });
       // Read out of the response before queueing the update. A `setNotes`
       // updater runs during React's next render, so dereferencing the result
@@ -710,7 +710,7 @@ export const VoiceNotePage: React.FC = () => {
           <EmptyState
             icon={Mic}
             title="No Voice Notes yet"
-            description="Everything you dictate with Relay will show up here."
+            description="Everything you dictate with Vox will show up here."
             minHeight="min-h-[220px]"
             className="flex-1"
           />
@@ -1037,15 +1037,15 @@ export const VoiceNotePage: React.FC = () => {
                               <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer">
                                 <input
                                   type="checkbox"
-                                  checked={teachRelay}
-                                  onChange={(e) => setTeachRelay(e.target.checked)}
+                                  checked={teachVox}
+                                  onChange={(e) => setTeachVox(e.target.checked)}
                                   className="accent-primary"
                                 />
                                 <span>
-                                  Teach Relay this correction
+                                  Teach Vox this correction
                                   {replacement.trim() && looksLikeVocabulary(selection.text, replacement) && (
                                     <span className="ml-1 text-emerald-600 dark:text-emerald-400">
-                                      · looks like a name Relay keeps mishearing
+                                      · looks like a name Vox keeps mishearing
                                     </span>
                                   )}
                                 </span>

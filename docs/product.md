@@ -1,7 +1,7 @@
-# Relay — Product Specification
+﻿# Vox — Product Specification
 
 ## Overview
-Relay is a hybrid (local + cloud) AI voice and memory assistant that converts captured speech into structured, actionable system state — Kanban task cards, calendar events, reminders, and polished document markdown notes — eliminating manual data re-entry.
+Vox is a hybrid (local + cloud) AI voice and memory assistant that converts captured speech into structured, actionable system state — Kanban task cards, calendar events, reminders, and polished document markdown notes — eliminating manual data re-entry.
 
 ## Target User
 The primary user is a builder or power user with a meeting-heavy and task-heavy workflow who needs instant voice capture, automated task extraction, audio scribble structuring, and configurable voice shortcuts without relying on cloud subscriptions or intrusive meeting bots.
@@ -13,8 +13,8 @@ The primary user is a builder or power user with a meeting-heavy and task-heavy 
 4. **User-Customizable Trigger Phrases**: Allows users to configure arbitrary phrase-to-action mappings (e.g., "Schedule quick sync" -> Calendar MCP call; "Remind me in 2 hours" -> Local OS notification). *(Deferred for the current desktop-first MVP phase — see `docs/decisions.md` Decision 35.)*
 5. **Local-First with Zero Recurring Cost**: Runs 100% locally by default using local STT (Whisper, via `whisper-rs`), Ollama, and grounded retrieval over an Obsidian-style markdown vault.
 6. **Companion Extension & Native Desktop**: Windows native app for local capture, meetings, and processing, with a companion browser extension for structured web and conversation capture into the vault.
-7. **Universal Dictation, Not Just In-App Voice**: A global push-to-talk hotkey types transcribed speech directly into whatever app or field currently has OS focus (Slack, email, code editors) — not confined to Relay's own window — with a non-intrusive "listening" indicator. A separate global hotkey shows/hides Relay from anywhere in the OS.
-8. **Voice Chat Grounded in Your Own Notes**: Ask a question out loud inside Relay; it retrieves relevant vault notes, answers grounded in them with sources shown, and can speak the answer back via local TTS. *(Deferred for the current desktop-first MVP phase — see `docs/decisions.md` Decision 34.)*
+7. **Universal Dictation, Not Just In-App Voice**: A global push-to-talk hotkey types transcribed speech directly into whatever app or field currently has OS focus (Slack, email, code editors) — not confined to Vox's own window — with a non-intrusive "listening" indicator. A separate global hotkey shows/hides Vox from anywhere in the OS.
+8. **Voice Chat Grounded in Your Own Notes**: Ask a question out loud inside Vox; it retrieves relevant vault notes, answers grounded in them with sources shown, and can speak the answer back via local TTS. *(Deferred for the current desktop-first MVP phase — see `docs/decisions.md` Decision 34.)*
 
 ## In Scope for MVP
 - Push-to-talk capture with floating overlay widget & global hotkey.

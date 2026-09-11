@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: Consistent response shape for Tauri commands
 globs: "native/src-tauri/src/commands.rs, native/src-tauri/src/**/commands.rs"
@@ -6,7 +6,7 @@ globs: "native/src-tauri/src/commands.rs, native/src-tauri/src/**/commands.rs"
 
 # API Conventions
 
-Relay's internal API surface consists of Tauri commands (native React frontend ↔
+Vox's internal API surface consists of Tauri commands (native React frontend ↔
 Rust backend). Commands follow a consistent response shape: validate before
 touching storage, and never leak raw internal errors to the caller.
 

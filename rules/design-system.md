@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: Design tokens — color, spacing, radius, typography
 globs: "native/src/**/*.tsx, native/src/**/*.css"
@@ -6,7 +6,7 @@ globs: "native/src/**/*.tsx, native/src/**/*.css"
 
 # Design System Rules
 
-This file defines the design token system for Relay. Follow these tokens
+This file defines the design token system for Vox. Follow these tokens
 consistently across `native/src/`.
 
 ## Rules

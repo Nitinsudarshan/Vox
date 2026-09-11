@@ -1,15 +1,15 @@
-# Relay — Production Google OAuth Architecture & Setup Guide
+﻿# Vox — Production Google OAuth Architecture & Setup Guide
 
-This document outlines Relay's centralized Google OAuth 2.0 PKCE architecture, required Google Cloud configuration, and developer environment setup.
+This document outlines Vox's centralized Google OAuth 2.0 PKCE architecture, required Google Cloud configuration, and developer environment setup.
 
 ---
 
 ## 1. High-Level Architecture Overview
 
-Relay uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** service (`oauth/`) across all Google integrations.
+Vox uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** service (`oauth/`) across all Google integrations.
 
 ```
-                    RELAY DESKTOP APP
+                    Vox DESKTOP APP
                             │
                             ▼
                 ┌───────────────────────┐
@@ -20,14 +20,14 @@ Relay uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** se
              ┌──────────────┴──────────────┐
              ▼                             ▼
     ┌───────────────────┐        ┌───────────────────┐
-    │  Relay Identity   │        │  Google Calendar  │
+    │  Vox Identity   │        │  Google Calendar  │
     │  (openid, email,  │        │  (calendar.events │
     │   profile)        │        │   .readonly)      │
     └────────┬──────────┘        └─────────┬─────────┘
              │                             │
              ▼                             ▼
     OS Keyring:                   OS Keyring:
-    com.relay.app.identity        com.relay.app.calendar
+    com.Vox.app.identity        com.Vox.app.calendar
 ```
 
 ### Key Security & Architectural Invariants
@@ -37,25 +37,25 @@ Relay uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** se
    - Generates cryptographically random `state` validated on every callback.
    - **No Client Secret is required or stored** for desktop applications.
 2. **Strict Scope Separation**:
-   - **Relay Sign-In**: Requests `openid`, `userinfo.email`, and `userinfo.profile` only.
+   - **Vox Sign-In**: Requests `openid`, `userinfo.email`, and `userinfo.profile` only.
    - **Google Calendar Sync**: Requests `calendar.events.readonly` separately only when explicitly initiated by the user.
 3. **Isolated Keyring Namespaces**:
-   - Identity tokens: stored under `com.relay.app.identity` / `google_account_tokens`.
-   - Calendar tokens: stored under `com.relay.app.calendar` / `google_calendar_tokens`.
-   - Fallback stores located in `.relay/config/` (never in the user's markdown `vault/`).
+   - Identity tokens: stored under `com.Vox.app.identity` / `google_account_tokens`.
+   - Calendar tokens: stored under `com.Vox.app.calendar` / `google_calendar_tokens`.
+   - Fallback stores located in `.Vox/config/` (never in the user's markdown `vault/`).
 4. **Independent Lifecycle**:
-   - Disconnecting Calendar revokes calendar tokens without signing out of Relay.
-   - Signing out of Relay revokes identity tokens without deleting local meetings or vault data.
+   - Disconnecting Calendar revokes calendar tokens without signing out of Vox.
+   - Signing out of Vox revokes identity tokens without deleting local meetings or vault data.
 
 ---
 
 ## 2. Google Cloud Console Setup (1-Time Developer Setup)
 
-To configure the official Relay Desktop Client ID in Google Cloud:
+To configure the official Vox Desktop Client ID in Google Cloud:
 
 ### Step 1: Create a Google Cloud Project
 1. Go to [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (e.g. `Relay Desktop App`).
+2. Create a new project (e.g. `Vox Desktop App`).
 
 ### Step 2: Enable Required APIs
 1. Navigate to **APIs & Services $\rightarrow$ Enabled APIs & services $\rightarrow$ + ENABLE APIS AND SERVICES**.
@@ -66,7 +66,7 @@ To configure the official Relay Desktop Client ID in Google Cloud:
 1. Navigate to **APIs & Services $\rightarrow$ OAuth consent screen**.
 2. Select User Type: **External** (or Internal for Google Workspace).
 3. Fill in:
-   - **App name**: `Relay`
+   - **App name**: `Vox`
    - **User support email**: your email
    - **Developer contact information**: your email
 4. In **Scopes**:
@@ -80,23 +80,23 @@ To configure the official Relay Desktop Client ID in Google Cloud:
 ### Step 4: Create the Desktop OAuth 2.0 Client ID
 1. Navigate to **APIs & Services $\rightarrow$ Credentials $\rightarrow$ + CREATE CREDENTIALS $\rightarrow$ OAuth client ID**.
 2. Select **Application type**: **Desktop App**.
-3. Name: `Relay Desktop Client`.
+3. Name: `Vox Desktop Client`.
 4. Click **Create**.
 5. Copy the generated **Client ID** (format: `xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com`).
 
 ---
 
-## 3. Configuring the Client ID in Relay
+## 3. Configuring the Client ID in Vox
 
 ### Production / Environment Builds
 Set the environment variable at build or runtime:
 ```bash
 # In .env or CI build environment
-RELAY_GOOGLE_CLIENT_ID="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+Vox_GOOGLE_CLIENT_ID="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
 ```
 
 ### Developer Setting Override (In-App)
-In the Relay application:
+In the Vox application:
 1. Open **Settings $\rightarrow$ Calendar & Meetings** (or click **Google Calendar** on the Meetings page).
 2. Click **Configure custom OAuth client credentials**.
 3. Paste the Desktop Client ID and save.

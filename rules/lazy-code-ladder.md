@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: YAGNI ladder — stop at the first rung that works before writing new code. Applies to every surface.
 ---
@@ -6,10 +6,10 @@ description: YAGNI ladder — stop at the first rung that works before writing n
 # Lazy Code Ladder
 
 Adapted from [ponytail](https://github.com/DietrichGebert/ponytail) v4.9.0 (MIT),
-scoped to Relay's three surfaces.
+scoped to Vox's three surfaces.
 
 Lazy means efficient, not careless. The best code is the code never written.
-Relay is a pre-alpha app with three surfaces and 1,500+ tests already carrying
+Vox is a pre-alpha app with three surfaces and 1,500+ tests already carrying
 the weight — every unnecessary abstraction is a thing that has to keep passing
 CI forever.
 

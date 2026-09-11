@@ -1,4 +1,4 @@
-# Relay — Testing Strategy
+﻿# Vox — Testing Strategy
 
 What is actually tested today, and how to run it. `rules/testing.md` holds the
 conventions (frameworks, placement, what not to test); this file holds the
@@ -172,7 +172,7 @@ immediately rather than failing quietly on a user's next capture. Regenerate
 with:
 
 ```bash
-cd native && RELAY_UPDATE_CAPTURE_FIXTURES=1 npm test
+cd native && Vox_UPDATE_CAPTURE_FIXTURES=1 npm test
 ```
 
 

@@ -1,17 +1,17 @@
 import React from 'react';
-import logoLight from '@/assets/relay-logo-light.png';
-import logoDark from '@/assets/relay-logo-dark.png';
+import logoLight from '@/assets/vox-logo-light.png';
+import logoDark from '@/assets/vox-logo-dark.png';
 
-interface RelayLogoProps {
+interface VoxLogoProps {
   className?: string;
 }
 
 /**
- * Relay brand logo using the official brand asset PNGs.
+ * Vox brand logo using the official brand asset PNGs.
  * Switches between light and dark variants based on the document's
  * current dark-mode class (which Tauri's root `<html class="dark">` sets).
  */
-export const RelayLogo: React.FC<RelayLogoProps> = ({ className = 'w-6 h-6' }) => {
+export const VoxLogo: React.FC<VoxLogoProps> = ({ className = 'w-6 h-6' }) => {
   const [isDark, setIsDark] = React.useState(
     () => document.documentElement.classList.contains('dark')
   );
@@ -27,7 +27,7 @@ export const RelayLogo: React.FC<RelayLogoProps> = ({ className = 'w-6 h-6' }) =
   return (
     <img
       src={isDark ? logoDark : logoLight}
-      alt="Relay logo"
+      alt="Vox logo"
       className={className}
       draggable={false}
     />

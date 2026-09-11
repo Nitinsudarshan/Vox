@@ -23,7 +23,7 @@ import path from 'path';
  * nothing in CI would ever look at.
  */
 const TARGETS = {
-  content: { entry: 'src/webcapture/content.ts', fileName: 'relay-extract', format: 'iife' },
+  content: { entry: 'src/webcapture/content.ts', fileName: 'vox-extract', format: 'iife' },
   background: { entry: 'src/webcapture/background.ts', fileName: 'background', format: 'es' },
   options: { entry: 'src/webcapture/options.ts', fileName: 'options', format: 'es' },
 } as const;
@@ -48,7 +48,7 @@ export default defineConfig(({ mode }) => {
         entry: path.resolve(__dirname, target.entry),
         formats: [target.format],
         fileName: () => `${target.fileName}.js`,
-        name: 'RelayCapture',
+        name: 'VoxCapture',
       },
     },
   };

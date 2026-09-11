@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: Local vault/LanceDB access vs. Supabase cloud access, and where each is allowed
 globs: "native/src-tauri/**, native/src/**"
@@ -6,7 +6,7 @@ globs: "native/src-tauri/**, native/src/**"
 
 # Data Access Rules
 
-Relay has two storage layers (local vault/LanceDB and native cloud sync/diagnostics).
+Vox has two storage layers (local vault/LanceDB and native cloud sync/diagnostics).
 Keep them clearly separated rather than mixing patterns.
 
 ## Local storage (markdown vault + LanceDB) — local-only mode, always available

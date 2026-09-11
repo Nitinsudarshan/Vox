@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RelayLogo } from './RelayLogo';
+import { VoxLogo } from './VoxLogo';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -84,15 +84,15 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
         {/* Brand Header */}
         <div className="text-center space-y-2.5 relative z-10">
           <div className="flex justify-center mb-1">
-            <RelayLogo className="w-10 h-10" />
+            <VoxLogo className="w-10 h-10" />
           </div>
           <div className="space-y-1">
             <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
-              {step === 1 ? 'Welcome to Relay' : 'How would you like to use Relay?'}
+              {step === 1 ? 'Welcome to Vox' : 'How would you like to use Vox?'}
             </h2>
             <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
               {step === 1
-                ? 'Your thoughts stay yours. Relay is local-first by design.'
+                ? 'Your thoughts stay yours. Vox is local-first by design.'
                 : 'Choose your operating mode. Your local notes always stay on this device.'}
             </p>
           </div>
@@ -196,7 +196,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
                   <span>{connecting ? 'Authorizing in Browser...' : 'Continue with Google'}</span>
                 </Button>
                 <p className="text-[10px] text-center text-muted-foreground">
-                  Sync your Relay identity and enable account-based features.
+                  Sync your Vox identity and enable account-based features.
                 </p>
               </div>
 

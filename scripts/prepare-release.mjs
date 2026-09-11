@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Relay Release Preparation Script
+ * Vox Release Preparation Script
  *
  * Automates the release version bump, atomic manifest synchronization,
  * and release changelog generation from Conventional Commits.
@@ -10,7 +10,7 @@
  *   node scripts/prepare-release.mjs --bump=patch        # Force patch bump
  *   node scripts/prepare-release.mjs --bump=minor        # Force minor bump
  *   node scripts/prepare-release.mjs --bump=major        # Force major bump
- *   node scripts/prepare-release.mjs --version=0.42.0    # Set explicit version
+ *   node scripts/prepare-release.mjs --version=0.2.0     # Set explicit version
  *   node scripts/prepare-release.mjs --dry-run           # Preview without modifying files
  */
 
@@ -280,7 +280,7 @@ export function updateManifests(newVersion, rootDir = defaultRootDir) {
 export function prependChangelog(newEntry, rootDir = defaultRootDir) {
   const changelogPath = path.join(rootDir, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) {
-    fs.writeFileSync(changelogPath, `# Relay — Changelog\n\n${newEntry}\n`, 'utf8');
+    fs.writeFileSync(changelogPath, `# Vox — Changelog\n\n${newEntry}\n`, 'utf8');
     return;
   }
 
@@ -293,7 +293,7 @@ export function prependChangelog(newEntry, rootDir = defaultRootDir) {
     const rest = existing.slice(header.length);
     updated = `${header}${newEntry}\n${rest}`;
   } else {
-    updated = `# Relay — Changelog\n\n${newEntry}\n${existing}`;
+    updated = `# Vox — Changelog\n\n${newEntry}\n${existing}`;
   }
 
   fs.writeFileSync(changelogPath, updated, 'utf8');

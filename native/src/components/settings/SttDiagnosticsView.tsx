@@ -36,8 +36,8 @@ interface SttDiagnosticsViewProps {
   onSaveSettings: () => Promise<void>;
 }
 
-const DEFAULT_RELAY_PROMPT =
-  'Relay, Tauri, Rust, Whisper, Supabase, GitHub, Vercel, React, TypeScript, CPAL, whisper-rs';
+const DEFAULT_VOX_PROMPT =
+  'Vox, Tauri, Rust, Whisper, Supabase, GitHub, Vercel, React, TypeScript, CPAL, whisper-rs';
 
 export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
   settings,
@@ -50,7 +50,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
 
   const [testWavPath, setTestWavPath] = useState('');
   const [testVariant, setTestVariant] = useState<
-    'baseline' | 'relay_prompt' | 'best_of_3' | 'beam_2' | 'temperature_fallback'
+    'baseline' | 'vox_prompt' | 'relay_prompt' | 'best_of_3' | 'beam_2' | 'temperature_fallback'
   >('baseline');
   const [testReference, setTestReference] = useState('');
   const [runningEval, setRunningEval] = useState(false);
@@ -134,7 +134,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
         ...prev.stt,
         enable_initial_prompt: enabled,
         custom_initial_prompt:
-          prev.stt.custom_initial_prompt || DEFAULT_RELAY_PROMPT,
+          prev.stt.custom_initial_prompt || DEFAULT_VOX_PROMPT,
       },
     }));
   };
@@ -154,7 +154,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
       ...prev,
       stt: {
         ...prev.stt,
-        custom_initial_prompt: DEFAULT_RELAY_PROMPT,
+        custom_initial_prompt: DEFAULT_VOX_PROMPT,
       },
     }));
   };
@@ -210,7 +210,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate max-w-md">
-              {settings.stt.whisper_model_path || '%APPDATA%\\Relay\\models\\ggml-small.bin'}
+              {settings.stt.whisper_model_path || '%APPDATA%\\Vox\\models\\ggml-small.bin'}
             </p>
           </div>
         </div>
@@ -439,12 +439,12 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
                 onClick={handleResetPrompt}
                 className="h-6 text-[11px] text-muted-foreground hover:text-foreground"
               >
-                Reset to Relay Standard
+                Reset to Vox Standard
               </Button>
             </div>
             <textarea
               id="custom-prompt-input"
-              value={settings.stt.custom_initial_prompt || DEFAULT_RELAY_PROMPT}
+              value={settings.stt.custom_initial_prompt || DEFAULT_VOX_PROMPT}
               onChange={(e) => handlePromptTextChange(e.target.value)}
               rows={2}
               className="w-full p-2.5 text-xs font-mono rounded-lg bg-background border border-border text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
@@ -509,7 +509,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
             <Input
               value={testWavPath}
               onChange={(e) => setTestWavPath(e.target.value)}
-              placeholder="e.g. D:\Projects\Relay\.relay\config\audio\dictation_xyz.wav"
+              placeholder="e.g. D:\Projects\Vox\.vox\config\audio\dictation_xyz.wav"
               className="text-xs font-mono h-8"
             />
           </div>
@@ -523,7 +523,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
               className="w-full h-8 px-2 text-xs rounded-lg bg-background border border-border text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
             >
               <option value="baseline">Baseline (Greedy, best_of=1)</option>
-              <option value="relay_prompt">Relay Prompt (Greedy + Domain Prompt)</option>
+              <option value="vox_prompt">Vox Prompt (Greedy + Domain Prompt)</option>
               <option value="best_of_3">Best of 3 (Greedy, best_of=3)</option>
               <option value="beam_2">Beam Search (beam_size=2)</option>
               <option value="temperature_fallback">Temperature Fallback (Staged Retry)</option>

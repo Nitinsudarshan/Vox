@@ -1,6 +1,6 @@
-# Relay AI Agent Guidelines
+# Vox AI Agent Guidelines
 
-Relay is a **Rust + Tauri/React desktop app for Windows** with a browser
+Vox is a **Rust + Tauri/React desktop app for Windows** with a browser
 extension capture system (`native/browser-extension`). You **must follow** all
 rules in the `rules/` directory for any code change here.
 
@@ -91,7 +91,7 @@ If two rules conflict, resolve in this order (most specific wins):
 
 ## Working in an established codebase
 
-This repo is well past its from-scratch phase — it is at v0.41.0 with a
+This repo is at v0.1.0 with a
 shipped capture pipeline, scribbles, and a vault. Two habits
 matter more here than they did at the start:
 

@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: shadcn/ui and styling conventions — mandatory for all UI, including charts
 globs: "native/src/**/*.tsx"
@@ -20,7 +20,7 @@ equivalent exists.
   do not hand-roll a replacement.
 - **Charts and graphs must use shadcn's chart component**
   (`npx shadcn add chart`, wrapping Recharts) — not raw `recharts` used
-  directly, and not any other charting library. Relay's own chart use is
+  directly, and not any other charting library. Vox's own chart use is
   smaller than NGConnect's (mainly dogfooding/parsing-accuracy views, see
   `charts.md`), but the rule is the same: reach it only through
   `ChartContainer`/`ChartTooltip`.

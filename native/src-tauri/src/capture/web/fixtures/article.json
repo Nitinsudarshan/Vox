@@ -3,7 +3,7 @@
   "captured_at": "2026-02-14T09:30:00.000Z",
   "url": "https://example.com/posts/structured-capture",
   "title": "The case for structured capture",
-  "browser": "Relay contract fixture",
+  "browser": "Vox contract fixture",
   "extractor": {
     "id": "generic",
     "version": 1,

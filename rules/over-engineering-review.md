@@ -1,4 +1,4 @@
----
+﻿---
 trigger: model_decision
 description: Review a diff or the repo for over-engineering. One line per finding, tagged, with the replacement named.
 ---
@@ -39,7 +39,7 @@ native/src/hooks/useChunk.ts:L52-71: delete: retry wrapper around a local synchr
 End with the only metric that matters: `net: -<N> lines, -<M> deps possible.`
 Nothing to cut → `Lean already. Ship.` and stop.
 
-## Where to hunt in Relay
+## Where to hunt in Vox
 
 - Traits in `native/src-tauri/src/` with a single implementor. `providers/`
   legitimately has the Ollama/cloud swap (`testing.md` depends on a mock) —

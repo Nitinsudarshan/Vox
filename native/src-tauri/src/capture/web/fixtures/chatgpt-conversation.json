@@ -2,8 +2,8 @@
   "protocol_version": 1,
   "captured_at": "2026-02-14T09:30:00.000Z",
   "url": "https://chatgpt.com/c/2b1f0e3a",
-  "title": "Designing Relay Capture",
-  "browser": "Relay contract fixture",
+  "title": "Designing Vox Capture",
+  "browser": "Vox contract fixture",
   "extractor": {
     "id": "chatgpt",
     "version": 2,
@@ -22,7 +22,7 @@
         "blocks": [
           {
             "type": "paragraph",
-            "text": "Should Relay capture a screenshot or the page itself?"
+            "text": "Should Vox capture a screenshot or the page itself?"
           }
         ],
         "ordinal": 2
@@ -79,7 +79,7 @@
             "height": 768,
             "origin": "assistant_generated",
             "content_captured": false,
-            "content_note": "Relay recorded where this image came from but did not download the image itself."
+            "content_note": "Vox recorded where this image came from but did not download the image itself."
           },
           {
             "type": "attachment",
@@ -88,7 +88,7 @@
             "reference": "sandbox:/mnt/data/capture-figures.csv",
             "kind": "assistant_generated",
             "content_captured": false,
-            "content_note": "Relay recorded this file’s details but did not download the file itself."
+            "content_note": "Vox recorded this file’s details but did not download the file itself."
           }
         ],
         "ordinal": 5
@@ -99,9 +99,9 @@
   "diagnostics": {
     "coverage": "full_document",
     "notes": [
-      "Relay read this conversation from its beginning to its end and captured 4 turn(s)."
+      "Vox read this conversation from its beginning to its end and captured 4 turn(s)."
     ],
-    "dom_text_length": 440,
+    "dom_text_length": 438,
     "truncated": false,
     "elapsed_ms": 0,
     "traversal": {

@@ -866,7 +866,7 @@ mod ingest_tests {
         serde_json::json!({
             "protocol_version": 1,
             "url": url,
-            "title": "Designing Relay Capture",
+            "title": "Designing Vox Capture",
             "browser": "Chrome",
             "extractor": { "id": "chatgpt", "version": 1, "strategy": "site" },
             "content": {
@@ -1122,11 +1122,11 @@ mod ingest_tests {
             Some("https://chatgpt.com/c/promote")
         );
         assert_eq!(scribble.source_metadata["application"].as_str(), Some("ChatGPT"));
-        assert_eq!(scribble.title, "Designing Relay Capture");
+        assert_eq!(scribble.title, "Designing Vox Capture");
 
         // Promotion is what puts a capture into search and the graph, exactly
         // as it does for an imported file.
-        let found = vault.manager.search_knowledge("Relay").unwrap();
+        let found = vault.manager.search_knowledge("Vox").unwrap();
         assert!(found.total_count > 0);
     }
 
@@ -1264,7 +1264,7 @@ mod contract_tests {
         assert_eq!(payload.content.messages.len(), 4);
 
         let normalized = normalize::normalize(&payload).expect("fixture must normalize");
-        assert_eq!(normalized.title, "Designing Relay Capture");
+        assert_eq!(normalized.title, "Designing Vox Capture");
         assert_eq!(normalized.provenance.application, "ChatGPT");
         assert_eq!(normalized.provenance.capture_type, "conversation");
         assert_eq!(normalized.provenance.fidelity, "structured");

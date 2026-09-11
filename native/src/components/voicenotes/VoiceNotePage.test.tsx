@@ -449,7 +449,7 @@ describe('VoiceNotePage - Phrase Correction', () => {
     });
   });
 
-  it('passes learn: true only when Teach Relay is ticked', async () => {
+  it('passes learn: true only when Teach Vox is ticked', async () => {
     const user = userEvent.setup();
     mockedInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_vault_location') {
@@ -465,7 +465,7 @@ describe('VoiceNotePage - Phrase Correction', () => {
 
     await user.click(screen.getByRole('button', { name: 'Correct' }));
     await user.type(screen.getByLabelText('Replacement text'), 'Supabase');
-    await user.click(screen.getByRole('checkbox', { name: /Teach Relay this correction/i }));
+    await user.click(screen.getByRole('checkbox', { name: /Teach Vox this correction/i }));
     await user.click(screen.getByRole('button', { name: 'Replace' }));
 
     await waitFor(() => {

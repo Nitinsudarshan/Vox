@@ -44,7 +44,7 @@ const DEFAULT_TEST_SETTINGS: AppSettings = {
   clipboard: { auto_paste: true, copy_to_clipboard: true },
   startup: { launch_at_login: false, start_minimized: false },
   audio_input: { prefer_builtin_mic: true, selected_device: null, keep_microphone_warm: 'off' },
-  dictionary: ['Relay', 'Whisper'],
+  dictionary: ['Vox', 'Whisper'],
   snippets: [],
 };
 
@@ -71,14 +71,14 @@ const MOCK_OLLAMA_MODELS: OllamaModelDetails[] = [
 
 const MOCK_STT_OVERVIEW: SttModelsOverview = {
   active_model_name: 'Whisper Small (Default)',
-  active_model_path: 'C:\\Relay\\models\\ggml-small.bin',
+  active_model_path: 'C:\\Vox\\models\\ggml-small.bin',
   active_profile: 'accurate',
-  models_dir: 'C:\\Relay\\models',
+  models_dir: 'C:\\Vox\\models',
   models: [
     {
       name: 'Whisper Base',
       filename: 'ggml-base.bin',
-      path: 'C:\\Relay\\models\\ggml-base.bin',
+      path: 'C:\\Vox\\models\\ggml-base.bin',
       size_bytes: 148000000,
       exists: true,
       is_managed: true,
@@ -88,7 +88,7 @@ const MOCK_STT_OVERVIEW: SttModelsOverview = {
     {
       name: 'Whisper Small (Default)',
       filename: 'ggml-small.bin',
-      path: 'C:\\Relay\\models\\ggml-small.bin',
+      path: 'C:\\Vox\\models\\ggml-small.bin',
       size_bytes: 488000000,
       exists: true,
       is_managed: true,
@@ -102,7 +102,7 @@ const MOCK_STT_OVERVIEW: SttModelsOverview = {
     {
       name: 'Whisper Large v3 Turbo',
       filename: 'ggml-large-v3-turbo.bin',
-      path: 'C:\\Relay\\models\\ggml-large-v3-turbo.bin',
+      path: 'C:\\Vox\\models\\ggml-large-v3-turbo.bin',
       size_bytes: 0,
       exists: false,
       is_managed: true,
@@ -124,19 +124,19 @@ describe('AI Models & STT Settings — Refactored Model Selection', () => {
         case 'get_available_llm_models':
           return MOCK_OLLAMA_MODELS;
         case 'ensure_stt_model_ready':
-          return { state: 'ready', path: 'C:\\Relay\\models\\ggml-small.bin' };
+          return { state: 'ready', path: 'C:\\Vox\\models\\ggml-small.bin' };
         case 'get_available_stt_models':
           return MOCK_STT_OVERVIEW;
         case 'get_audio_devices':
           return [{ name: 'Default Mic', is_default: true }];
         case 'get_app_version':
-          return '0.29.0';
+          return '0.1.0';
         case 'get_vault_location':
           return { path: 'C:\\Vault' };
         case 'save_settings':
           return undefined;
         case 'download_stt_model':
-          return { state: 'ready', path: 'C:\\Relay\\models\\ggml-large-v3-turbo.bin' };
+          return { state: 'ready', path: 'C:\\Vox\\models\\ggml-large-v3-turbo.bin' };
         default:
           return null;
       }
@@ -295,7 +295,7 @@ describe('DiagnosticsPage — Technical Observability Hub', () => {
         case 'get_app_version':
           return '0.29.0';
         case 'get_vault_location':
-          return { path: 'C:\\Relay\\vault' };
+          return { path: 'C:\\Vox\\vault' };
         default:
           return null;
       }

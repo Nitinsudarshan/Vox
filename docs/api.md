@@ -1,4 +1,4 @@
-# Relay — API Conventions & Specifications
+﻿# Vox — API Conventions & Specifications
 
 Per `rules/api-conventions.md`, all Tauri IPC commands return consistent, typed error responses.
 
@@ -62,7 +62,7 @@ every command below either stores or reads a capture; none of them can lose one.
 - `regenerate_capture_pairing_token() -> Result<CaptureBridgeStatus, CommandError>`
   Issues a new token, immediately unpairing every browser.
 - `set_capture_analyze_on_capture(enabled: bool) -> Result<CaptureBridgeStatus, CommandError>`
-  Whether Relay analyses a capture as soon as it lands. Storage never depends
+  Whether Vox analyses a capture as soon as it lands. Storage never depends
   on this.
 - `get_captures() -> Result<Vec<VaultFile>, CommandError>`
   Captures only, newest first. Imported documents stay on `get_vault_files`.
@@ -83,7 +83,7 @@ no-op for a capture: its text was normalized from a payload, not extracted
 from bytes, so re-running document extraction on it could only destroy it.
 
 Captures also arrive over a loopback HTTP bridge rather than through Tauri
-IPC (`POST http://127.0.0.1:<port>/v1/capture`, `X-Relay-Token` required).
+IPC (`POST http://127.0.0.1:<port>/v1/capture`, `X-Vox-Token` required).
 That surface's contract, limits and threat model are in `docs/capture.md` §5.
 
 Progress is broadcast on the `capture-progress` event with a `stage` of
@@ -93,9 +93,9 @@ Progress is broadcast on the `capture-progress` event with a `stage` of
 - `get_settings() -> Result<AppSettings, CommandError>`
   Returns the current provider/STT/TTS/hotkey configuration (see `docs/data-model.md` §4).
 - `save_settings(settings: AppSettings) -> Result<(), CommandError>`
-  Persists settings to `.relay/config/settings.json` and updates the running app's in-memory config immediately (LLM provider, STT model path, TTS paths). Hotkey changes take effect on next launch — they're only read once at startup.
+  Persists settings to `.Vox/config/settings.json` and updates the running app's in-memory config immediately (LLM provider, STT model path, TTS paths). Hotkey changes take effect on next launch — they're only read once at startup.
 
 ---
 
-The Tauri IPC command layer is the primary internal API surface for Relay desktop.
+The Tauri IPC command layer is the primary internal API surface for Vox desktop.
 

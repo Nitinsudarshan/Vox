@@ -169,7 +169,7 @@ export const buildHomeStats = (snapshot: HomeSnapshot, nowMs: number): HomeStat[
       label: 'Memories',
       value: telemetry?.active_memories ?? 0,
       thisWeek: 0,
-      hint: 'Facts Relay holds as current',
+      hint: 'Facts Vox holds as current',
       surface: 'graph',
     },
   ];

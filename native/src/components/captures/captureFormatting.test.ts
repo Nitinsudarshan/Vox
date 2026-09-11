@@ -47,7 +47,7 @@ describe('describeCompleteness', () => {
   it('says plainly when only the rendered part was read', () => {
     const result = describeCompleteness(provenance({ coverage: 'rendered_dom' }));
     expect(result.tone).toBe('partial');
-    expect(result.headline).toMatch(/only what Relay could reach/i);
+    expect(result.headline).toMatch(/only what Vox could reach/i);
   });
 
   it('treats truncation as partial even if coverage claims otherwise', () => {
@@ -64,7 +64,7 @@ describe('describeCompleteness', () => {
 });
 
 describe('labels', () => {
-  it('names every capture type Relay produces', () => {
+  it('names every capture type Vox produces', () => {
     expect(captureTypeLabel('pull_request')).toBe('Pull request');
     expect(captureTypeLabel('conversation')).toBe('Conversation');
     expect(captureTypeLabel('something_new')).toBe('something new');

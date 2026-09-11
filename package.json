@@ -1,6 +1,6 @@
 {
-  "name": "relay-monorepo",
-  "version": "0.41.0",
+  "name": "vox-monorepo",
+  "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "private": true,
   "scripts": {

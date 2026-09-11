@@ -1,4 +1,4 @@
-# Capture — what the reveal pass actually costs
+﻿# Capture — what the reveal pass actually costs
 
 Measured at v0.27.0, in headless Chromium 1194 (Playwright build), 1280×900
 viewport, on the container this work was done in — a shared cloud runner, not a
@@ -92,13 +92,13 @@ is exactly why the numbers are worth printing:
 
 - **The real `chatgpt.com` and `claude.ai`.** These fixtures reproduce the
   *behaviours* the research pass documented, not the sites. No number here says
-  anything about whether those sites still use the selectors Relay looks for.
+  anything about whether those sites still use the selectors Vox looks for.
   `docs/capture.md` §14 is the manual procedure that answers that, and it is
   the only thing that can.
 - **Threads of 1,000+ turns.** Inferred from the 300-turn measurement above,
   not run. The engine's behaviour at the budget is tested
   (`traversal/engine.test.ts`), the arithmetic is not.
-- **Relay's ingestion time**, and end-to-end capture-to-artifact latency. The
+- **Vox's ingestion time**, and end-to-end capture-to-artifact latency. The
   Rust side has a 1,200-turn normalization test but nothing timed, and the
   loopback bridge is unbenchmarked.
 - **A cold browser, a loaded machine, or a slow disk.** Single runs on one

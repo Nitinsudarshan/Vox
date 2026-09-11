@@ -35,7 +35,7 @@ import type {
 
 /** Why an artifact's source is not in the capture. Stated on every artifact card. */
 export const ARTIFACT_NOTE =
-  'Claude shows this artifact in a side panel. Relay recorded the card but does not open panels, so the artifact’s own content was not captured.';
+  'Claude shows this artifact in a side panel. Vox recorded the card but does not open panels, so the artifact’s own content was not captured.';
 
 const ARTIFACT_SELECTOR = [
   '[data-testid="artifact-block-cell"]',

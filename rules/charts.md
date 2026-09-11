@@ -1,4 +1,4 @@
----
+﻿---
 globs: native/src/**/*.tsx
 ---
 
@@ -6,13 +6,13 @@ globs: native/src/**/*.tsx
 # Charts, Graphs, and Data Visualizations
 
 CONTEXT: This applies specifically to CHARTS, GRAPHS, and DATA
-VISUALIZATIONS in Relay (Recharts components via shadcn, see
-`ui-components.md`) — not general UI colors, buttons, or badges. Relay's own
+VISUALIZATIONS in Vox (Recharts components via shadcn, see
+`ui-components.md`) — not general UI colors, buttons, or badges. Vox's own
 chart surface is smaller than a typical dashboard app: mainly milestone 10's
 dogfooding metrics (parsing accuracy over time, trigger-phrase hit/miss
 rate, meeting vs. scribble capture counts). The color **system** below is
 carried over from the same framework used elsewhere; the specific hex values
-are placeholders — define Relay's real tokens in `design-system.md`'s theme
+are placeholders — define Vox's real tokens in `design-system.md`'s theme
 CSS, then this file's decision rules apply on top of them.
 
 ## Color Tokens
@@ -76,6 +76,6 @@ them as general categorical colors for unrelated data series.
 - **Gridlines, axis text, and chart background** always use
   `--color-chart-grid` / `--color-chart-text` / `--color-chart-surface`,
   never primary/accent/success/danger/warning.
-- **When in doubt, use fewer colors.** Given how few charts Relay's MVP
+- **When in doubt, use fewer colors.** Given how few charts Vox's MVP
   actually needs (dogfooding metrics, mostly), reaching for a complex
   multi-series chart at all is worth a second look before building it.

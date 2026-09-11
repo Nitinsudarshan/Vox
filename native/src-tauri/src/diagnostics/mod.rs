@@ -46,7 +46,7 @@ impl DiagnosticsService {
 
         // In local mode / telemetry foundation, we trace to local log.
         tracing::debug!(
-            target: "relay::diagnostics",
+            target: "vox::diagnostics",
             "Diagnostic event: [{}] for installation {} (v{})",
             payload.event_type,
             payload.installation_id,
@@ -97,7 +97,7 @@ mod tests {
             false,
             "inst-123",
             None,
-            "0.8.2",
+            "0.1.0",
             "test_event",
             HashMap::new(),
         );
@@ -111,7 +111,7 @@ mod tests {
         let payload = DiagnosticPayload {
             installation_id: "test-id".to_string(),
             account_id: Some("user-456".to_string()),
-            relay_version: "0.8.2".to_string(),
+            relay_version: "0.1.0".to_string(),
             platform: "windows".to_string(),
             os_version: "x86_64".to_string(),
             event_type: "startup".to_string(),

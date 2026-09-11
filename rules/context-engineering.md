@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: Keep the working context lean — what to read, what to delegate, and the repo's known context hazards.
 ---
@@ -9,10 +9,10 @@ Distilled from [gsd-core](https://github.com/open-gsd/gsd-core) v1.12.0 (MIT)
 (`context-budget.md`, `universal-anti-patterns.md`).
 
 Output quality degrades as the context window fills — silently, well before
-anything errors. Relay is a large repo with several very large files, so this
+anything errors. Vox is a large repo with several very large files, so this
 is a live concern on most tasks, not a theoretical one.
 
-## Relay's context hazards
+## Vox's context hazards
 
 Never read these whole. Grep, `sed -n` a range, or read the newest entry:
 
@@ -71,7 +71,7 @@ whatever the counter says:
   implementation is incomplete. Files exist; behavior doesn't.
 - **Increasing vagueness** — "appropriate handling", "standard patterns",
   "the usual approach" replacing specific code or specific file paths.
-- **Skipped steps** — a checklist of 8 items reported against 5. On Relay,
+- **Skipped steps** — a checklist of 8 items reported against 5. On Vox,
   the tell is skipping verification gates (`verify:rules`) or the `cargo clippy` gate.
 
 When you hit one: checkpoint, then start clean rather than pushing through.
@@ -85,7 +85,7 @@ is a harness setting, not a repo setting: `enabledMcpjsonServers` /
 
 Before a long session, disable what this task can't use: browser/Playwright
 tools on a Rust-only task, OS-specific helpers, servers added for another
-project, and duplicate servers offering the same tools. Relay's own MCP client
+project, and duplicate servers offering the same tools. Vox's own MCP client
 wiring under `native/src-tauri/src/mcp/` is unrelated to this — that's product
 code, not session tooling.
 

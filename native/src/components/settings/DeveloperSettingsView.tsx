@@ -58,7 +58,7 @@ export const DeveloperSettingsView: React.FC = () => {
           </Badge>
         </div>
         <p className="text-xs text-muted-foreground leading-relaxed max-w-2xl">
-          Diagnostic overrides for testing Relay lifecycle, transitions, and onboarding workflows.
+          Diagnostic overrides for testing Vox lifecycle, transitions, and onboarding workflows.
           <strong className="text-foreground ml-1">These switches do not delete your saved notes, scribbles, or authentication credentials.</strong>
         </p>
       </div>
@@ -71,10 +71,10 @@ export const DeveloperSettingsView: React.FC = () => {
               <h3 className="text-sm font-semibold text-foreground">Show onboarding on every launch</h3>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-              Development testing only. Replays onboarding every time Relay starts without deleting your saved profile or data.
+              Development testing only. Replays onboarding every time Vox starts without deleting your saved profile or data.
             </p>
             <div className="pt-1 text-[11px] text-muted-foreground/80">
-              When enabled, Relay will present the 2-step onboarding modal (Personalization name prompt and Google/Local selection) on every startup for iterative UX testing.
+              When enabled, Vox will present the 2-step onboarding modal (Personalization name prompt and Google/Local selection) on every startup for iterative UX testing.
             </div>
           </div>
 

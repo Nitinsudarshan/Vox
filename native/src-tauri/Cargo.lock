@@ -4136,44 +4136,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "relay-native-backend"
-version = "0.41.0"
-dependencies = [
- "arboard",
- "base64 0.22.1",
- "chrono",
- "cpal",
- "dotenvy",
- "enigo",
- "hound",
- "keyring",
- "ort",
- "pdf-extract",
- "quick-xml 0.36.2",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
- "whisper-rs",
- "windows-sys 0.60.2",
- "zip",
-]
-
-[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6141,6 +6103,44 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vox-native-backend"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "base64 0.22.1",
+ "chrono",
+ "cpal",
+ "dotenvy",
+ "enigo",
+ "hound",
+ "keyring",
+ "ort",
+ "pdf-extract",
+ "quick-xml 0.36.2",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "whisper-rs",
+ "windows-sys 0.60.2",
+ "zip",
+]
 
 [[package]]
 name = "vswhom"

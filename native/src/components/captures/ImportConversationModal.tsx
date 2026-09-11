@@ -173,7 +173,7 @@ export const ImportConversationModal: React.FC<ImportConversationModalProps> = (
       setError(
         typeof err === 'string'
           ? err
-          : (err as Error)?.message || 'Failed to import conversation into Relay vault.',
+          : (err as Error)?.message || 'Failed to import conversation into Vox vault.',
       );
     } finally {
       setImporting(false);
@@ -272,7 +272,7 @@ export const ImportConversationModal: React.FC<ImportConversationModalProps> = (
               </h3>
               <p className="mt-1.5 max-w-sm text-xs text-muted-foreground leading-relaxed">
                 Supports ChatGPT data exports (<code className="font-mono">conversations.json</code> or zip)
-                and Claude export archives (.zip or .json). Relay extracts conversations and local assets.
+                and Claude export archives (.zip or .json). Vox extracts conversations and local assets.
               </p>
               <div className="mt-5 flex items-center gap-3">
                 <button
@@ -315,7 +315,7 @@ export const ImportConversationModal: React.FC<ImportConversationModalProps> = (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 space-y-2.5 text-xs">
                   <div className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
                     <AlertTriangle className="h-4 w-4 shrink-0" />
-                    <span>Conversation already imported into Relay</span>
+                    <span>Conversation already imported into Vox</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     &ldquo;{selectedConversation.title}&rdquo; already exists in your vault.

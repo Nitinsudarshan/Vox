@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Relay Capture",
+  "name": "Vox Capture",
   "version": "2.1.2",
-  "description": "Read the page or conversation you are looking at \u2014 including what it loads as you scroll \u2014 into your local Relay vault.",
+  "description": "Read the page or conversation you are looking at — including what it loads as you scroll — into your local Vox vault.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["http://127.0.0.1/*"],
@@ -11,7 +11,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Capture this page in Relay"
+    "default_title": "Capture this page in Vox"
   },
   "options_ui": {
     "page": "options.html",
@@ -23,7 +23,7 @@
         "default": "Ctrl+Shift+Y",
         "mac": "Command+Shift+Y"
       },
-      "description": "Capture this page into Relay"
+      "description": "Capture this page into Vox"
     }
   }
 }

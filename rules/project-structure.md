@@ -1,16 +1,16 @@
----
+﻿---
 trigger: always_on
 description: Folder structure — where new files should be created
 ---
 
 # Project Folder Structure
 
-Relay is a native-first Rust + Tauri desktop application for Windows with a
+Vox is a native-first Rust + Tauri desktop application for Windows with a
 companion browser extension for web capture. The layout below is what exists
 today; put new files where it says rather than starting a parallel tree.
 
 ```
-relay/
+Vox/
   native/                    Tauri desktop app (Windows, local mode)
     browser-extension/        Companion browser extension for web capture
     src-tauri/                Rust backend

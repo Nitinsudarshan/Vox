@@ -1,7 +1,7 @@
-# Prompt — Relay, next session
+﻿# Prompt — Vox, next session
 
-Continue work on `claude/relay-meeting-transcript-summary-kgypzj` (base:
-`claude/relay-meetings-review-y3dysa`, head `22822b8`).
+Continue work on `claude/Vox-meeting-transcript-summary-kgypzj` (base:
+`claude/Vox-meetings-review-y3dysa`, head `22822b8`).
 
 **Read `.agents/briefs/m1-and-reachability.md` first.** It records what the last
 session shipped, what it got wrong, and — importantly — what has *not* been
@@ -13,7 +13,7 @@ verified. Do not re-derive it.
 
 Thirteen commits are stacked here and nothing is merged. The last session
 finished M1 (meetings on `pipeline::analysis`), then spent most of its time on a
-pattern it found while doing so: **Relay repeatedly ships finished mechanisms
+pattern it found while doing so: **Vox repeatedly ships finished mechanisms
 that nothing can reach** — a setting parsed and persisted and read by nobody, an
 engine with no caller, a UI control wired to local state. Eight instances were
 found and fixed. Assume there are more, and treat "is anything actually reading
@@ -33,7 +33,7 @@ Four constants, two values: `3` in `pipeline/analysis/service.rs`, `3.6` in
 Unify on **3**. The failure modes are asymmetric — too optimistic overflows the
 window and Ollama truncates *from the front*, silently; too conservative just
 wastes a little window. Devanagari also tokenizes far denser than English, so
-3.6 is especially wrong for the content Relay handles.
+3.6 is especially wrong for the content Vox handles.
 
 Put the constant in one place, have the others use it, and leave a comment
 saying the decode history can now measure the real ratio if anyone wants to tune
@@ -96,7 +96,7 @@ if asked.
 ## Invariants — do not break these
 
 - **No audio is ever persisted.** No `source_audio` on new notes, no
-  `.relay/audio/`, no WAV/MP3/OGG, no audio ids on any record. Existing TTS
+  `.Vox/audio/`, no WAV/MP3/OGG, no audio ids on any record. Existing TTS
   fields are unrelated and must not be repurposed.
 - **`transcript.jsonl` is immutable.** Normalization, summarization, speaker
   renames and regeneration all leave it byte-identical. Romanization is a
@@ -106,7 +106,7 @@ if asked.
 - **The summarizer stays two-stage.** No map-reduce over transcript chunks —
   Decision 66.
 - **No external-app learning.** No accessibility monitoring, clipboard watching
-  or keystroke interception. Relay learns only from explicit corrections made
+  or keystroke interception. Vox learns only from explicit corrections made
   inside it.
 - **Local-first.** No cloud correction services, telemetry or remote databases.
 - **Do not add a second persistence layer.** Notes go through
@@ -151,7 +151,7 @@ background before reading code.
 ## Working notes
 
 - Commit each task separately with a message that says *why*, not just what.
-- Push to `claude/relay-meeting-transcript-summary-kgypzj`. Do not open a PR
+- Push to `claude/Vox-meeting-transcript-summary-kgypzj`. Do not open a PR
   unless asked.
 - If you find another unreachable mechanism, fix it and say so — that is the
   through-line of this branch, not a distraction from it.

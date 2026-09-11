@@ -13,7 +13,7 @@ describe('NativeSidebar', () => {
     setActiveTab: vi.fn(),
     account: null,
     profile: null,
-    appVersion: '0.41.0',
+    appVersion: '0.1.0',
     onOpenChangelog: vi.fn(),
     onOpenWelcome: vi.fn(),
     onOpenExplanation: vi.fn(),
@@ -52,24 +52,24 @@ describe('NativeSidebar', () => {
     expect(screen.queryByRole('button', { name: 'Clipboard' })).not.toBeInTheDocument();
   });
 
-  it('clicking the Relay logo in expanded mode navigates to Home', async () => {
+  it('clicking the Vox logo in expanded mode navigates to Home', async () => {
     const setActiveTab = vi.fn();
     const user = userEvent.setup();
     render(<NativeSidebar {...defaultProps} isOpen={true} setActiveTab={setActiveTab} />);
 
-    const logoButton = screen.getByRole('button', { name: 'Relay Home' });
+    const logoButton = screen.getByRole('button', { name: 'Vox Home' });
     expect(logoButton).toBeInTheDocument();
     await user.click(logoButton);
 
     expect(setActiveTab).toHaveBeenCalledWith('home');
   });
 
-  it('clicking the Relay logo in collapsed mode navigates to Home', async () => {
+  it('clicking the Vox logo in collapsed mode navigates to Home', async () => {
     const setActiveTab = vi.fn();
     const user = userEvent.setup();
     render(<NativeSidebar {...defaultProps} isOpen={false} setActiveTab={setActiveTab} />);
 
-    const logoButton = screen.getByRole('button', { name: 'Relay Home' });
+    const logoButton = screen.getByRole('button', { name: 'Vox Home' });
     expect(logoButton).toBeInTheDocument();
     await user.click(logoButton);
 

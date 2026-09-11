@@ -172,7 +172,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     selected_device: null,
     keep_microphone_warm: 'off',
   },
-  dictionary: ['Relay', 'Whisper', 'Tauri', 'Rust', 'Supabase', 'LanceDB', 'Ollama'],
+  dictionary: ['Vox', 'Whisper', 'Tauri', 'Rust', 'Supabase', 'LanceDB', 'Ollama'],
   snippets: [],
 };
 
@@ -355,7 +355,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       const updated = await invoke<RelayAccount>('delete_relay_account');
       setAccount(updated);
       window.dispatchEvent(new CustomEvent('relay-account-changed', { detail: updated }));
-      setDeleteAccountSuccess('Relay Cloud Account was deleted. All local markdown notes, scribbles, audio, and vectors remain 100% untouched.');
+      setDeleteAccountSuccess('Vox Cloud Account was deleted. All local markdown notes, scribbles, audio, and vectors remain 100% untouched.');
       setDeleteAccountModalOpen(false);
       setDeleteAccountAck(false);
       setDeleteAccountInput('');
@@ -607,7 +607,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 </div>
                 <div className="max-w-md">
                   <label htmlFor="show-hide-hotkey" className="block text-[11px] text-muted-foreground mb-1">
-                    Show/Hide Relay window (anywhere in the OS)
+                    Show/Hide Vox window (anywhere in the OS)
                   </label>
                   <HotkeyRecorder
                     id="show-hide-hotkey"
@@ -626,7 +626,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   <Power className="w-4 h-4 text-primary" />
                   <div>
                     <p className="text-xs font-semibold text-foreground">Startup</p>
-                    <p className="text-[11px] text-muted-foreground">Control how Relay behaves when it launches</p>
+                    <p className="text-[11px] text-muted-foreground">Control how Vox behaves when it launches</p>
                   </div>
                 </div>
 
@@ -634,7 +634,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-xs font-medium text-foreground">Launch at login</p>
-                      <p className="text-[11px] text-muted-foreground">Start Relay in the background when you log in</p>
+                      <p className="text-[11px] text-muted-foreground">Start Vox in the background when you log in</p>
                     </div>
                     <Switch
                       checked={settings.startup?.launch_at_login ?? false}
@@ -1253,7 +1253,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   Languages I Speak (Spoken Profile)
                 </label>
                 <p className="text-[10px] text-muted-foreground mb-2">
-                  Select all languages you commonly speak. Relay recognizes and transcribes speech across your spoken languages profile.
+                  Select all languages you commonly speak. Vox recognizes and transcribes speech across your spoken languages profile.
                 </p>
 
                 {/* Selected language chips */}
@@ -1481,7 +1481,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                             <Badge variant="emerald" className="text-[10px] font-mono">Ollama running ✓</Badge>
                           )}
                           {ollamaStatus.state === 'started' && (
-                            <Badge variant="emerald" className="text-[10px] font-mono">Relay started Ollama for you ✓</Badge>
+                            <Badge variant="emerald" className="text-[10px] font-mono">Vox started Ollama for you ✓</Badge>
                           )}
                           {ollamaStatus.state === 'not_installed' && (
                             <Badge variant="outline" className="text-[10px] font-mono border-amber-500/50 text-amber-500">
@@ -1791,7 +1791,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                         {sttOverview?.active_model_name || 'Whisper Small (Default)'}
                       </p>
                       <p className="text-[10px] text-muted-foreground font-mono truncate">
-                        {sttOverview?.active_model_path || '%APPDATA%\\Relay\\models\\ggml-small.bin'}
+                        {sttOverview?.active_model_path || '%APPDATA%\\Vox\\models\\ggml-small.bin'}
                       </p>
                     </div>
                     <Badge variant="emerald" className="text-[10px] font-mono shrink-0">
@@ -2025,7 +2025,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     {customSttMode && (
                       <div className="mt-2 space-y-1 animate-in fade-in-50">
                         <label htmlFor="whisper-model-path" className="block text-[11px] text-muted-foreground">
-                          Custom GGML Model Path (leave empty to use Relay managed models)
+                          Custom GGML Model Path (leave empty to use Vox managed models)
                         </label>
                         <Input
                           id="whisper-model-path"
@@ -2091,7 +2091,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   <span>100% Local-First Processing</span>
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Relay operates locally on your machine. Voice transcriptions, raw audio recordings, markdown notes,
+                  Vox operates locally on your machine. Voice transcriptions, raw audio recordings, markdown notes,
                   and LanceDB vectors stay inside your local directory. No third-party tracking or telemetry is collected.
                 </p>
               </div>
@@ -2129,11 +2129,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   <span>Irreversible Data Reset & Account Actions</span>
                 </div>
 
-                {/* 1. Delete Relay Cloud Account */}
+                {/* 1. Delete Vox Cloud Account */}
                 <div className="py-2.5 border-t border-destructive/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2">
-                      <p className="text-xs font-semibold text-foreground">Delete Relay Cloud Account</p>
+                      <p className="text-xs font-semibold text-foreground">Delete Vox Cloud Account</p>
                       <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-destructive/30 text-destructive font-mono">
                         {account?.authenticated ? 'Cloud Linked' : 'Local Only'}
                       </Badge>
@@ -2189,7 +2189,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     <div className="space-y-0.5">
                       <p className="text-xs font-semibold text-foreground">Disconnect Hybrid Cloud Sync</p>
                       <p className="text-[11px] text-muted-foreground max-w-md">
-                        Signs out of your Relay identity and returns the application to 100% offline local-only operating mode.
+                        Signs out of your Vox identity and returns the application to 100% offline local-only operating mode.
                       </p>
                     </div>
                     <Button
@@ -2206,7 +2206,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               </div>
             </div>
 
-            {/* Modal: Delete Relay Account Double Confirmation */}
+            {/* Modal: Delete Vox Account Double Confirmation */}
             {deleteAccountModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4 animate-in fade-in-50">
                 <div className="w-full max-w-md bg-card border border-destructive/50 rounded-lg p-6 shadow-2xl space-y-5">
@@ -2215,7 +2215,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       <AlertTriangle className="w-5 h-5" />
                     </div>
                     <div className="space-y-1">
-                      <h3 className="text-sm font-bold text-foreground">Delete Relay Cloud Account</h3>
+                      <h3 className="text-sm font-bold text-foreground">Delete Vox Cloud Account</h3>
                       <p className="text-xs text-muted-foreground leading-relaxed">
                         Step 1 of 2: Review destruction scope.
                       </p>
@@ -2227,7 +2227,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       <span>What will be deleted:</span>
                     </div>
                     <ul className="list-disc list-inside space-y-1 text-muted-foreground pl-1 text-[11px]">
-                      <li>Your Relay cloud profile and registration in Supabase</li>
+                      <li>Your Vox cloud profile and registration in Supabase</li>
                       <li>Secure OAuth credentials stored in your OS Keyring</li>
                       <li>Google Calendar synchronization association</li>
                     </ul>

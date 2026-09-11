@@ -250,12 +250,12 @@ export function extractConversation(doc: Document, spec: ConversationSpec): Extr
     // the capture is running on a fallback. Worth saying out loud, because
     // it is the early warning that an extractor needs updating.
     notes.push(
-      'The page did not match Relay’s primary layout for this site, so a fallback was used and roles may be less reliable.',
+      'The page did not match Vox’s primary layout for this site, so a fallback was used and roles may be less reliable.',
     );
   }
   if (failures.length > 0) {
     notes.push(
-      `${failures.length} of Relay’s selectors for this site are no longer valid in this browser, so part of the page may have been read a weaker way.`,
+      `${failures.length} of Vox’s selectors for this site are no longer valid in this browser, so part of the page may have been read a weaker way.`,
     );
   }
 

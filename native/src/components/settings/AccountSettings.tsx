@@ -121,7 +121,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
       console.error('Google Sign-In failed:', err);
       const raw = typeof err === 'string' ? err : (err as { message?: string })?.message || '';
       if (raw.toLowerCase().includes('configured') || raw.toLowerCase().includes('not configured')) {
-        setErrorMsg('Sign-in with Google is not configured for this Relay installation.');
+        setErrorMsg('Sign-in with Google is not configured for this Vox installation.');
       } else {
         setErrorMsg('Google Sign-In could not be completed. Please try again.');
       }
@@ -213,7 +213,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
           </Badge>
         </div>
         <p className="text-xs text-muted-foreground leading-relaxed max-w-2xl">
-          Personalize Relay, manage your account relationship, and monitor version updates.
+          Personalize Vox, manage your account relationship, and monitor version updates.
           <strong className="text-foreground ml-1">Your local markdown notes, scribbles, audio, and vectors remain strictly on this device.</strong>
         </p>
       </div>
@@ -243,7 +243,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
               <span>Personalization</span>
             </h3>
             <p className="text-xs text-muted-foreground">
-              What Relay calls you. This is stored locally and is separate from your account identity.
+              What Vox calls you. This is stored locally and is separate from your account identity.
             </p>
           </div>
           {savedNameSuccess && (
@@ -415,10 +415,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Laptop className="w-4 h-4 text-primary" />
-              <span className="text-xs font-semibold text-foreground">Relay Application</span>
+              <span className="text-xs font-semibold text-foreground">Vox Application</span>
             </div>
             <Badge variant="outline" className="text-[10px] font-mono">
-              v{installation?.app_version || '0.9.0'}
+              v{installation?.app_version || '0.1.0'}
             </Badge>
           </div>
 
@@ -516,10 +516,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-500" />
-              <h3 className="text-sm font-semibold text-foreground">Help Improve Relay</h3>
+              <h3 className="text-sm font-semibold text-foreground">Help Improve Vox</h3>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-              Share anonymous diagnostic telemetry (Relay version, app crashes, performance metadata) to help fix bugs.
+              Share anonymous diagnostic telemetry (Vox version, app crashes, performance metadata) to help fix bugs.
               <strong className="text-foreground block mt-1">
                 Your notes, scribbles, audio recordings, and transcripts are NEVER transmitted.
               </strong>
@@ -540,7 +540,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
               <div className="w-12 h-12 rounded-lg bg-primary/10 border border-primary/20 text-primary flex items-center justify-center mx-auto mb-2">
                 <Sparkles className="w-6 h-6" />
               </div>
-              <h3 className="text-lg font-bold text-foreground">Relay Hybrid</h3>
+              <h3 className="text-lg font-bold text-foreground">Vox Hybrid</h3>
               <p className="text-xs text-muted-foreground max-w-xs mx-auto">
                 Local-first speed with selective, user-controlled cloud synchronization.
               </p>

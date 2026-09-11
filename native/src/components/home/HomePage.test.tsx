@@ -113,8 +113,8 @@ describe('HomePage', () => {
           };
         case 'get_vault_location':
           return {
-            path: 'C:\\Users\\dev\\RelayVault',
-            default_path: 'C:\\Users\\dev\\RelayVault',
+            path: 'C:\\Users\\dev\\VoxVault',
+            default_path: 'C:\\Users\\dev\\VoxVault',
             configured: true,
             accessible: true,
           };

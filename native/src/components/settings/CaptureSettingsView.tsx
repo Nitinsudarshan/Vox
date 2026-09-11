@@ -41,7 +41,7 @@ export const CaptureSettingsView: React.FC = () => {
       setPortDraft(String(next.configured_port));
     } catch (err) {
       console.error('Failed to read capture bridge status', err);
-      setError('Relay could not read your capture settings.');
+      setError('Vox could not read your capture settings.');
     }
   }, []);
 
@@ -90,7 +90,7 @@ export const CaptureSettingsView: React.FC = () => {
         </h2>
         <p className="mt-1 text-xs text-muted-foreground">
           Save the page or conversation you are looking at into your Vault, with its source, its
-          structure, and a record of how much of it Relay could read.
+          structure, and a record of how much of it Vox could read.
         </p>
       </header>
 
@@ -106,7 +106,7 @@ export const CaptureSettingsView: React.FC = () => {
           <div>
             <h3 className="text-xs font-semibold text-foreground">Browser capture</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Lets the Relay browser extension send captures to this computer. Relay listens only
+              Lets the Vox browser extension send captures to this computer. Vox listens only
               on <code className="rounded bg-muted px-1">127.0.0.1</code> — never on your network —
               and only accepts captures signed with the pairing token below.
             </p>
@@ -141,7 +141,7 @@ export const CaptureSettingsView: React.FC = () => {
 
         {status.running && status.port !== status.configured_port && (
           <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-            Port {status.configured_port} was already in use, so Relay is on {status.port}. Use{' '}
+            Port {status.configured_port} was already in use, so Vox is on {status.port}. Use{' '}
             {status.port} when pairing.
           </p>
         )}
@@ -154,7 +154,7 @@ export const CaptureSettingsView: React.FC = () => {
           </h3>
           <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
             <li>
-              Install the Relay extension — <strong>Load unpacked</strong> from{' '}
+              Install the Vox extension — <strong>Load unpacked</strong> from{' '}
               <code className="rounded bg-muted px-1">native/browser-extension</code>.
             </li>
             <li>Open the extension&apos;s Options.</li>
@@ -288,7 +288,7 @@ export const CaptureSettingsView: React.FC = () => {
             captures the page you are on. Change it at{' '}
             <code className="rounded bg-muted px-1">chrome://extensions/shortcuts</code>.
           </dd>
-          <dt className="text-muted-foreground">In Relay</dt>
+          <dt className="text-muted-foreground">In Vox</dt>
           <dd className="text-foreground">
             <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
               {status.capture_hotkey}
@@ -298,7 +298,7 @@ export const CaptureSettingsView: React.FC = () => {
         </dl>
         <p className="mt-2 text-[11px] text-muted-foreground">
           Reading a page has to be started from inside the browser: browsers grant an extension
-          access to a tab only in response to a gesture made there, which is what keeps Relay from
+          access to a tab only in response to a gesture made there, which is what keeps Vox from
           needing permission to every site you visit.
         </p>
       </section>

@@ -1,4 +1,4 @@
-# Relay — User Flows
+﻿# Vox — User Flows
 
 ## Flow 1: Push-to-Talk Capture to Kanban Card
 1. User presses and holds global hotkey (or clicks and holds floating PTT widget).
@@ -8,7 +8,7 @@
 5. STT returns raw transcript.
 6. Pipeline module routes transcript to `Meeting -> Kanban` LLM prompt.
 7. LLM extracts array of structured action items.
-8. Vault module writes each item as a markdown card in `.relay/vault/kanban/` (real-time indexing into an embedded vector store is decided but not yet built — see `docs/roadmap.md`; notes are searchable today via keyword-ranked retrieval).
+8. Vault module writes each item as a markdown card in `.Vox/vault/kanban/` (real-time indexing into an embedded vector store is decided but not yet built — see `docs/roadmap.md`; notes are searchable today via keyword-ranked retrieval).
 9. Native UI updates Kanban Board view immediately.
 
 ## Flow 2: Audio Scribble to Structured Markdown Note
@@ -16,7 +16,7 @@
 2. STT engine generates transcript.
 3. Pipeline module applies `Scribble -> Structured Output` LLM template.
 4. LLM outputs formatted markdown document with title, summary bullet points, and key takeaways.
-5. Note is saved to `.relay/vault/notes/` and indexed in LanceDB.
+5. Note is saved to `.Vox/vault/notes/` and indexed in LanceDB.
 6. Note preview modal opens in native app for quick review/edit.
 
 ## Flow 3: Configurable Trigger Phrase Execution
@@ -29,12 +29,12 @@
 ## Flow 4: Global Show/Hide Hotkey
 1. User presses `Ctrl+Shift+Space` (configurable) while any other application is focused.
 2. The OS-level `tauri-plugin-global-shortcut` hotkey fires regardless of which window has focus.
-3. Relay's main window is shown and given focus if it was hidden, or hidden if it was already visible.
+3. Vox's main window is shown and given focus if it was hidden, or hidden if it was already visible.
 
 ## Flow 5: Universal Dictation (Type Anywhere)
 1. User places their text cursor in any other application (email, Slack, an IDE, a browser form field).
 2. User presses and holds `Ctrl+Space` (configurable).
-3. A small always-on-top, non-focus-stealing "🎙 Listening…" indicator appears; Relay's own window never needs to be visible. Audio capture starts immediately.
+3. A small always-on-top, non-focus-stealing "🎙 Listening…" indicator appears; Vox's own window never needs to be visible. Audio capture starts immediately.
 4. User speaks and releases the hotkey; the indicator disappears immediately.
 5. Captured audio is transcribed locally (Whisper only — no LLM pipeline, no vault write).
 6. The transcript is typed into whatever field currently has OS focus via simulated keystrokes (`enigo`), exactly as if the user had typed it themselves.
@@ -48,11 +48,11 @@
 6. The answer is shown in the chat thread along with the source note titles used.
 
 ## Flow 7: Capturing a Web Page or AI Conversation
-1. One-time setup: the user builds the extension (`npm --prefix native run build:extension`), loads `native/browser-extension` unpacked, turns **Browser capture** on in Relay's Capture settings, and pastes the port and pairing token into the extension's Options.
-2. On any page, the user presses the extension's shortcut (`Ctrl+Shift+Y`) or clicks the Relay toolbar button. That gesture is what grants the extension access to this one tab — nothing before it did.
+1. One-time setup: the user builds the extension (`npm --prefix native run build:extension`), loads `native/browser-extension` unpacked, turns **Browser capture** on in Vox's Capture settings, and pastes the port and pairing token into the extension's Options.
+2. On any page, the user presses the extension's shortcut (`Ctrl+Shift+Y`) or clicks the Vox toolbar button. That gesture is what grants the extension access to this one tab — nothing before it did.
 3. The extension injects its extractor into the tab, which reads the rendered document: a site-specific extractor for ChatGPT, Claude or GitHub; otherwise the generic article extractor; otherwise the page's visible text. The toolbar badge shows `…`.
 4. The extractor returns a structured, text-only payload — blocks or conversation turns, plus `<head>` metadata and a coverage verdict saying how much of the page it could honestly claim. Nothing is sent if there was nothing readable; the badge shows `✕` with the reason.
-5. The extension posts the payload to `http://127.0.0.1:<port>/v1/capture` with the pairing token in a header. Relay checks the origin, the token and the size before reading the body.
-6. Relay derives provenance from the URL itself — application, domain, capture type — never from what the payload claimed. It then sanitizes every string, normalizes into markdown, and writes the artifact **and the raw payload** into `.relay/vault/captures/<id>/`. The badge shows `✓`, and Relay's Captures surface shows *Saved*.
+5. The extension posts the payload to `http://127.0.0.1:<port>/v1/capture` with the pairing token in a header. Vox checks the origin, the token and the size before reading the body.
+6. Vox derives provenance from the URL itself — application, domain, capture type — never from what the payload claimed. It then sanitizes every string, normalizes into markdown, and writes the artifact **and the raw payload** into `.Vox/vault/captures/<id>/`. The badge shows `✓`, and Vox's Captures surface shows *Saved*.
 7. Only now does analysis run, in the background: a summary, topics and entities, using the configured provider. If it fails, the surface says the capture is intact and offers *Analyse* again — the captured content is never at risk.
 8. The user can open the capture to read it, see exactly where it came from and what was left out, read the raw stored payload, or add it to Scribbles — which is what carries it into search and the knowledge graph.

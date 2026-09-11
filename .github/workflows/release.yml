@@ -21,7 +21,7 @@ on:
 
 # Concurrency protection: exactly one release job can run at a time; never cancel in-progress releases
 concurrency:
-  group: relay-release-production
+  group: vox-release-production
   cancel-in-progress: false
 
 permissions:
@@ -74,7 +74,7 @@ jobs:
             const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
             const pattern = new RegExp(`## \\\\[${ver}\\\\][^\n]*\n\n([\\s\\S]*?)(?=\n## \\\\[|$)`);
             const match = changelog.match(pattern);
-            const notes = match ? match[1].trim() : "Relay release v" + ver;
+            const notes = match ? match[1].trim() : "Vox release v" + ver;
             fs.writeFileSync("RELEASE_NOTES.md", notes + "\n", "utf8");
           '
 
@@ -95,5 +95,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "v${{ steps.prep.outputs.version }}" \
-            --title "Relay v${{ steps.prep.outputs.version }}" \
+            --title "Vox v${{ steps.prep.outputs.version }}" \
             --notes-file RELEASE_NOTES.md

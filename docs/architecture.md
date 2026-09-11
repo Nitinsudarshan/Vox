@@ -1,8 +1,8 @@
-# Relay — System Architecture
+﻿# Vox — System Architecture
 
 ## Architecture Overview
 
-Relay is a native-first Windows desktop assistant built with a Rust backend and Tauri/React frontend, paired with a companion browser extension for structured web and conversation capture.
+Vox is a native-first Windows desktop assistant built with a Rust backend and Tauri/React frontend, paired with a companion browser extension for structured web and conversation capture.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -46,12 +46,12 @@ Relay is a native-first Windows desktop assistant built with a Rust backend and 
 ## Rust Backend Module Design (`native/src-tauri/src/`)
 
 - `capture`: Manages audio device input via `cpal` on a dedicated thread (resampled to 16kHz mono), writes WAV files, and (`capture::stt`) transcribes via a local Whisper model (`whisper-rs`).
-- `capture::web`: Web capture. Content arrives from the Relay browser extension over a loopback listener (`bridge.rs`) rather than through Tauri IPC — the browser is the only place a rendered page exists, and the only place a browser will grant access to one. Relay derives provenance from the URL (`source.rs`), sanitizes and normalizes the payload into markdown (`normalize.rs`), and persists it as a Vault artifact before any AI runs. See `docs/capture.md`.
+- `capture::web`: Web capture. Content arrives from the Vox browser extension over a loopback listener (`bridge.rs`) rather than through Tauri IPC — the browser is the only place a rendered page exists, and the only place a browser will grant access to one. Vox derives provenance from the URL (`source.rs`), sanitizes and normalizes the payload into markdown (`normalize.rs`), and persists it as a Vault artifact before any AI runs. See `docs/capture.md`.
 - `pipeline`: Core prompt engines (all in `mod.rs` except `chat.rs`).
   - `process_scribble`: Generates structured Markdown documents from unstructured voice scribbles.
   - `chat.rs` / `process_chat`: Voice chat — retrieves grounding notes from the vault and asks the LLM provider.
 - `pipeline::analysis`: The shared foundation every analysis runs on, so that adding one does not mean building another capture → normalize → prompt → LLM → parse → persist → provenance pipeline.
-  - `source.rs`: `SourceDescriptor` — a borrowed view over a `VaultFile` answering "what is this, and how much of it does Relay have?". Classification comes from the `capture_type` that `capture::web::source` derived from the URL, not from re-matching the URL later.
+  - `source.rs`: `SourceDescriptor` — a borrowed view over a `VaultFile` answering "what is this, and how much of it does Vox have?". Classification comes from the `capture_type` that `capture::web::source` derived from the URL, not from re-matching the URL later.
   - `content.rs`: `CanonicalContent` — the analysis-facing contract every source-specific normalizer produces. Preserves turn ordinals and code artifacts, which flat markdown destroyed.
   - `contract.rs`: `AnalysisRequest` / `AnalysisResult` / `AnalysisStatus`. Keeps "the evidence was not there" apart from "the analysis failed".
   - `prompts.rs`: The prompt registry — stable ids, versions recorded on every result, and an applicability rule so a repository prompt cannot be run against a conversation.
@@ -64,7 +64,7 @@ Relay is a native-first Windows desktop assistant built with a Rust backend and 
 - `vault`: Reads and writes markdown note files with frontmatter headers. `search_notes`/`list_notes` provide keyword-ranked retrieval over vault notes — a placeholder for the embedded LanceDB vector search Decision 6 commits to (see `docs/roadmap.md`).
 - `mcp`: Interface for dispatching trigger actions (`google-calendar`, `notion`, `gdrive`, OS notifications) — currently returns stubbed success results; real MCP client wiring is tracked as backlog (`docs/roadmap.md`).
 - `hotkeys`: Registers the show/hide and universal-dictation global OS hotkeys (`tauri-plugin-global-shortcut`), manages the always-on-top listening indicator window, and (`hotkeys::injection`) types transcribed text into whatever field has OS focus via `enigo`.
-- `settings`: Loads/saves `AppSettings` (provider, STT, hotkey config) at `.relay/config/settings.json`.
+- `settings`: Loads/saves `AppSettings` (provider, STT, hotkey config) at `.Vox/config/settings.json`.
 - `commands.rs`: Exposes thin `#[tauri::command]` functions returning `Result<T, CommandError>`.
 
 ## Window Architecture vs Native OS Notifications
@@ -73,5 +73,5 @@ Relay is a native-first Windows desktop assistant built with a Rust backend and 
 - **Transient Meeting Reminders**: Native OS Toast Notifications (`tauri_plugin_notification`). Transient notifications are presented directly via native Windows OS toasts without any React WebView or Tauri meeting-reminder window.
 
 ## Data Access & Security Model
-- **Local-Only Mode**: Default operating mode. No authentication required. Notes, scribbles, audio, and captures saved in `.relay/vault`. Vector indices stored in `.relay/lancedb`. Zero network transmission of user notes or audio.
+- **Local-Only Mode**: Default operating mode. No authentication required. Notes, scribbles, audio, and captures saved in `.Vox/vault`. Vector indices stored in `.Vox/lancedb`. Zero network transmission of user notes or audio.
 - **Supabase Cloud Services**: Native Rust integration (`identity/supabase.rs`, `updates/mod.rs`) for anonymous installation registration, heartbeat telemetry, diagnostics ingestion, and app release checking. Never transmits vault content, audio, or notes.

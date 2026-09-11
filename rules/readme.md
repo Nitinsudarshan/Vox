@@ -48,7 +48,7 @@ The agent **MUST** gather the following from the repository before drafting. If 
 **MUST (Licensing Discovery):**
 - Licensing facts are repository facts, not assumptions. The agent **MUST** inspect the actual `LICENSE` and manifest metadata before writing the license section. The agent **MUST NOT** infer the license from project discussions, previous prompts, README badges, or common conventions.
 - Do not modify licensing policy merely because README generation is requested. License changes require an explicit repository-level licensing decision.
-- For Relay, if AGPLv3 is intended but the `LICENSE` file does not yet exist or disagrees with AGPLv3 (e.g. still shows MIT or another license): report that the repository currently lacks or has an inconsistent license file; do **NOT** falsely claim that Relay is already AGPL-licensed; flag the missing or inconsistent license as a repository action required before the README can accurately claim AGPL licensing.
+- For Vox, if AGPLv3 is intended but the `LICENSE` file does not yet exist or disagrees with AGPLv3 (e.g. still shows MIT or another license): report that the repository currently lacks or has an inconsistent license file; do **NOT** falsely claim that Vox is already AGPL-licensed; flag the missing or inconsistent license as a repository action required before the README can accurately claim AGPL licensing.
 
 ---
 
@@ -98,7 +98,7 @@ Sections **MUST** appear in this order. Optional sections may be omitted, never 
 
 ### 4.1 Title
 - **MUST** be a single `#` H1, and the only H1 in the file.
-- **MUST** match the repository name, folder name, and package-manager name. If a display title differs, include the canonical name in italics and parentheses beside it: `# Relay _(relay-desktop)_`.
+- **MUST** match the repository name, folder name, and package-manager name. If a display title differs, include the canonical name in italics and parentheses beside it: `# Vox _(vox-workspace)_`.
 - **MAY** be preceded by a centered logo block. If a logo is used, cap width at ~200px and provide `alt` text.
 
 ### 4.2 Tagline
@@ -188,7 +188,7 @@ Sections **MUST** appear in this order. Optional sections may be omitted, never 
 
 ### 4.16 License
 - **MUST** state the actual SPDX identifier detected from the repository and link the `LICENSE` file: `<SPDX identifier> © <year> <copyright holder> — see [LICENSE](LICENSE).`
-- For Relay, the expected identifier is `AGPL-3.0-only` unless the repository's actual `LICENSE` file establishes a different valid AGPL variant.
+- For Vox, the expected identifier is `AGPL-3.0-only` unless the repository's actual `LICENSE` file establishes a different valid AGPL variant.
 - The README license statement **MUST** match:
   1. the `LICENSE` file,
   2. package/manifests where applicable,
@@ -198,8 +198,8 @@ Sections **MUST** appear in this order. Optional sections may be omitted, never 
 - The agent **MUST NOT** substitute MIT, Apache-2.0, GPL-3.0, or another license merely because it is a common open-source choice.
 - If the repository's license files disagree, **STOP** and report the inconsistency rather than silently choosing one.
 
-### 4.17 Relay Project Maturity & Status
-- Relay is currently pre-production / active development. README generation **MUST NOT** imply that Relay is production-ready unless repository evidence explicitly supports that claim.
+### 4.17 Vox Project Maturity & Status
+- Vox is currently pre-production / active development. README generation **MUST NOT** imply that Vox is production-ready unless repository evidence explicitly supports that claim.
 - When the repository is pre-production:
   - Clearly identify the project as early-stage / pre-production / active development where appropriate.
   - Prefer a concise GitHub `[!NOTE]` alert near the top rather than repeatedly apologizing for project maturity.
@@ -208,24 +208,24 @@ Sections **MUST** appear in this order. Optional sections may be omitted, never 
   - Features marked as planned, experimental, incomplete, or roadmap items **MUST NOT** be presented as shipped functionality.
 
 ### 4.18 Open-Source Core & Commercial Strategy
-- When writing the README's "Why", "What it is", "Architecture", "Roadmap", "License", or similar sections, agents **MAY** describe Relay's intended model as an open-source core (under AGPLv3) with local-first functionality, optional cloud/hybrid capabilities, and official paid services around the open-source project.
+- When writing the README's "Why", "What it is", "Architecture", "Roadmap", "License", or similar sections, agents **MAY** describe Vox's intended model as an open-source core (under AGPLv3) with local-first functionality, optional cloud/hybrid capabilities, and official paid services around the open-source project.
 - **Philosophy & Rules:**
-  - Relay remains genuinely open source under GNU AGPLv3.
-  - Users are free to inspect, use, modify, self-host, and contribute to Relay.
+  - Vox remains genuinely open source under GNU AGPLv3.
+  - Users are free to inspect, use, modify, self-host, and contribute to Vox.
   - Modifications distributed to others or hosted/networked MUST remain available under applicable AGPL obligations (preventing closed-source proprietary SaaS wraps without AGPL compliance).
-  - Do **NOT** describe Relay as permitting unrestricted proprietary forks or closed-source commercial derivatives.
+  - Do **NOT** describe Vox as permitting unrestricted proprietary forks or closed-source commercial derivatives.
   - Commercial use itself is **NOT** prohibited by AGPLv3.
-  - The official Relay project may eventually provide commercial cloud, hybrid, hosted, model, infrastructure, enterprise, or other paid services around the open-source project. The existence of commercial Relay services **MUST NOT** be described as making the core Relay software proprietary.
+  - The official Vox project may eventually provide commercial cloud, hybrid, hosted, model, infrastructure, enterprise, or other paid services around the open-source project. The existence of commercial Vox services **MUST NOT** be described as making the core Vox software proprietary.
   - Do **NOT** invent specific paid features, pricing, plans, limits, or commercial products unless they exist in the repository.
-  - Do **NOT** claim that Relay Cloud, Relay Enterprise, paid model access, or other commercial offerings exist unless repository evidence confirms they exist. Future commercial plans MUST be clearly marked as planned/future.
-  - The README should **NEVER** imply that users must pay to use the open-source Relay software unless the repository actually imposes such a requirement.
+  - Do **NOT** claim that Vox Cloud, Vox Enterprise, paid model access, or other commercial offerings exist unless repository evidence confirms they exist. Future commercial plans MUST be clearly marked as planned/future.
+  - The README should **NEVER** imply that users must pay to use the open-source Vox software unless the repository actually imposes such a requirement.
 
 ### 4.19 Trademark & Branding Guidance
-- Software licensing and trademark/brand identity are distinct. AGPLv3 does **NOT** grant permission to use the official Relay name, logo, or branding for derivative projects.
+- Software licensing and trademark/brand identity are distinct. AGPLv3 does **NOT** grant permission to use the official Vox name, logo, or branding for derivative projects.
 - When discussing forks or derivatives:
-  - Do **NOT** describe an unofficial fork as an "official Relay" project.
-  - Do **NOT** encourage derivative projects to use Relay branding as though they were official.
-  - Use terms such as "fork", "derivative", or "based on Relay".
+  - Do **NOT** describe an unofficial fork as an "official Vox" project.
+  - Do **NOT** encourage derivative projects to use Vox branding as though they were official.
+  - Use terms such as "fork", "derivative", or "based on Vox".
   - Do **NOT** make legal trademark claims unless the repository contains explicit trademark policy documentation (`TRADEMARKS.md` or branding policy).
   - If no trademark policy exists, do not invent one — link to `TRADEMARKS.md` if present.
 
@@ -334,14 +334,14 @@ flowchart TD
 14. A "Star History" chart or star-begging block on a project with fewer than ~1k stars — it reads as desperate.
 15. Claims about competitors that are unsourced or undated.
 16. AI-tell phrasing: `In today's fast-paced world`, `Look no further`, `Whether you're a beginner or an expert`, `dive into`, `unleash the power of`, `elevate your workflow`.
-17. Claiming Relay is MIT licensed when it is AGPL licensed (or vice versa).
+17. Claiming Vox is MIT licensed when it is AGPL licensed (or vice versa).
 18. Claiming "free for commercial use" without explaining applicable AGPL obligations when that distinction matters.
 19. Claiming "commercial use is prohibited" when the actual license is AGPLv3.
 20. Claiming that AGPL prevents all commercial use.
-21. Claiming that AGPL gives users rights to Relay's name, logo, or trademark branding.
-22. Describing a proprietary closed-source derivative as permissible under Relay's license.
-23. Presenting future Relay Cloud / Enterprise / paid model functionality as currently available.
-24. Calling Relay production-ready when repository evidence does not support that claim.
+21. Claiming that AGPL gives users rights to Vox's name, logo, or trademark branding.
+22. Describing a proprietary closed-source derivative as permissible under Vox's license.
+23. Presenting future Vox Cloud / Enterprise / paid model functionality as currently available.
+24. Calling Vox production-ready when repository evidence does not support that claim.
 25. Making legal claims about trademarks without an explicit project trademark policy.
 
 ---
@@ -394,11 +394,11 @@ The agent **MUST** run this before presenting output. Report each item as pass/f
 - [ ] Every internal link resolves to a real path
 - [ ] Every external link returns 200
 - [ ] License statement matches `LICENSE` and manifest metadata
-- [ ] License identifier matches the actual `LICENSE` file (for Relay: expected `AGPL-3.0-only` once verified)
+- [ ] License identifier matches the actual `LICENSE` file (for Vox: expected `AGPL-3.0-only` once verified)
 - [ ] README does not incorrectly state MIT or another license
 - [ ] No unsupported claim that commercial use is prohibited
 - [ ] No unsupported claim that AGPL prohibits all commercial forks
-- [ ] No implication that AGPL grants Relay trademark rights
+- [ ] No implication that AGPL grants Vox trademark rights
 - [ ] Every badge points at a workflow/registry that exists
 - [ ] No feature claimed that isn't on the default branch
 
@@ -554,7 +554,7 @@ Issues and PRs welcome — start with [`CONTRIBUTING.md`](CONTRIBUTING.md) or a
 ## License
 
 <SPDX identifier> © <year> <copyright holder> — see [LICENSE](LICENSE).
-*(For Relay, the expected identifier is AGPL-3.0-only once confirmed by the repository's actual LICENSE file).*
+*(For Vox, the expected identifier is AGPL-3.0-only once confirmed by the repository's actual LICENSE file).*
 ````
 
 ---

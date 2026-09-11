@@ -61,7 +61,7 @@ const STAGE_COPY: Record<string, string> = {
 };
 
 /**
- * Everything Relay captures, in one surface.
+ * Everything Vox captures, in one surface.
  *
  * `Capture` is where a thought is written, pasted or handed to the surface that
  * owns its mode; `Captured Pages` is what the browser extension has sent here.
@@ -103,7 +103,7 @@ export const CapturesPage: React.FC<CapturesPageProps> = ({
       setError(null);
     } catch (err) {
       console.error('Failed to load captures', err);
-      setError('Relay could not read your captures.');
+      setError('Vox could not read your captures.');
     } finally {
       setLoading(false);
     }
@@ -313,7 +313,7 @@ export const CapturesPage: React.FC<CapturesPageProps> = ({
           <div className="flex flex-wrap items-center gap-2 border-b border-border bg-amber-500/10 px-5 py-2 text-xs text-amber-700 dark:text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>
-              Browser capture is off, so nothing can reach Relay from your browser right now.
+              Browser capture is off, so nothing can reach Vox from your browser right now.
             </span>
             <button
               type="button"
@@ -335,8 +335,8 @@ export const CapturesPage: React.FC<CapturesPageProps> = ({
               description={
                 captures.length === 0
                   ? status?.capture_hotkey
-                    ? `Install the Relay browser extension, then press its shortcut on any page. ${status.capture_hotkey} brings this list back up from anywhere.`
-                    : 'Install the Relay browser extension, then press its shortcut on any page.'
+                    ? `Install the Vox browser extension, then press its shortcut on any page. ${status.capture_hotkey} brings this list back up from anywhere.`
+                    : 'Install the Vox browser extension, then press its shortcut on any page.'
                   : 'Try fewer words, or search for the site the page came from.'
               }
             />

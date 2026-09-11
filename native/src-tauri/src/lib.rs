@@ -35,7 +35,7 @@ fn set_app_user_model_id() {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    let app_id: Vec<u16> = OsStr::new("com.relay.app")
+    let app_id: Vec<u16> = OsStr::new("com.vox.app")
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
@@ -78,9 +78,12 @@ pub fn run() {
         }
     }
 
-    let base_dir = std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".relay");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let base_dir = if cwd.join(".vox").exists() || !cwd.join(".relay").exists() {
+        cwd.join(".vox")
+    } else {
+        cwd.join(".relay")
+    };
 
     let default_vault_dir = base_dir.join("vault");
     let config_dir = base_dir.join("config");

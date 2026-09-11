@@ -169,11 +169,11 @@ function tableBlock(el: Element): ContentBlock | null {
 
 /** Why an image's own bytes are not in the payload. Stated on every image. */
 export const IMAGE_CONTENT_NOTE =
-  'Relay recorded where this image came from but did not download the image itself.';
+  'Vox recorded where this image came from but did not download the image itself.';
 
 /** Why a file's own bytes are not in the payload. Stated on every attachment. */
 export const ATTACHMENT_CONTENT_NOTE =
-  'Relay recorded this file\u2019s details but did not download the file itself.';
+  'Vox recorded this file\u2019s details but did not download the file itself.';
 
 function numericAttribute(el: Element, name: string): number | undefined {
   const raw = el.getAttribute(name);

@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: Existence is not implementation. How to prove a change works, and how to report what you could not verify.
 ---
@@ -24,7 +24,7 @@ Four levels. Report which one you actually reached:
 Levels 1–3 are checkable mechanically. Level 4 usually needs a run or a human.
 "The file exists and exports the command" is level 1 — never report it as done.
 
-## Stub patterns in Relay's stack
+## Stub patterns in Vox's stack
 
 **Rust (`native/src-tauri/`):** `todo!()`, `unimplemented!()`, `Ok(())` from a
 function that should persist something, a `#[tauri::command]` that returns a
@@ -99,7 +99,7 @@ without saying so:
 
 If the work is too large, say so and propose a split. If it's deliberately
 deferred, it goes in `maybe_later.md` with the blueprint (`maybe-later.md`) and
-comes *out* of the UI — Relay's no-ghost-UI rule exists precisely because a
+comes *out* of the UI — Vox's no-ghost-UI rule exists precisely because a
 "static for now" affordance reads to the user as a working feature.
 
 A declared ceiling with a named upgrade trigger (`lazy-code-ladder.md`) is the

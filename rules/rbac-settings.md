@@ -1,12 +1,12 @@
----
-description: Why a granular RBAC system is intentionally not built for Relay yet
+﻿---
+description: Why a granular RBAC system is intentionally not built for Vox yet
 ---
 
 # RBAC — Not Built, and Why
 
 NGConnect's `rbac-settings.md` described a granular, resource-based RBAC
 system (role/team/user-level overrides, a permission-resource registry, a
-management UI). **Relay does not have this, and shouldn't get it yet.**
+management UI). **Vox does not have this, and shouldn't get it yet.**
 
 ## Why this is deliberately absent
 

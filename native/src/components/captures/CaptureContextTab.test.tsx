@@ -42,7 +42,7 @@ describe('CaptureContextTab', () => {
     capture_id: 'cap_chat',
     title: 'Architecture Discussion',
     objective: 'Design local-first context handoff',
-    background: ['Relay is desktop assistant'],
+    background: ['Vox is desktop assistant'],
     current_state: 'Architecture finalized',
     decisions: [
       {
@@ -72,7 +72,7 @@ describe('CaptureContextTab', () => {
 
   // `application` is `"GitHub"` because that is what `capture/web/source.rs`
   // actually writes. The empty state must key off `capture_type`, which is
-  // the classification Relay already derived from the URL, not off a
+  // the classification Vox already derived from the URL, not off a
   // case-sensitive name match the detector never produces.
   const gitHubProvenanceFixture: CaptureProvenance = {
     source_type: 'web',
@@ -110,7 +110,7 @@ describe('CaptureContextTab', () => {
 
     expect(screen.getByText('Structured Context Unavailable')).toBeDefined();
     expect(
-      screen.getByText('Relay has captured this repository, but has not yet extracted structured repository context.'),
+      screen.getByText('Vox has captured this repository, but has not yet extracted structured repository context.'),
     ).toBeDefined();
     const btn = screen.getByRole('button', { name: /extract repository context/i });
     expect(btn).toBeDefined();

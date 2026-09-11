@@ -1,7 +1,7 @@
-# Decision Log — Push-to-Talk Pill Redesign & Interaction Refinement
+﻿# Decision Log — Push-to-Talk Pill Redesign & Interaction Refinement
 
 ## Context
-Relay's push-to-talk (PTT) interface required an interaction and visual refinement inspired by Oscar's minimalist desktop pill experience while retaining 100% of Relay's existing Rust backend, local Whisper, global hotkey registration, and LLM transformation capabilities.
+Vox's push-to-talk (PTT) interface required an interaction and visual refinement inspired by Oscar's minimalist desktop pill experience while retaining 100% of Vox's existing Rust backend, local Whisper, global hotkey registration, and LLM transformation capabilities.
 
 ---
 
@@ -13,8 +13,8 @@ Relay's push-to-talk (PTT) interface required an interaction and visual refineme
 - **Alternatives Considered**: Keeping a floating circular badge.
 - **Reason Rejected**: Floating circular badge frequently swallowed mouse clicks meant for underlying application windows and looked out of place.
 
-### Decision 2: Removal of Heavy "RELAY" Branding Text
-- **Choice**: Remove "RELAY" brand text from the collapsed pill label. Optionally display the active foreground application name (e.g. `● Chrome` or `● Snipping Tool`) or a simple state dot `● Click to dictate`.
+### Decision 2: Removal of Heavy "Vox" Branding Text
+- **Choice**: Remove "Vox" brand text from the collapsed pill label. Optionally display the active foreground application name (e.g. `● Chrome` or `● Snipping Tool`) or a simple state dot `● Click to dictate`.
 - **Why**: Desktop utilities should be quiet and functional, prioritizing utility over branding clutter.
 
 ### Decision 3: Floating Hotkey Hint Bar (`Hold to record [Ctrl] [Space]`)
@@ -27,7 +27,7 @@ Relay's push-to-talk (PTT) interface required an interaction and visual refineme
 
 ### Decision 5: Real Settings in Dropdown Surface
 - **Choice**: Include Auto-paste (Toggle), Text transform (Toggle), Cleanup style (Faithful/Clean/Professional/Concise), Prompt mode (Toggle with "Rewrite speech into a prompt"), and Speech Language.
-- **Why**: All dropdown controls map directly to Relay's capabilities without fake or simulated state.
+- **Why**: All dropdown controls map directly to Vox's capabilities without fake or simulated state.
 
 ---
 

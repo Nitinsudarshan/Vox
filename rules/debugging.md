@@ -1,4 +1,4 @@
----
+﻿---
 trigger: model_decision
 description: Debugging discipline and the bug-pattern checklist to scan before forming a hypothesis.
 ---
@@ -41,7 +41,7 @@ These cover most bugs. Match the symptom to a category first.
 | Off by one item / last item missing | Boundary condition |
 | Memory or handle growth | Missing cleanup, closure capture |
 
-Relay-specific instances of each:
+Vox-specific instances of each:
 
 - **Tauri IPC boundary** — the most common data-shape mismatch in this repo.
   A Rust struct's serde shape vs the TS type the frontend expects; `snake_case`

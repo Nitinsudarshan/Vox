@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: How to size and specify a unit of work, when to split it, and which gate to use at each checkpoint.
 ---
@@ -9,7 +9,7 @@ Distilled from [gsd-core](https://github.com/open-gsd/gsd-core) v1.12.0 (MIT)
 (`the-phase-loop.md`, `planner-antipatterns.md`, `gates.md`,
 `context-budget.md`).
 
-Relay does not run GSD's `.planning/` machinery, and adopting it isn't the
+Vox does not run GSD's `.planning/` machinery, and adopting it isn't the
 point of this file. What ports is the sizing and specificity discipline: the
 failure modes it guards against are the ones a three-surface repo hits anyway.
 
@@ -25,7 +25,7 @@ A well-sized unit of work:
 - Has a testable definition of done that can be checked without reading the
   whole repo.
 
-For Relay: *"Reject a chunk whose RMS never clears the speech gate, recording
+For Vox: *"Reject a chunk whose RMS never clears the speech gate, recording
 the reason"* is right-sized. *"Improve meeting intelligence"* is not — it
 contains several independent concerns. *"Fix the typo in the README"* is below
 the threshold where any of this adds value; just do it.
@@ -38,7 +38,7 @@ confidently, and is cheaper to abandon when a decision turns out wrong.
 **Always split when:**
 
 - More than ~3 tasks in one unit.
-- It crosses subsystems. On Relay that means **Rust backend + desktop frontend
+- It crosses subsystems. On Vox that means **Rust backend + desktop frontend
   are separate units** — the surfaces have different test
   gates, different conventions (`rust-backend.md` vs
   `code-standards-frontend.md`), and different reviewers' attention.
@@ -89,11 +89,11 @@ execute the task without asking a clarifying question?** If not, add detail.
 Every checkpoint is one of four kinds. Naming the kind makes the failure
 behavior obvious:
 
-| Gate | Purpose | On failure | Relay example |
+| Gate | Purpose | On failure | Vox example |
 |---|---|---|---|
 | **Pre-flight** | Validate preconditions before starting | Block entry, no partial work | Cargo/npm deps and CMake toolchain present before a build task |
 | **Revision** | Judge output quality, loop back with specific feedback | Loop, with an iteration cap | `cargo clippy -D warnings` → fix → re-run (cap the loop; escalate if the count stops dropping) |
-| **Escalation** | Surface an unresolvable decision to the user | Pause, present options, wait | Two calendar events fit a recording equally well — Relay shows both rather than guessing |
+| **Escalation** | Surface an unresolvable decision to the user | Pause, present options, wait | Two calendar events fit a recording equally well — Vox shows both rather than guessing |
 | **Abort** | Stop to prevent damage or waste | Stop, preserve state, report why | Context in the POOR tier mid-task; a vault write that would overwrite the user's only copy |
 
 Selection heuristic: start with pre-flight. If the check happens *after* work

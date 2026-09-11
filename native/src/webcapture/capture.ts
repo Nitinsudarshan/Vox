@@ -324,13 +324,13 @@ export function judgeCompleteness(
   }
 
   // Reached the end, nothing missing, nothing left closed. For a conversation
-  // this is the first time Relay can say this and mean it.
+  // this is the first time Vox can say this and mean it.
   notes.push(
-    `Relay read this conversation from its beginning to its end and captured ${traversal.messages_captured} turn(s).`,
+    `Vox read this conversation from its beginning to its end and captured ${traversal.messages_captured} turn(s).`,
   );
   if (traversal.expansions_unnecessary > 0) {
     notes.push(
-      `${traversal.expansions_unnecessary} shortened section(s) were already fully present in the page, so Relay read them without opening anything.`,
+      `${traversal.expansions_unnecessary} shortened section(s) were already fully present in the page, so Vox read them without opening anything.`,
     );
   }
   return { coverage: 'full_document', notes };

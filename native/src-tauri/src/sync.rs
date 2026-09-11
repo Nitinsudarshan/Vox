@@ -44,7 +44,7 @@ impl<T: ?Sized> MutexExt<T> for Mutex<T> {
             Err(poisoned) => {
                 let location = std::panic::Location::caller();
                 tracing::warn!(
-                    target: "relay::sync",
+                    target: "vox::sync",
                     file = location.file(),
                     line = location.line(),
                     "recovered a poisoned mutex — a thread panicked while holding it, \

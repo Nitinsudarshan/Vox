@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Activity,
   AlertTriangle,
   Check,
   Cloud,
@@ -120,10 +121,9 @@ export const HomeSystemPanel: React.FC<HomeSystemPanelProps> = ({
 
   return (
     <section className="space-y-2.5">
-      <div className="flex items-center gap-2">
-        <h2 className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
-          Relay on this machine
-        </h2>
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+        <Activity className="size-3.5 text-primary" />
+        <span>Vox on this machine</span>
       </div>
 
       <div className="rounded-lg border border-border bg-card divide-y divide-border">

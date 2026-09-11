@@ -12,7 +12,7 @@ const graph: KnowledgeGraphData = {
   nodes: [
     { id: 'scr_1', node_type: 'scribble', label: 'Chunking strategy', metadata: {}, degree: 2 },
     { id: 'topic_1', node_type: 'topic', label: 'Retrieval', metadata: {}, degree: 1 },
-    { id: 'ent_1', node_type: 'entity', label: 'Relay', metadata: {}, degree: 1 },
+    { id: 'ent_1', node_type: 'entity', label: 'Vox', metadata: {}, degree: 1 },
     { id: 'scr_2', node_type: 'scribble', label: 'Orphan thought', metadata: {}, degree: 0 },
   ],
   edges: [

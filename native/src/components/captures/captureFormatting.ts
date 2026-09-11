@@ -8,7 +8,7 @@
 
 import type { CaptureProvenance, VaultFile } from '../../types';
 
-/** Human label for Relay's capture types. */
+/** Human label for Vox's capture types. */
 export function captureTypeLabel(captureType: string): string {
   switch (captureType) {
     case 'conversation':
@@ -62,13 +62,13 @@ export function describeCompleteness(provenance: CaptureProvenance): Completenes
       return {
         tone: 'complete',
         headline: provenance.traversal?.performed
-          ? 'Relay read this from beginning to end'
+          ? 'Vox read this from beginning to end'
           : 'The whole page was captured',
       };
     case 'rendered_dom':
       return {
         tone: 'partial',
-        headline: 'Only what Relay could reach was captured',
+        headline: 'Only what Vox could reach was captured',
       };
     case 'failed':
       return {
@@ -144,11 +144,11 @@ export function terminationLabel(termination: string): string {
     case 'no_progress':
       return 'the page stopped yielding new content';
     case 'step_budget':
-      return 'it reached Relay’s reading limit for one page';
+      return 'it reached Vox’s reading limit for one page';
     case 'time_budget':
-      return 'it reached Relay’s time limit for one page';
+      return 'it reached Vox’s time limit for one page';
     case 'expansion_budget':
-      return 'it reached Relay’s limit on opening shortened sections';
+      return 'it reached Vox’s limit on opening shortened sections';
     case 'user_interrupted':
       return 'the page was used while it was being read';
     case 'navigation_detected':

@@ -1,11 +1,11 @@
----
+﻿---
 trigger: model_decision
 description: Requirements and conventions for logging deferred, postponed, or speculative features to maybe_later.md.
 ---
 
 # Deferred Features & "Maybe Later" Backlog (`maybe_later.md`)
 
-When designing, refactoring, or cleaning up Relay's surfaces (Native Desktop, Rust Backend, Browser Extension), speculative affordances, half-implemented features, or deprioritized UX enhancements must **never** be left in the code as ghost UI, misleading labels, or dead code.
+When designing, refactoring, or cleaning up Vox's surfaces (Native Desktop, Rust Backend, Browser Extension), speculative affordances, half-implemented features, or deprioritized UX enhancements must **never** be left in the code as ghost UI, misleading labels, or dead code.
 
 
 Instead, they must be cleanly removed from the active surface and documented in [`maybe_later.md`](../maybe_later.md) at the repository root.

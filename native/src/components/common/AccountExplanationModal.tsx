@@ -27,10 +27,10 @@ export const AccountExplanationModal: React.FC<AccountExplanationModalProps> = (
             <CheckCircle2 className="w-7 h-7" />
           </div>
           <h2 className="text-xl font-bold tracking-tight text-foreground">
-            You're signed into Relay
+            You're signed into Vox
           </h2>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Your Relay account helps us provide updates, diagnose issues, and unlock future cloud services like Google Calendar.
+            Your Vox account helps us provide updates, diagnose issues, and unlock future cloud services.
           </p>
         </div>
 
@@ -40,7 +40,7 @@ export const AccountExplanationModal: React.FC<AccountExplanationModalProps> = (
             <span>Your local knowledge remains on this device</span>
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Relay does not upload your Scribbles, Voice Notes, Meetings, transcripts, or audio recordings simply because you signed in.
+            Vox does not upload your Scribbles, Voice Notes, transcripts, or audio recordings simply because you signed in.
           </p>
         </div>
 

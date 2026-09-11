@@ -27,8 +27,8 @@ pub enum TokenNamespace {
 impl TokenNamespace {
     pub fn service_name(&self) -> &'static str {
         match self {
-            Self::Identity => "com.relay.app.identity",
-            Self::Calendar => "com.relay.app.calendar",
+            Self::Identity => "com.vox.app.identity",
+            Self::Calendar => "com.vox.app.calendar",
         }
     }
 
@@ -183,12 +183,12 @@ mod tests {
 
     #[test]
     fn test_token_store_namespace_isolation() {
-        let temp_dir = std::env::temp_dir().join(format!("relay_test_oauth_store_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("vox_test_oauth_store_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&temp_dir).unwrap();
 
         let unique_id = uuid::Uuid::new_v4().to_string();
-        let service_id = format!("com.relay.test.identity.{}", unique_id);
-        let service_cal = format!("com.relay.test.calendar.{}", unique_id);
+        let service_id = format!("com.vox.test.identity.{}", unique_id);
+        let service_cal = format!("com.vox.test.calendar.{}", unique_id);
 
         let identity_tokens = OAuthTokens {
             access_token: "identity_access_123".to_string(),

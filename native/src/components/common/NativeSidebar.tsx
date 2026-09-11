@@ -13,7 +13,7 @@ import {
   Network,
 } from 'lucide-react';
 
-import { RelayLogo } from '@/components/common/RelayLogo';
+import { VoxLogo } from '@/components/common/VoxLogo';
 import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
@@ -186,15 +186,15 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                 type="button"
                 onClick={() => setActiveTab('home')}
                 className="flex items-center flex-1 min-w-0 h-full rounded-md hover:bg-sidebar-accent/70 px-1.5 transition-all cursor-pointer group text-left"
-                title="Relay Home"
-                aria-label="Relay Home"
+                title="Vox Home"
+                aria-label="Vox Home"
               >
                 <div className="flex aspect-square size-7 items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <RelayLogo className="w-7 h-7" />
+                  <VoxLogo className="w-7 h-7" />
                 </div>
                 <div className="grid flex-1 leading-tight min-w-0 ml-2">
                   <span className="truncate font-bold tracking-wider text-xs text-sidebar-foreground group-hover:text-primary transition-colors">
-                    RELAY
+                    VOX
                   </span>
                   <span className="truncate text-[9px] text-muted-foreground font-mono uppercase tracking-wider">
                     {activeWorkspace === 'cloud' ? 'Hybrid Cloud' : 'Local Vault'}
@@ -219,8 +219,8 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                   sideOffset={8}
                   className="w-56"
                 >
-                  <DropdownMenuLabel className="text-[11px] text-muted-foreground font-normal">
-                    Workspaces & Vaults
+                  <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider">
+                    Storage & Workspace
                   </DropdownMenuLabel>
                   <DropdownMenuItem
                     onClick={() => setActiveWorkspace('local')}
@@ -230,8 +230,8 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                       <Database className="size-3.5 text-emerald-500" />
                     </div>
                     <div className="flex flex-col">
-                      <span className="font-semibold text-xs">Local Vault</span>
-                      <span className="text-[10px] text-muted-foreground">100% On-Device LanceDB</span>
+                      <span className="font-semibold text-xs">Local Vault Only</span>
+                      <span className="text-[10px] text-muted-foreground">Markdown & Audio on Disk</span>
                     </div>
                     {activeWorkspace === 'local' && (
                       <span className="ml-auto text-[10px] font-bold text-primary">✓</span>
@@ -272,14 +272,14 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                   type="button"
                   onClick={() => setActiveTab('home')}
                   className="size-8 rounded-lg border border-border bg-card hover:bg-sidebar-accent text-foreground flex items-center justify-center p-0 shadow-xs cursor-pointer group"
-                  title="Relay Home"
-                  aria-label="Relay Home"
+                  title="Vox Home"
+                  aria-label="Vox Home"
                 >
-                  <RelayLogo className="w-8 h-8 group-hover:scale-105 transition-transform" />
+                  <VoxLogo className="w-8 h-8 group-hover:scale-105 transition-transform" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={10}>
-                <span>Relay Home</span>
+                <span>Vox Home</span>
               </TooltipContent>
             </Tooltip>
           )}

@@ -7,7 +7,7 @@ export type ThemeMode = 'light' | 'dark';
 
 export const ThemeToggle: React.FC = () => {
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem('relay-theme');
+    const saved = localStorage.getItem('vox-theme') ?? localStorage.getItem('relay-theme');
     if (saved === 'light' || saved === 'dark') {
       return saved;
     }
@@ -19,7 +19,8 @@ export const ThemeToggle: React.FC = () => {
 
   useEffect(() => {
     applyThemeWithoutTransition(theme === 'dark');
-    localStorage.setItem('relay-theme', theme);
+    localStorage.setItem('vox-theme', theme);
+    emit('vox-theme-changed', theme).catch(() => {});
     emit('relay-theme-changed', theme).catch(() => {});
   }, [theme]);
 

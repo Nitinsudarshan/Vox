@@ -1,4 +1,4 @@
----
+﻿---
 trigger: always_on
 description: Standard pattern for forms and input validation
 globs: "native/src/**"
@@ -6,7 +6,7 @@ globs: "native/src/**"
 
 # Forms & Validation
 
-Applies to `native/src/` — the most important form in Relay is the
+Applies to `native/src/` — the most important form in Vox is the
 trigger-phrase config form (decision 10), which is what makes
 "user-customizable trigger phrases" a real feature rather than a hardcoded list.
 

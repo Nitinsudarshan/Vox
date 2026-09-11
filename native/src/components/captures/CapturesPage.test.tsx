@@ -9,7 +9,7 @@ import type { CaptureBridgeStatus, VaultFile } from '../../types';
 function capture(overrides: Partial<VaultFile> = {}): VaultFile {
   return {
     id: 'capture_1',
-    original_filename: 'Designing Relay Capture',
+    original_filename: 'Designing Vox Capture',
     file_type: 'webcapture',
     mime_type: 'application/json',
     size_bytes: 4096,
@@ -17,14 +17,14 @@ function capture(overrides: Partial<VaultFile> = {}): VaultFile {
     created_at: '2026-02-14T09:30:00Z',
     updated_at: '2026-02-14T09:30:00Z',
     last_known_source_path: 'https://chatgpt.com/c/abc',
-    vault_path: 'captures/capture_1/original/Designing-Relay-Capture.json',
+    vault_path: 'captures/capture_1/original/Designing-Vox-Capture.json',
     extraction_status: 'extracted',
     processing_status: 'ready',
-    content: '# Designing Relay Capture\n\n## USER\n\nHow should capture work?',
+    content: '# Designing Vox Capture\n\n## USER\n\nHow should capture work?',
     summary: 'A conversation about structured acquisition.',
     tags: ['architecture'],
     topics: ['architecture'],
-    entities: ['Relay'],
+    entities: ['Vox'],
     relationships: [],
     ai_metadata: { enrichment_status: 'enriched', suggested_concepts: [], suggested_questions: [], suggested_relations: [] },
     capture: {
@@ -33,7 +33,7 @@ function capture(overrides: Partial<VaultFile> = {}): VaultFile {
       application: 'ChatGPT',
       domain: 'chatgpt.com',
       url: 'https://chatgpt.com/c/abc',
-      page_title: 'Designing Relay Capture',
+      page_title: 'Designing Vox Capture',
       captured_at: '2026-02-14T09:30:00Z',
       extractor_id: 'chatgpt',
       extractor_version: 1,
@@ -86,7 +86,7 @@ describe('CapturesPage', () => {
     mockBackend([capture()]);
     render(<CapturesPage />);
 
-    expect(await screen.findByText('Designing Relay Capture')).toBeInTheDocument();
+    expect(await screen.findByText('Designing Vox Capture')).toBeInTheDocument();
     expect(screen.getByText('ChatGPT')).toBeInTheDocument();
     expect(screen.getByText('Conversation')).toBeInTheDocument();
     expect(screen.getByText('chatgpt.com/c/abc')).toBeInTheDocument();
@@ -97,7 +97,7 @@ describe('CapturesPage', () => {
     render(<CapturesPage />);
 
     expect(
-      await screen.findByText('Only what Relay could reach was captured'),
+      await screen.findByText('Only what Vox could reach was captured'),
     ).toBeInTheDocument();
   });
 
@@ -107,7 +107,7 @@ describe('CapturesPage', () => {
     mockBackend([complete]);
     render(<CapturesPage />);
 
-    await screen.findByText('Designing Relay Capture');
+    await screen.findByText('Designing Vox Capture');
     expect(screen.queryByText(/only what the page had loaded/i)).not.toBeInTheDocument();
   });
 
@@ -120,7 +120,7 @@ describe('CapturesPage', () => {
     await user.type(screen.getByLabelText('Search captures'), 'github');
 
     await waitFor(() => {
-      expect(screen.queryByText('Designing Relay Capture')).not.toBeInTheDocument();
+      expect(screen.queryByText('Designing Vox Capture')).not.toBeInTheDocument();
     });
     expect(screen.getByText('A GitHub issue')).toBeInTheDocument();
   });
@@ -151,9 +151,9 @@ describe('CapturesPage', () => {
     mockBackend([capture()]);
     render(<CapturesPage />);
 
-    await screen.findByText('Designing Relay Capture');
+    await screen.findByText('Designing Vox Capture');
     await user.click(
-      screen.getByRole('button', { name: 'Delete capture Designing Relay Capture' }),
+      screen.getByRole('button', { name: 'Delete capture Designing Vox Capture' }),
     );
 
     expect(await screen.findByText('Move this capture to Trash?')).toBeInTheDocument();
@@ -170,12 +170,12 @@ describe('CapturesPage', () => {
     render(<CapturesPage />);
 
     // Arriving from the sidebar shows what was captured, not a compose box.
-    await screen.findByText('Designing Relay Capture');
+    await screen.findByText('Designing Vox Capture');
     expect(screen.queryByText('Type a thought directly')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Capture' }));
     expect(await screen.findByText('Type a thought directly')).toBeInTheDocument();
-    expect(screen.queryByText('Designing Relay Capture')).not.toBeInTheDocument();
+    expect(screen.queryByText('Designing Vox Capture')).not.toBeInTheDocument();
   });
 
   test('a capture mode asked for elsewhere opens on that mode', async () => {
@@ -204,7 +204,7 @@ describe('CapturesPage', () => {
     render(<CapturesPage initialCaptureMethod="text" />);
 
     await user.click(await screen.findByText('Web Capture'));
-    expect(await screen.findByText('Designing Relay Capture')).toBeInTheDocument();
+    expect(await screen.findByText('Designing Vox Capture')).toBeInTheDocument();
   });
 
   test('a thought captured here can be opened in Scribbles', async () => {

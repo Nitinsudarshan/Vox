@@ -53,7 +53,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
 
   if (!open) return null;
 
-  const displayVersion = version || (entries.length > 0 ? entries[0].version : '0.6.0');
+  const displayVersion = version || (entries.length > 0 ? entries[0].version : '0.1.0');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
@@ -66,7 +66,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-extrabold text-foreground">Relay Release Notes</h3>
+                <h3 className="text-base font-extrabold text-foreground">Vox Release Notes</h3>
                 <Badge variant="outline" className="text-xs font-mono border-primary/30 text-primary">
                   v{displayVersion}
                 </Badge>

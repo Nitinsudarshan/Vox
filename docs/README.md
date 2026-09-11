@@ -1,4 +1,4 @@
-# Relay documentation
+﻿# Vox documentation
 
 The map of what's written down, where, and — importantly — what each file is
 allowed to claim. Documentation that outlives its subject is worse than none,
@@ -6,12 +6,12 @@ because the next reader (human or agent) treats it as current.
 
 ## Living specification
 
-These describe Relay as it is now. If one disagrees with the code, the code
+These describe Vox as it is now. If one disagrees with the code, the code
 is right and the document is a bug to be fixed in the same change.
 
 | File | Scope |
 |---|---|
-| [product.md](product.md) | What Relay is, who it's for, and the differentiators. |
+| [product.md](product.md) | What Vox is, who it's for, and the differentiators. |
 | [requirements.md](requirements.md) | Numbered functional and non-functional requirements. |
 | [architecture.md](architecture.md) | The surfaces and how they relate. |
 | [data-model.md](data-model.md) | Vault file layouts, frontmatter schemas, settings shape. |

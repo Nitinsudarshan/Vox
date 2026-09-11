@@ -1,13 +1,13 @@
 [package]
-name = "relay-native-backend"
-version = "0.41.0"
-description = "Relay AI Voice and Memory Assistant Rust Backend"
-authors = ["Relay Team"]
+name = "vox-native-backend"
+version = "0.1.0"
+description = "Vox AI Voice and Memory Assistant Rust Backend"
+authors = ["Vox Team"]
 license = "AGPL-3.0-only"
 edition = "2021"
 
 [lib]
-name = "relay_lib"
+name = "vox_lib"
 crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]

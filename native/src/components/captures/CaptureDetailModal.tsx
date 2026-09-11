@@ -41,7 +41,7 @@ type DetailTab = 'content' | 'context' | 'provenance' | 'source';
 
 /**
  * One capture, in full: what was saved, where it came from, and — the part
- * that makes it trustworthy — what Relay could not get.
+ * that makes it trustworthy — what Vox could not get.
  */
 export const CaptureDetailModal: React.FC<CaptureDetailModalProps> = ({
   capture,
@@ -113,7 +113,7 @@ export const CaptureDetailModal: React.FC<CaptureDetailModalProps> = ({
       .catch((err: unknown) => {
         if (!cancelled) {
           setPayloadError(
-            'Relay could not read the stored source for this capture. The readable version above is unaffected.',
+            'Vox could not read the stored source for this capture. The readable version above is unaffected.',
           );
           console.error('Failed to read capture payload', err);
         }
@@ -320,7 +320,7 @@ export const CaptureDetailModal: React.FC<CaptureDetailModalProps> = ({
               {provenance.notes.length > 0 && (
                 <section className="rounded-lg border border-border bg-muted/30 p-3">
                   <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Info className="h-3.5 w-3.5 text-primary" /> What Relay could and could not get
+                    <Info className="h-3.5 w-3.5 text-primary" /> What Vox could and could not get
                   </h3>
                   <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
                     {provenance.notes.map((note) => (

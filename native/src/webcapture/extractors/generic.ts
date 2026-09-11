@@ -159,7 +159,7 @@ export function extractVisibleText(doc: Document): ExtractionResult {
     messages: [],
     coverage: 'rendered_dom',
     notes: [
-      'Relay could not recognise this page’s structure, so it captured the text that was visible on screen.',
+      'Vox could not recognise this page’s structure, so it captured the text that was visible on screen.',
     ],
     truncated: false,
     title: normalizeWhitespace(doc.title ?? '') || undefined,

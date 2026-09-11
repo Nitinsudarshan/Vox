@@ -1,15 +1,15 @@
----
+﻿---
 trigger: always_on
 description: Master index and precedence rules for the /Rules directory. Always load this file first.
 ---
 
 # Global Rules
 
-All development on Relay must follow the rules defined in this `rules/` directory.
+All development on Vox must follow the rules defined in this `rules/` directory.
 This file is the entry point — read it first, then apply the specific files
 relevant to the surface you're editing.
 
-Relay is a **Rust + Tauri desktop application for Windows** with a companion
+Vox is a **Rust + Tauri desktop application for Windows** with a companion
 browser extension for web capture, per `docs/decisions.md`:
 - **`native/src-tauri/`** — the Rust backend: capture, STT, the meeting→Kanban
   and scribble→structured-output pipelines, the configurable trigger-phrase
@@ -51,9 +51,9 @@ browser extension for web capture, per `docs/decisions.md`:
 | `maybe-later.md` | Requirements for logging deferred features to `maybe_later.md` | Whole repo |
 
 Two NGConnect rule files were **not** carried over — `data-import.md`
-(Excel/CSV import safety) has no Relay feature to attach to, and
+(Excel/CSV import safety) has no Vox feature to attach to, and
 `greetings.md` documented a specific NGConnect dashboard component with no
-Relay analog. Don't recreate either speculatively; add a rule file only once
+Vox analog. Don't recreate either speculatively; add a rule file only once
 a real feature needs it.
 
 ## Precedence
@@ -91,7 +91,7 @@ not cover your case is not.
 ## Adopted from external rulesets
 
 Eight files above are distilled from two external MIT-licensed rulesets and
-rewritten against Relay's native architecture — they are derived guidance, not
+rewritten against Vox's native architecture — they are derived guidance, not
 vendored copies, and neither upstream framework's tooling is installed here:
 
 | Source | Version / commit | Files derived |
@@ -100,7 +100,7 @@ vendored copies, and neither upstream framework's tooling is installed here:
 | [gsd-core](https://github.com/open-gsd/gsd-core) (MIT) | v1.12.0 · `2f4f753` | `context-engineering.md`, `verification-honesty.md`, `debugging.md`, `untrusted-input.md`, `task-scoping.md`, `response-style.md` |
 
 `untrusted-input.md` is the agent-side companion to `docs/capture.md`, which
-remains the authority on Relay's own trust model. `.agents/rules/graphify.md`
+remains the authority on Vox's own trust model. `.agents/rules/graphify.md`
 (already present) covers the graphify knowledge graph.
 
 ## Scope

@@ -143,7 +143,7 @@ pub fn route(request: &BridgeRequest, token: &str) -> BridgeOutcome {
             return BridgeOutcome::Refused {
                 status: 403,
                 code: "ORIGIN_NOT_ALLOWED",
-                message: "Only the Relay browser extension may use the capture bridge."
+                message: "Only the Vox browser extension may use the capture bridge."
                     .to_string(),
             };
         }
@@ -157,8 +157,8 @@ pub fn route(request: &BridgeRequest, token: &str) -> BridgeOutcome {
         return BridgeOutcome::Refused {
             status: 401,
             code: "PAIRING_TOKEN_INVALID",
-            message: "This capture was not signed with Relay's pairing token. Re-pair the \
-                      extension from Relay's Capture settings."
+            message: "This capture was not signed with Vox's pairing token. Re-pair the \
+                      extension from Vox's Capture settings."
                 .to_string(),
         };
     }
@@ -171,7 +171,7 @@ pub fn route(request: &BridgeRequest, token: &str) -> BridgeOutcome {
                     status: 413,
                     code: "PAYLOAD_TOO_LARGE",
                     message: format!(
-                        "That page is larger than Relay's {} MB capture limit.",
+                        "That page is larger than Vox's {} MB capture limit.",
                         MAX_PAYLOAD_BYTES / (1024 * 1024)
                     ),
                 };
@@ -211,7 +211,7 @@ pub fn build_response(status: u16, origin: Option<&str>, body: &str) -> String {
          Content-Length: {len}\r\n\
          Access-Control-Allow-Origin: {allow_origin}\r\n\
          Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n\
-         Access-Control-Allow-Headers: content-type, x-relay-token\r\n\
+         Access-Control-Allow-Headers: content-type, x-relay-token, x-vox-token\r\n\
          Access-Control-Max-Age: 600\r\n\
          Access-Control-Allow-Private-Network: true\r\n\
          Vary: Origin\r\n\
@@ -271,7 +271,7 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
             let value = value.trim().to_string();
             match name.trim().to_ascii_lowercase().as_str() {
                 "origin" => request.origin = Some(value),
-                "x-relay-token" => request.token = Some(value),
+                "x-relay-token" | "x-vox-token" => request.token = Some(value),
                 "content-length" => request.content_length = value.parse::<usize>().ok(),
                 _ => {}
             }

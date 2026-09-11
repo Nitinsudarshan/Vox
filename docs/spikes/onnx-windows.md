@@ -1,4 +1,4 @@
-# Spike — Does `ort` build, bundle and run on Windows?
+﻿# Spike — Does `ort` build, bundle and run on Windows?
 
 **Status**: written, never run. Needs a Windows machine.
 **What has been checked**: the spike type-checks against `ort` 2.0.0-rc.13, and
@@ -16,15 +16,15 @@ neither should be started until this passes.
 ## The question
 
 Not "can Rust run an ONNX model" — that is known. The question is whether an
-ONNX Runtime linked into **Relay's own Tauri binary** survives being packaged
+ONNX Runtime linked into **Vox's own Tauri binary** survives being packaged
 and installed:
 
-1. **Builds.** Does `ort` compile against the MSVC toolchain Relay is already
+1. **Builds.** Does `ort` compile against the MSVC toolchain Vox is already
    built with, without a second toolchain or a CMake surprise?
 2. **Bundles.** Does whatever `ort` needs at runtime — a static library, or
    `onnxruntime.dll` — get carried into the installer that `tauri build`
-   produces, or does it only exist beside `target/release/relay.exe`?
-3. **Runs.** Does an *installed* Relay, launched from the Start menu on a
+   produces, or does it only exist beside `target/release/Vox.exe`?
+3. **Runs.** Does an *installed* Vox, launched from the Start menu on a
    machine that never had a build toolchain, load the runtime and execute a
    graph?
 
@@ -35,12 +35,12 @@ everybody else.
 ## What the spike is
 
 A feature-gated module — `native/src-tauri/src/developer/onnx_spike.rs` — that
-runs at launch and writes a JSON report. It is compiled into the real Relay
+runs at launch and writes a JSON report. It is compiled into the real Vox
 binary rather than a standalone example on purpose: a standalone `cargo run`
 answers question 1 and neither of the others.
 
 It builds its own model rather than loading one. `tiny_add_model()` emits a
-valid ONNX graph — `c = a + b` over three floats — as bytes. Relay ships no
+valid ONNX graph — `c = a + b` over three floats — as bytes. Vox ships no
 model files and a spike is a poor reason to be the first, and this also keeps
 the model-distribution question (below) out of the packaging answer.
 
@@ -62,20 +62,20 @@ npm run tauri build -- --features onnx-spike
 ```
 
 Then **install the artifact from `src-tauri/target/release/bundle/`** — the MSI
-or the NSIS `-setup.exe`, not the loose `relay.exe` — and launch the installed
+or the NSIS `-setup.exe`, not the loose `Vox.exe` — and launch the installed
 app. Ideally on a second machine, or at minimum from the installed location
 rather than the build tree.
 
 ## Reading the result
 
-The report is written to `%TEMP%\relay-onnx-spike.json` on every launch of a
+The report is written to `%TEMP%\Vox-onnx-spike.json` on every launch of a
 spike build. It also goes to the log, which on a bundled Windows binary you
 will not see — the file is the channel.
 
 ```jsonc
 {
   "ort_compiled_in": true,        // false = the feature flag did not take
-  "exe_dir": "C:\\Program Files\\Relay",
+  "exe_dir": "C:\\Program Files\\Vox",
   "dylib_beside_exe": [],         // empty is GOOD — see below
   "model_bytes": 213,
   "inference": {
@@ -103,14 +103,14 @@ questions answered at once.
 ## Not part of this spike
 
 **Where real models come from.** G6 and T4 need actual weights — Silero VAD,
-Smart Turn v3, a denoiser. Relay's README says it bundles no models, and
+Smart Turn v3, a denoiser. Vox's README says it bundles no models, and
 `large-v3-turbo` now establishes the alternative: download on demand, into the
 same place the Whisper models go. Choosing between amending the README and
 downloading on demand is a product decision and it comes *after* this passes,
 not as part of it.
 
 **Model size and licensing.** Silero VAD is MIT, Smart Turn v3 is open-weights;
-both need checking against what Relay actually redistributes once the answer
+both need checking against what Vox actually redistributes once the answer
 above is settled.
 
 ## Cleaning up

@@ -1,4 +1,4 @@
-# Relay Capture — web capture architecture
+﻿# Vox Capture — web capture architecture
 
 Traced from v0.27.0. Capture turns the page or conversation a user is looking
 at into a durable Vault artifact, with its source, its structure, an honest
@@ -10,7 +10,7 @@ Two principles run through everything below.
 **Acquisition first, interpretation second.** A capture is complete and on disk
 before any model sees it. Analysis is a separate step that is allowed to fail.
 
-**Inspect first, interact only when necessary.** Relay reveals content the
+**Inspect first, interact only when necessary.** Vox reveals content the
 browser will legitimately reveal — scrolling to it, waiting for it, opening
 what is genuinely closed — and uses the least invasive mechanism that can
 obtain each thing. Content that is already in the DOM is read, never clicked
@@ -35,14 +35,14 @@ origin.[^activetab]
 
 This has a direct product consequence, and it changed the original design:
 
-> **An OS-level hotkey in Relay cannot read the page you are looking at.**
+> **An OS-level hotkey in Vox cannot read the page you are looking at.**
 
 A global hotkey pressed while the browser is focused is not one of the four
-gestures. For Relay to read the tab from outside the browser, the extension
+gestures. For Vox to read the tab from outside the browser, the extension
 would need standing host permission for every site the user visits
 (`<all_urls>`), which is exactly the access this feature is built to avoid.
 So the capture *trigger* lives in the browser (`Ctrl+Shift+Y` by default,
-editable at `chrome://extensions/shortcuts`), and Relay's own
+editable at `chrome://extensions/shortcuts`), and Vox's own
 `capture_hotkey` (default `Ctrl+Shift+C`) opens the Captures surface rather
 than pretending to capture. `Ctrl+Space+C` — the shape originally sketched —
 is additionally not a registrable accelerator: an OS shortcut is modifiers
@@ -55,7 +55,7 @@ constraints written down — see `maybe_later.md` §6.
 ## 2. Architecture
 
 ```text
-   ┌── browser ──────────────────────────────────────┐   ┌── Relay (Rust) ─────────────┐
+   ┌── browser ──────────────────────────────────────┐   ┌── Vox (Rust) ─────────────┐
    │ Ctrl+Shift+Y / toolbar button                   │   │                             │
    │        ↓ (grants activeTab)                     │   │                             │
    │ service worker                                  │   │                             │
@@ -72,7 +72,7 @@ constraints written down — see `maybe_later.md` §6.
    │ └─────────────────────────────────────────────┘  │   │                             │
    │        ↓ structured, text-only payload           │   │                             │
    │ POST http://127.0.0.1:<port>/v1/capture          │──▶│ bridge: token + origin +    │
-   │        X-Relay-Token                             │   │ size checks                 │
+   │        X-Vox-Token                             │   │ size checks                 │
    └──────────────────────────────────────────────────┘   │        ↓                    │
                                                           │ parse + validate            │
                                                           │        ↓                    │
@@ -117,7 +117,7 @@ written once and used by both the incremental and the single-pass paths.
 | `native/src/webcapture/merge.ts` | Deduplication, ordering and reconstruction across samples. |
 | `native/src/webcapture/extractors/` | `generic`, `conversation` (shared), `chatgpt`, `claude`, `github`, and the registry. Each site module exports its extractor *and* its traversal plan. |
 | `native/src/webcapture/capture.ts` | Acquisition order, the fallback ladder, the completeness verdict, payload assembly. |
-| `native/src/webcapture/background.ts` | Service worker: holds the token, posts to Relay. |
+| `native/src/webcapture/background.ts` | Service worker: holds the token, posts to Vox. |
 | `native/src/webcapture/content.ts` | The injected entry point. |
 | `native/src/webcapture/options.ts` | Pairing screen. |
 | `native/browser-extension/` | `manifest.json`, `options.html`, README; build output lands here. |
@@ -125,7 +125,7 @@ written once and used by both the incremental and the single-pass paths.
 | `native/src-tauri/src/capture/web/normalize.rs` | Sanitization, markdown rendering, fidelity, and `resolve_coverage`. |
 | `native/src-tauri/src/capture/web/bridge.rs` | The loopback listener, its auth and its limits. |
 | `native/src-tauri/src/capture/web/mod.rs` | Wire types, validation, `ingest`, the trust constant. |
-| `native/src-tauri/src/pipeline/source_boundary.rs` | The boundary between captured content and Relay's instruction authority. |
+| `native/src-tauri/src/pipeline/source_boundary.rs` | The boundary between captured content and Vox's instruction authority. |
 | `native/src/components/captures/` | The Captures surface, and the wording of every completeness claim. |
 | `native/src/components/settings/CaptureSettingsView.tsx` | Enable, pair, and explain. |
 | `scripts/capture-validation/` | Real-Chromium validation: a CDP driver with no dependencies, fixture pages, and 35 assertions. |
@@ -138,8 +138,8 @@ entirely, and its message ceiling in the browser→host direction is 4 GB
 per browser: a registry key under
 `HKCU\SOFTWARE\Google\Chrome\NativeMessagingHosts\<name>`, a host manifest
 file, an `allowed_origins` list pinned to a specific extension id (no
-wildcards), and a **second executable** that the browser — not Relay —
-launches, which then has to reach the already-running Relay process anyway.
+wildcards), and a **second executable** that the browser — not Vox —
+launches, which then has to reach the already-running Vox process anyway.
 That is three moving parts and an installer step to replace one in-process
 listener, in an app that is by definition already running when a capture
 happens.
@@ -164,7 +164,7 @@ Conflating these produces either a thin capture or a browser agent, so they are
 named separately in the contract (`ContentAvailability`) and counted separately
 on every artifact.
 
-| State | What the DOM holds | What Relay does |
+| State | What the DOM holds | What Vox does |
 |---|---|---|
 | `outside_viewport` | The content, off screen | Reads it. No interaction. |
 | `visually_truncated` | The content **in full**, shortened by CSS | Reads it. **Does not click.** |
@@ -180,7 +180,7 @@ artifact said *"the whole page was captured"*. Untangling that produced two
 separate findings:
 
 - **The text was never missing.** Claude's shortening is
-  `-webkit-line-clamp`, and Relay's block walk reads `textContent`. Verified in
+  `-webkit-line-clamp`, and Vox's block walk reads `textContent`. Verified in
   Chromium: a clamped box holding 2,904 characters returned all 2,904 from both
   `textContent` and `innerText`. So the right answer is to read it — clicking
   buys nothing and costs a side effect on someone's page.
@@ -334,7 +334,7 @@ and one host permission: `http://127.0.0.1/*`. There is no `<all_urls>`, no
 declared content script, and no permission to any website. A page the user
 has not invoked capture on is never read.
 
-**Data flow.** Browser → `127.0.0.1` → Relay's vault. There is no server, no
+**Data flow.** Browser → `127.0.0.1` → Vox's vault. There is no server, no
 third party, and no telemetry in the capture path. Analysis uses whichever
 LLM provider the user has already configured; with the default local Ollama
 provider, captured content never leaves the machine at all.
@@ -344,7 +344,7 @@ a fresh install opens no socket, because capture cannot work before an
 extension is installed and paired anyway.
 
 **Authentication.** Every route — including `/v1/health` — requires a 256-bit
-pairing token in an `X-Relay-Token` header, compared in constant time. The
+pairing token in an `X-Vox-Token` header, compared in constant time. The
 token is generated when capture is first enabled, is displayed in Settings
 for copy-paste pairing, and is never logged. Regenerating it unpairs every
 browser immediately.
@@ -386,7 +386,7 @@ On the way in, `normalize.rs`:
   kept as a `reference` string instead, which no renderer treats as a link;
 - fences code with a backtick run longer than any inside it, so captured code
   cannot escape its block;
-- **downgrades `mermaid` code fences to `text`** — Relay's markdown view
+- **downgrades `mermaid` code fences to `text`** — Vox's markdown view
   renders mermaid to SVG and injects the result with `dangerouslySetInnerHTML`,
   so a captured page must never reach that renderer. The diagram source is
   still preserved, as text;
@@ -395,7 +395,7 @@ On the way in, `normalize.rs`:
 - validates the closed vocabularies (`origin`, `kind`, the traversal plan and
   termination) against their allowed values rather than rendering whatever the
   payload sent, and overwrites `content_captured` to `false` because it is a
-  fact about Relay rather than a claim the page gets to make;
+  fact about Vox rather than a claim the page gets to make;
 - builds the stored payload's filename from a strict allowlist, so a page
   title of `../../../etc/passwd` cannot produce a path that leaves its
   directory.
@@ -406,7 +406,7 @@ degrades a capture instead of failing it.
 
 ## 7. Completeness — the honest part
 
-A DOM is not a document, and v2 makes Relay much better at reading one without
+A DOM is not a document, and v2 makes Vox much better at reading one without
 making it any freer to claim it read all of it. The four completeness states,
 in the vocabulary stored on artifacts:
 
@@ -414,7 +414,7 @@ in the vocabulary stored on artifacts:
 |---|---|---|
 | FULL | `full_document` | Positive evidence the whole thing was seen |
 | PARTIAL | `partial` | Content demonstrably missing |
-| LOADED_ONLY | `rendered_dom` | Only what Relay could reach; completeness unproven |
+| LOADED_ONLY | `rendered_dom` | Only what Vox could reach; completeness unproven |
 | FAILED | `failed` | Reading errored or was cut short mid-way |
 | — | `unknown` | The page reported nothing measurable |
 
@@ -440,8 +440,8 @@ against 5,297 of extractable text. The ratio can therefore exceed 1, clear a
 0.9 threshold, and claim a whole document on a page that is visibly shortened.
 Three things now prevent it: the denominator is computed with the same
 visibility rules the extractor uses, the ratio is clamped at 1, and a page
-Relay has a site extractor for can never reach `full_document` through the
-generic path — a known site Relay did not recognise is evidence *against*
+Vox has a site extractor for can never reach `full_document` through the
+generic path — a known site Vox did not recognise is evidence *against*
 completeness.
 
 Alongside the verdict, measurable diagnostics — every one counted or absent,
@@ -490,26 +490,26 @@ attachment  ├── name          image  ├── alt
 `kind` is `user_upload | assistant_generated | linked | unknown`; `origin` is
 `user_upload | assistant_generated | page | unknown`. Both vocabularies are
 validated in Rust; an unrecognised value is dropped rather than shown as
-though Relay understood it. A Claude artifact is an `assistant_generated`
-attachment with a note saying Relay does not open side panels. ChatGPT's
+though Vox understood it. A Claude artifact is an `assistant_generated`
+attachment with a note saying Vox does not open side panels. ChatGPT's
 `sandbox:/mnt/data/…` becomes `reference`, never `href`, so nothing renders it
 as a link the reader could open.
 
-**Relay does not fetch file bytes or image data.** `content_captured` is always
+**Vox does not fetch file bytes or image data.** `content_captured` is always
 `false`, and Rust overwrites it rather than trusting the payload, because it is
-a fact about Relay rather than a claim about the page. This is a refusal, not a
+a fact about Vox rather than a claim about the page. This is a refusal, not a
 limitation, and it is technically possible to do otherwise — a content script's
 `fetch` carries the page's cookies, so an authenticated asset URL would
 resolve. Four reasons not to: the user asked to capture a page, not to download
 every file it references; the payload contract is text-only, which is what
 makes normalization a total function over untrusted input; fetching
-authenticated asset URLs would make Relay a client of the site's API, a much
+authenticated asset URLs would make Vox a client of the site's API, a much
 larger claim for a least-privilege feature; and metadata now, bytes later
 behind an explicit setting, loses nothing, whereas retracting downloads is not
 available. Deferred in `maybe_later.md` §9.
 
 Images keep provenance, alt text, caption, dimensions and their association
-with a message. Relay does not describe them, and never substitutes a
+with a message. Vox does not describe them, and never substitutes a
 description for the image — visual interpretation is an Analyse-stage concern
 and would be a source-faithfulness violation here.
 
@@ -517,7 +517,7 @@ and would be a source-faithfulness violation here.
 
 Capture v2 acquires substantially more of a page than v1 did. That makes the
 downstream boundary load-bearing rather than theoretical, because the more
-completely Relay reads the web, the more web text ends up in front of a model —
+completely Vox reads the web, the more web text ends up in front of a model —
 and every provider's chat format delivers that text in a role the model is
 trained to obey.
 
@@ -561,7 +561,7 @@ What stops it becoming an instruction is structural, in
   through unmodified: the frame holds without editing a byte.
 - Talkback labels a retrieved capture `EXTERNAL`, and its grounded and general
   prompts both say what that means. This mattered: the context block is headed
-  "from the user's own Relay data" under rules that say to answer only from the
+  "from the user's own Vox data" under rules that say to answer only from the
   context, which is precisely the framing that would have turned a page's
   instructions into the user's.
 - Promotion to a Scribble carries `trust` into `source_metadata`, so the
@@ -582,7 +582,7 @@ live in their own directory (`vault/captures/`) rather than mixed into
 its text-extraction path exactly as they were.
 
 ```text
-.relay/vault/captures/<capture_id>/
+.Vox/vault/captures/<capture_id>/
   metadata.json                     # VaultFile: normalized markdown + provenance
   original/<Sanitized-Title>.json   # the raw structured payload, written once
 ```
@@ -601,7 +601,7 @@ content from the same URL bumps `recapture_count` on the existing artifact.
 `version: n+1` and `previous_capture_id` pointing at the one it supersedes —
 a page that changed is new information, not a duplicate.
 
-## 11. How a capture joins the rest of Relay
+## 11. How a capture joins the rest of Vox
 
 | System | How captures participate |
 |---|---|
@@ -733,7 +733,7 @@ changed its markup last week, and no fixture can. The manual procedure:
 1. `cd native && npm run build:extension`, then load
    `native/browser-extension` unpacked (`chrome://extensions` → Developer
    mode → Load unpacked).
-2. Relay → Settings → Capture → enable, then paste the port and token into the
+2. Vox → Settings → Capture → enable, then paste the port and token into the
    extension's Options and choose **Save and test**.
 3. Capture, and check the artifact's *Where it came from* tab each time. For
    ChatGPT and Claude specifically:
@@ -757,7 +757,7 @@ changed its markup last week, and no fixture can. The manual procedure:
    and that **no artifact appears** in Captures; and the same page twice
    unchanged, then after it changes.
 5. Regenerate the contract fixtures if the payload shape changed:
-   `RELAY_UPDATE_CAPTURE_FIXTURES=1 npm test`, then run `cargo test` and
+   `Vox_UPDATE_CAPTURE_FIXTURES=1 npm test`, then run `cargo test` and
    review the diff.
 
 ## 15. Extension points
@@ -771,7 +771,7 @@ changed its markup last week, and no fixture can. The manual procedure:
 - **A new capture type**: add the constant in `source.rs` and the label in
   `captureFormatting.ts`.
 - **A new block type**: add a variant to `ContentBlock` on both sides and a
-  case in `render_block`. Older Relay builds skip it and say so.
+  case in `render_block`. Older Vox builds skip it and say so.
 - **A non-web source** (a desktop window, a PDF viewer): `source_type` on
   `CaptureProvenance` exists for exactly this. Everything downstream of
   `ingest` — storage, analysis, Talkback, promotion — is source-agnostic

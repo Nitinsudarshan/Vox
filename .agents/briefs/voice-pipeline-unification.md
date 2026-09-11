@@ -1,6 +1,6 @@
-# Brief — Voice Pipeline Unification
+﻿# Brief — Voice Pipeline Unification
 
-**Branch** `claude/relay-meetings-review-y3dysa` · **Base** `ff03e72` · **Head** `ca231af`
+**Branch** `claude/Vox-meetings-review-y3dysa` · **Base** `ff03e72` · **Head** `ca231af`
 **Date** 7 Sept 2026 · 7 commits · 31 files · +3,694 / −695
 
 ---
@@ -20,7 +20,7 @@ prompts were never the problem.
 
 ## The core finding
 
-Relay already contained the hallucination screen, glossary priming and
+Vox already contained the hallucination screen, glossary priming and
 transcript normalization that good speech capture needs. **All of it sat behind
 one of five paths that decode audio.**
 
@@ -209,5 +209,5 @@ Cold `cargo test --no-run` dominates the first run (whisper.cpp).
 Three artifacts, kept current with the corrections above:
 
 - Voice Pipeline Audit — the five-path matrix and the original diagnosis
-- What Relay Should Steal — 15 repos read against Relay's defects
-- Relay Build Order — 29 items by surface, with shipped state
+- What Vox Should Steal — 15 repos read against Vox's defects
+- Vox Build Order — 29 items by surface, with shipped state

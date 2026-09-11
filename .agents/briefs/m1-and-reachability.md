@@ -1,6 +1,6 @@
-# Brief — Finishing M1, and the Reachability Audit It Turned Into
+﻿# Brief — Finishing M1, and the Reachability Audit It Turned Into
 
-**Branch** `claude/relay-meeting-transcript-summary-kgypzj` · **Base** `3787834` · **Head** `88e4450`
+**Branch** `claude/Vox-meeting-transcript-summary-kgypzj` · **Base** `3787834` · **Head** `88e4450`
 **Date** 8 Sept 2026 · 12 commits · 44 files · +4,990 / −461
 
 ---
@@ -18,7 +18,7 @@ turned out to be the real story of this branch.
 
 ## The core finding
 
-**Relay's recurring defect is not missing mechanisms. It is finished mechanisms
+**Vox's recurring defect is not missing mechanisms. It is finished mechanisms
 nothing can reach.**
 
 The previous brief found one instance and called it a bug: `output_script` was
@@ -147,7 +147,7 @@ Recorded because they were stated confidently before being checked.
   real word being swapped, not a misheard proper noun.
 - **`auto_learn_words` could not be built as described.** "When you correct a
   transcription in the target app" means reading edits inside another
-  application — accessibility APIs Relay uses nowhere, and the injection layer
+  application — accessibility APIs Vox uses nowhere, and the injection layer
   is built the other way round: it writes into a focused field and cannot read
   one back. Removed, with the reason recorded as `maybe_later` item 13.
 
@@ -199,7 +199,7 @@ real application:
   spine, 3.6 in `talkback/assemble.rs` and `context/pack.rs`. The failure modes
   are asymmetric — too optimistic overflows silently, too conservative wastes a
   little window — and Devanagari tokenizes far denser than English, so 3.6 is
-  especially wrong for the content Relay actually handles.
+  especially wrong for the content Vox actually handles.
 - **`launch_at_login` and `start_minimized`**, which need real backend work
   (an autostart plugin decision, and window state). Audit `dictation_sounds`
   and `show_raw_transcript` first — those may be legitimately frontend-only.
@@ -221,7 +221,7 @@ first" while nothing retained the measurements.
 ### Still blocked
 
 - **The expected-speaker hint** (`maybe_later` item 12's remaining half).
-- **D1's own follow-on**: an accepted rewrite is a correction Relay could learn
+- **D1's own follow-on**: an accepted rewrite is a correction Vox could learn
   from without reading anybody's window. A real feature, and a different one
   from the setting that was removed.
 

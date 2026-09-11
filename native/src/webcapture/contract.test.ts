@@ -25,7 +25,7 @@ function stabilize(payload: CapturePayload): CapturePayload {
   return {
     ...payload,
     captured_at: '2026-02-14T09:30:00.000Z',
-    browser: 'Relay contract fixture',
+    browser: 'Vox contract fixture',
     diagnostics: {
       ...payload.diagnostics,
       elapsed_ms: 0,
@@ -43,7 +43,7 @@ const CASES = [
   { name: 'article', url: 'https://example.com/posts/structured-capture' },
 ];
 
-describe('extension → Relay payload contract', () => {
+describe('extension → Vox payload contract', () => {
   for (const testCase of CASES) {
     it(`${testCase.name} matches the fixture the Rust backend is tested against`, async () => {
       const html = fs.readFileSync(path.join(HTML_DIR, `${testCase.name}.html`), 'utf8');
@@ -52,7 +52,7 @@ describe('extension → Relay payload contract', () => {
       const serialized = `${JSON.stringify(payload, null, 2)}\n`;
       const fixturePath = path.join(JSON_DIR, `${testCase.name}.json`);
 
-      if (process.env.RELAY_UPDATE_CAPTURE_FIXTURES === '1') {
+      if (process.env.VOX_UPDATE_CAPTURE_FIXTURES === '1' || process.env.RELAY_UPDATE_CAPTURE_FIXTURES === '1') {
         fs.mkdirSync(JSON_DIR, { recursive: true });
         fs.writeFileSync(fixturePath, serialized);
       }

@@ -58,18 +58,18 @@ impl UpdateService {
                     latest_version: current_version.to_string(),
                     update_available: false,
                     release_notes: None,
-                    minimum_supported_version: "0.8.0".to_string(),
+                    minimum_supported_version: "0.1.0".to_string(),
                     download_url: None,
                     is_offline: true,
                 };
             }
         };
 
-        // Try checking latest release tag from GitHub or Relay endpoint
-        let endpoint = "https://api.github.com/repos/Nitinsudarshan/Relay/releases/latest";
+        // Try checking latest release tag from GitHub or Vox endpoint
+        let endpoint = "https://api.github.com/repos/Nitinsudarshan/Vox/releases/latest";
         let resp = client
             .get(endpoint)
-            .header("User-Agent", "Relay-Desktop-App")
+            .header("User-Agent", "Vox-Desktop-App")
             .send()
             .await;
 
@@ -89,7 +89,7 @@ impl UpdateService {
                         latest_version: latest,
                         update_available,
                         release_notes: gh.body,
-                        minimum_supported_version: "0.8.0".to_string(),
+                        minimum_supported_version: "0.1.0".to_string(),
                         download_url: gh.html_url,
                         is_offline: false,
                     };
@@ -104,8 +104,8 @@ impl UpdateService {
             current_version: current_version.to_string(),
             latest_version: current_version.to_string(),
             update_available: false,
-            release_notes: Some("You are running the latest installed version of Relay.".to_string()),
-            minimum_supported_version: "0.8.0".to_string(),
+            release_notes: Some("You are running the latest installed version of Vox.".to_string()),
+            minimum_supported_version: "0.1.0".to_string(),
             download_url: None,
             is_offline: false,
         }

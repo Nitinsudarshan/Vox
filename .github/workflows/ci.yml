@@ -32,11 +32,7 @@ jobs:
       - name: Verify repository rules and manifest consistency
         run: npm run verify:rules
 
-      # scripts/build-voice-manifest.mjs decides what Relay is willing to
-      # download and execute. Its refusals — a Python wheel named as an
-      # engine, an archive with no executable in it — are the kind of thing
-      # that only stays correct if something checks. No network needed:
-      # the fixtures are built in the test.
+      # Test the verification and release script suite.
       - name: Test the release scripts
         run: npm run test:scripts
 
@@ -49,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Relay targets Windows, but the crate is platform-portable and Linux
+      # Vox targets Windows, but the crate is platform-portable and Linux
       # runners are faster and cheaper. What Linux needs that Windows does not:
       # GTK/WebKit for Tauri, ALSA for cpal, and a C/C++ toolchain plus CMake
       # for whisper.cpp. libxdo is enigo's X11 text-injection backend.

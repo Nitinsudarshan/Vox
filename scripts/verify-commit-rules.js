@@ -95,7 +95,7 @@ function verifyVersionAndChangelog(options = {}) {
     // Development mode:
     // 1. VERSION represents latest released version; development commits do NOT add release entries.
     // 2. Guard against accidental agent-owned version bumps during dev commits.
-    if (!options.allowVersionChange && !process.env.RELAY_RELEASE_RUN) {
+    if (!options.allowVersionChange && !process.env.VOX_RELEASE_RUN && !process.env.RELAY_RELEASE_RUN) {
       try {
         const stagedFiles = execSync('git diff --cached --name-only', {
           encoding: 'utf8',
@@ -183,8 +183,8 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
   }
 
-  if (process.env.RELAY_VERIFY_MODE) {
-    mode = process.env.RELAY_VERIFY_MODE;
+  if (process.env.VOX_VERIFY_MODE || process.env.RELAY_VERIFY_MODE) {
+    mode = process.env.VOX_VERIFY_MODE || process.env.RELAY_VERIFY_MODE;
   }
 
   return { mode, allowVersionChange };
@@ -192,7 +192,7 @@ function parseArgs(argv = process.argv.slice(2)) {
 
 function main() {
   const args = parseArgs();
-  console.log(`🔍 Running Relay Rule Verification [mode: ${args.mode}]...`);
+  console.log(`🔍 Running Vox Rule Verification [mode: ${args.mode}]...`);
 
   try {
     verifyVersionAndChangelog(args);
