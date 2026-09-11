@@ -30,6 +30,36 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// This is the "bundled" experience for local mode: the user installs
 /// Ollama once, and Relay takes care of starting it and fetching models —
 /// no manual `ollama serve` / `ollama pull` required.
+/// Where Vox's own Ollama lives, once one has been installed.
+///
+/// A process-wide value rather than a parameter because `ensure_ollama_ready`
+/// is reached from the capture path, the summary path and a settings command,
+/// and threading a data directory through all three to answer "which binary"
+/// would put three copies of that answer in three places. Set once at startup.
+static MANAGED_BINARY: std::sync::RwLock<Option<std::path::PathBuf>> =
+    std::sync::RwLock::new(None);
+
+/// Records an Ollama that Vox installed, so it is preferred over `PATH`.
+pub fn set_managed_binary(path: Option<std::path::PathBuf>) {
+    if let Ok(mut guard) = MANAGED_BINARY.write() {
+        *guard = path;
+    }
+}
+
+/// The command that starts a server: Vox's own copy if it installed one,
+/// otherwise whatever is on `PATH`.
+fn ollama_command() -> Command {
+    let managed = MANAGED_BINARY
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .filter(|path| path.is_file());
+    match managed {
+        Some(path) => Command::new(path),
+        None => Command::new("ollama"),
+    }
+}
+
 pub async fn ensure_ollama_ready(host: &str, model: &str) -> OllamaStatus {
     if ping(host).await {
         spawn_background_pull(host, model);
@@ -42,7 +72,7 @@ pub async fn ensure_ollama_ready(host: &str, model: &str) -> OllamaStatus {
         };
     }
 
-    match Command::new("ollama")
+    match ollama_command()
         .arg("serve")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -43,7 +43,7 @@ use crate::capture::stt::{
 use crate::settings::AppSettings;
 use crate::sync::MutexExt;
 
-use super::capture::{DualCapture, MeetingCaptureError};
+use super::capture::{DualCapture, MeetingCaptureError, MeetingDevices, OpenedDevices};
 use super::checkpoint::{self, CheckpointWriter};
 use super::model::{Meeting, MeetingSource, MeetingState};
 use super::segmenter::Segmenter;
@@ -52,6 +52,23 @@ use super::transcription::{self, TranscriptionQueue, WorkerConfig};
 
 /// Recording lifecycle, for every surface that shows recording state.
 pub const MEETING_STATE_EVENT: &str = "meeting-state-changed";
+
+/// Everything [`MeetingEngine::start`] needs to open a recording.
+///
+/// A struct rather than seven positional parameters. Two of them are
+/// `Option<String>` and two are booleans, which is the shape where a
+/// transposed pair compiles cleanly and records the wrong thing.
+pub struct StartRequest<'a> {
+    /// Present outside tests; `None` means nothing is emitted.
+    pub app: Option<AppHandle>,
+    /// `None` takes the generated "Meeting <timestamp>" title.
+    pub title: Option<String>,
+    pub settings: &'a AppSettings,
+    pub config_dir: &'a std::path::Path,
+    pub stt: SttEngine,
+    pub capture_system_audio: bool,
+    pub devices: MeetingDevices,
+}
 
 /// How long a stop waits for the decoder to finish its backlog.
 ///
@@ -105,6 +122,12 @@ pub struct MeetingRecordingStatus {
     /// Set when system audio could not be opened, so the surface can say the
     /// far end of the call is not being recorded.
     pub warning: Option<String>,
+    /// The devices this recording actually opened.
+    ///
+    /// The heard flags above are how a wrong device is noticed; these are what
+    /// turn "the microphone bar never moved" into something the user can act
+    /// on without leaving the app to guess which device that was.
+    pub devices: OpenedDevices,
 }
 
 impl MeetingRecordingStatus {
@@ -123,6 +146,7 @@ impl MeetingRecordingStatus {
             segments_completed: 0,
             segments_dropped: 0,
             warning: None,
+            devices: OpenedDevices::default(),
         }
     }
 }
@@ -195,6 +219,7 @@ impl MeetingEngine {
             segments_completed: completed,
             segments_dropped: dropped,
             warning: active.warning.clone(),
+            devices: active.capture.binding().opened,
         }
     }
 
@@ -203,15 +228,16 @@ impl MeetingEngine {
     /// Refuses when no speech model is installed. A meeting that records
     /// audio and produces no transcript is a failure the user only discovers
     /// at the end, by which point the meeting is over.
-    pub fn start(
-        &self,
-        app: Option<AppHandle>,
-        title: Option<String>,
-        settings: &AppSettings,
-        config_dir: &std::path::Path,
-        stt: SttEngine,
-        capture_system_audio: bool,
-    ) -> Result<Meeting, MeetingEngineError> {
+    pub fn start(&self, request: StartRequest<'_>) -> Result<Meeting, MeetingEngineError> {
+        let StartRequest {
+            app,
+            title,
+            settings,
+            config_dir,
+            stt,
+            capture_system_audio,
+            devices,
+        } = request;
         let mut guard = self.active.lock_or_recover();
         if guard.is_some() {
             return Err(MeetingEngineError::AlreadyRecording);
@@ -232,7 +258,8 @@ impl MeetingEngine {
         meeting.language = Some(settings.language.primary_dictation_language.clone());
         self.store.create(&meeting)?;
 
-        let (capture, audio_rx) = match DualCapture::start(app.clone(), capture_system_audio) {
+        let (capture, audio_rx) =
+            match DualCapture::start(app.clone(), capture_system_audio, devices) {
             Ok(started) => started,
             Err(err) => {
                 // The meeting directory exists but nothing was recorded into
@@ -600,14 +627,15 @@ mod tests {
         let store = Arc::new(MeetingStore::new(dir.join("vault")));
         let engine = MeetingEngine::new(Arc::clone(&store));
 
-        let result = engine.start(
-            None,
-            None,
-            &AppSettings::default(),
-            &dir,
-            SttEngine::new(),
-            true,
-        );
+        let result = engine.start(StartRequest {
+            app: None,
+            title: None,
+            settings: &AppSettings::default(),
+            config_dir: &dir,
+            stt: SttEngine::new(),
+            capture_system_audio: true,
+            devices: MeetingDevices::default(),
+        });
 
         assert!(matches!(result, Err(MeetingEngineError::NoSpeechModel)));
         assert!(!engine.is_recording());

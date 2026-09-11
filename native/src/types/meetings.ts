@@ -139,6 +139,25 @@ export interface MeetingRecordingStatus {
   segments_completed: number;
   segments_dropped: number;
   warning?: string | null;
+  /**
+   * The devices this recording opened. The heard flags above are how a wrong
+   * device is noticed; these are what let the surface name it.
+   */
+  devices?: OpenedDevices;
+}
+
+/** Which microphone and output device a recording should open. */
+export interface MeetingDevices {
+  /** `null`/absent means the shared microphone preference. */
+  microphone?: string | null;
+  /** `null`/absent means the OS default output. */
+  system_audio?: string | null;
+}
+
+/** The devices a running recording actually opened. */
+export interface OpenedDevices {
+  microphone?: string | null;
+  system_audio?: string | null;
 }
 
 // --- event payloads -----------------------------------------------------

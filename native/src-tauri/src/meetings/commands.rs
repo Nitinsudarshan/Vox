@@ -107,6 +107,9 @@ impl From<SummaryError> for CommandError {
             SummaryError::AlreadyRunning => "MEETING_SUMMARY_RUNNING",
             SummaryError::Cancelled => "MEETING_SUMMARY_CANCELLED",
             SummaryError::Provider(_) => "MEETING_SUMMARY_PROVIDER_FAILED",
+            // Its own code: the frontend offers a way into Settings for this
+            // one, because the fix is a setting rather than a retry.
+            SummaryError::ProviderUnavailable(_) => "MEETING_SUMMARY_PROVIDER_UNAVAILABLE",
             SummaryError::Store(_) => "MEETING_STORAGE_FAILED",
         };
         CommandError::new(code, &err.to_string())
@@ -135,6 +138,7 @@ pub async fn start_meeting(
     app: AppHandle,
     title: Option<String>,
     capture_system_audio: Option<bool>,
+    devices: Option<crate::meetings::capture::MeetingDevices>,
 ) -> Result<Meeting, CommandError> {
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -142,18 +146,51 @@ pub async fn start_meeting(
         let settings = state.settings.lock_or_recover().clone();
         state
             .meeting_engine
-            .start(
-                Some(handle.clone()),
+            .start(crate::meetings::engine::StartRequest {
+                app: Some(handle.clone()),
                 title,
-                &settings,
-                &state.config_dir,
-                state.stt.clone(),
-                capture_system_audio.unwrap_or(settings.meetings.capture_system_audio),
-            )
+                settings: &settings,
+                config_dir: &state.config_dir,
+                stt: state.stt.clone(),
+                capture_system_audio: capture_system_audio
+                    .unwrap_or(settings.meetings.capture_system_audio),
+                // A device named for this recording wins; otherwise the
+                // standing choice from Meetings settings, which is what makes
+                // the picker stick between recordings.
+                devices: devices.unwrap_or_else(|| settings.meetings.devices.clone()),
+            })
             .map_err(CommandError::from)
     })
     .await
     .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
+}
+
+/// The saved microphone and output choice for recordings.
+#[tauri::command]
+pub fn get_meeting_devices(
+    state: State<'_, AppState>,
+) -> Result<crate::meetings::capture::MeetingDevices, CommandError> {
+    Ok(state.settings.lock_or_recover().meetings.devices.clone())
+}
+
+/// Remembers which devices recordings should open.
+///
+/// Its own command rather than a whole-`AppSettings` save from the frontend:
+/// that round trip lets a stale copy of the document overwrite whatever else
+/// changed meanwhile, and this is a two-field change made from a picker that
+/// has no business carrying the rest of the settings.
+#[tauri::command]
+pub fn set_meeting_devices(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    devices: crate::meetings::capture::MeetingDevices,
+) -> Result<(), CommandError> {
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        guard.meetings.devices = devices;
+        guard.clone()
+    };
+    crate::commands::persist_settings(&app, &state, settings)
 }
 
 #[tauri::command]

@@ -163,6 +163,51 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle();
 
+            // Prefer an Ollama that Vox installed over whatever is on PATH.
+            // Set once here rather than looked up per call: the capture path,
+            // the summary path and a settings command all ask "which binary",
+            // and three lookups is three places for the answer to differ.
+            {
+                let state = app.state::<AppState>();
+                providers::set_managed_binary(providers::ollama_install::managed_binary(
+                    &state.config_dir,
+                ));
+            }
+
+            // Let the webview read a meeting's recording, and nothing else.
+            //
+            // The player in Meeting Detail needs to seek around a file that can
+            // be hundreds of megabytes, so it has to be served rather than
+            // handed over IPC. The scope is granted here at runtime, against
+            // the vault's `meetings/` directory, because that path is a user
+            // setting and cannot be a static entry in `tauri.conf.json`.
+            //
+            // Deliberately narrow. Meetily grants its window `fs:read-all` and
+            // `fs:write-all` alongside a nominally scoped `$APPDATA/*`, which
+            // makes the scope decorative; anything running in that webview can
+            // read the user's disk. One directory is the whole of what this
+            // feature needs.
+            //
+            // TODO(vault-relocation): `set_vault_dir` repoints `state.vault`
+            // but not `meeting_store`, so moving the vault already leaves
+            // meetings reading the old location (`commands.rs`, set_vault_path).
+            // This scope inherits that staleness. Fixing the store's repoint is
+            // what fixes both.
+            {
+                let state = app.state::<AppState>();
+                let meetings_dir = state.meeting_store.meetings_dir();
+                if let Err(error) = app
+                    .asset_protocol_scope()
+                    .allow_directory(&meetings_dir, true)
+                {
+                    tracing::warn!(
+                        "meeting audio playback unavailable: could not allow {}: {}",
+                        meetings_dir.display(),
+                        error
+                    );
+                }
+            }
+
             // First, and before anything that can fail: the main window is
             // configured hidden so "start minimized" does not flash the
             // control panel on screen, which means *something* has to show it.
@@ -238,6 +283,8 @@ pub fn run() {
             commands::set_pill_window_mode,
             commands::ensure_local_llm_ready,
             commands::get_available_llm_models,
+            commands::get_ollama_install_plan,
+            commands::install_ollama,
             commands::test_llm_prompt,
             commands::ensure_stt_model_ready,
             commands::get_stt_decode_summary,
@@ -257,6 +304,7 @@ pub fn run() {
             commands::get_triggers,
             commands::save_triggers,
             commands::get_audio_devices,
+            commands::get_audio_output_devices,
             commands::get_settings,
             commands::save_settings,
             commands::open_settings_window,
@@ -358,6 +406,8 @@ pub fn run() {
             meetings::commands::resume_meeting,
             meetings::commands::stop_meeting,
             meetings::commands::get_meeting_recording_status,
+            meetings::commands::get_meeting_devices,
+            meetings::commands::set_meeting_devices,
             meetings::commands::list_meetings,
             meetings::commands::get_meeting,
             meetings::commands::search_meetings,

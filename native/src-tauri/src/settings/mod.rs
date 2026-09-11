@@ -614,6 +614,15 @@ pub struct MeetingSettings {
     /// announce.
     #[serde(default)]
     pub auto_summarize: bool,
+    /// The microphone and output device recordings open.
+    ///
+    /// Separate from `audio_input.selected_device`, which dictation shares
+    /// with every other surface, because a meeting is the one recording where
+    /// the *output* device matters too — the far end of a call arrives through
+    /// whichever output the user is listening on. Empty means the shared
+    /// resolution, so this costs nothing until someone chooses.
+    #[serde(default)]
+    pub devices: crate::meetings::capture::MeetingDevices,
 }
 
 fn default_meeting_template() -> String {
@@ -627,6 +636,7 @@ impl Default for MeetingSettings {
             default_template_id: default_meeting_template(),
             summary_language: String::new(),
             auto_summarize: false,
+            devices: crate::meetings::capture::MeetingDevices::default(),
         }
     }
 }

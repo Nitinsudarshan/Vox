@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { VoxLogo } from './VoxLogo';
+import { SpeechSetupStep } from './SpeechSetupStep';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +11,12 @@ interface WelcomeModalProps {
   initialDisplayName?: string;
   onContinueGoogle: (displayName: string) => Promise<void>;
   onContinueLocally: (displayName: string) => Promise<void> | void;
+  /**
+   * Called when setup is finished — after the speech step, not after the mode
+   * choice. The two used to be the same moment, which is how a user reached
+   * the app with nothing installed to transcribe with.
+   */
+  onFinish: () => void;
 }
 
 export const WelcomeModal: React.FC<WelcomeModalProps> = ({
@@ -17,8 +24,9 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
   initialDisplayName = '',
   onContinueGoogle,
   onContinueLocally,
+  onFinish,
 }) => {
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [displayName, setDisplayName] = useState(initialDisplayName);
   const [connecting, setConnecting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -51,6 +59,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
       setConnecting(true);
       setErrorMsg(null);
       await onContinueGoogle(displayName.trim() || 'Local User');
+      setStep(3);
     } catch (err: unknown) {
       console.error('Google Sign-In failed:', err);
       const msg = typeof err === 'string' ? err : (err as { message?: string })?.message || 'Sign-in failed. Please try again.';
@@ -65,6 +74,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
       setConnecting(true);
       setErrorMsg(null);
       await onContinueLocally(displayName.trim() || 'Local User');
+      setStep(3);
     } catch (err: unknown) {
       console.error('Local onboarding failed:', err);
       const msg = typeof err === 'string' ? err : (err as { message?: string })?.message || 'Setup failed. Please try again.';
@@ -88,12 +98,18 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
           </div>
           <div className="space-y-1">
             <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
-              {step === 1 ? 'Welcome to Vox' : 'How would you like to use Vox?'}
+              {step === 1
+                ? 'Welcome to Vox'
+                : step === 2
+                  ? 'How would you like to use Vox?'
+                  : 'One thing before you start'}
             </h2>
             <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
               {step === 1
                 ? 'Your thoughts stay yours. Vox is local-first by design.'
-                : 'Choose your operating mode. Your local notes always stay on this device.'}
+                : step === 2
+                  ? 'Choose your operating mode. Your local notes always stay on this device.'
+                  : 'Vox transcribes on this machine, which means one model has to live here.'}
             </p>
           </div>
         </div>
@@ -135,6 +151,9 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
             </Button>
           </form>
         )}
+
+        {/* STEP 3: SPEECH SETUP */}
+        {step === 3 && <SpeechSetupStep onDone={onFinish} />}
 
         {/* STEP 2: ACCOUNT MODE SELECTION */}
         {step === 2 && (

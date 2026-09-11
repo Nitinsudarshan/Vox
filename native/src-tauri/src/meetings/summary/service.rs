@@ -83,6 +83,14 @@ pub enum SummaryError {
 
     #[error("the language model did not answer: {0}")]
     Provider(String),
+
+    /// The configured provider cannot answer, and the message says what to do.
+    ///
+    /// Separate from [`Self::Provider`] because they call for different things
+    /// from the user. A provider that is not installed or not configured is
+    /// fixed in Settings; a request that failed is retried.
+    #[error("{0}")]
+    ProviderUnavailable(String),
 }
 
 /// What the caller asked for.
@@ -223,6 +231,18 @@ impl SummaryService {
             system_audio_captured: meeting.system_audio_captured,
             user_instructions: options.user_instructions.clone(),
         };
+        // Before any work is queued against it. Without this, a machine with no
+        // Ollama installed spent three attempts and a minute of backoff on
+        // `http://localhost:11434` and then stored the transport error as the
+        // meeting's report status — every word true, and no help at all.
+        //
+        // Unconditional, including where the English report is already cached:
+        // the language pass still needs a provider, and the check costs one
+        // local ping or, for a cloud provider, nothing at all.
+        if let Err(reason) = crate::providers::check_ready(&provider).await {
+            return Err(SummaryError::ProviderUnavailable(reason.to_string()));
+        }
+
         let client = LLMClient::new(provider.clone());
         let fingerprint = fingerprint(&transcript, &template, &options, &provider, &client);
 

@@ -11,6 +11,13 @@ interface MeetingTranscriptProps {
   /** Scrolls to the newest line as it arrives. On while recording. */
   follow?: boolean;
   emptyMessage?: string;
+  /**
+   * Where the recording is playing, in seconds. The line covering it is
+   * highlighted; undefined means nothing is playing and nothing highlights.
+   */
+  playheadSeconds?: number;
+  /** Set when a line can be clicked to play from there. */
+  onSeek?: (seconds: number) => void;
 }
 
 /**
@@ -23,10 +30,13 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
   segments,
   follow = false,
   emptyMessage = 'Nothing has been transcribed yet.',
+  playheadSeconds,
+  onSeek,
 }) => {
   const [filter, setFilter] = React.useState('');
   const [copied, setCopied] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
+  const activeRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     if (follow) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -40,6 +50,27 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
         : segments,
     [segments, needle],
   );
+
+  // The line the playhead is inside — the last one to have started, which is
+  // also correct for the gaps between segments: silence belongs to the line
+  // just spoken, not to the one about to be.
+  const activeSequence = React.useMemo(() => {
+    if (playheadSeconds === undefined) return null;
+    let found: number | null = null;
+    for (const segment of segments) {
+      if (segment.start_seconds <= playheadSeconds) found = segment.sequence;
+      else break;
+    }
+    return found;
+  }, [segments, playheadSeconds]);
+
+  // Keep the playing line on screen, and only then — `nearest` scrolls when
+  // the line is out of view and leaves the list alone when it is not, so
+  // reading ahead while something plays is not fought over.
+  React.useEffect(() => {
+    if (activeSequence === null) return;
+    activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [activeSequence]);
 
   const handleCopy = async () => {
     try {
@@ -83,6 +114,7 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
           visible.map((segment, index) => {
             const previous = visible[index - 1];
             const showSpeaker = !previous || previous.channel !== segment.channel;
+            const active = segment.sequence === activeSequence;
             return (
               <div key={segment.sequence} className={showSpeaker ? 'pt-2 first:pt-0' : ''}>
                 {showSpeaker && (
@@ -98,10 +130,26 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
                     {channelLabel(segment.channel)}
                   </p>
                 )}
-                <div className="flex gap-2.5">
-                  <span className="text-[10px] font-mono text-muted-foreground/70 pt-0.5 shrink-0 tabular-nums">
-                    {formatTimestamp(segment.start_seconds)}
-                  </span>
+                <div
+                  ref={active ? activeRef : undefined}
+                  className={`flex gap-2.5 rounded-md -mx-1 px-1 py-0.5 transition-colors ${
+                    active ? 'bg-accent' : ''
+                  }`}
+                >
+                  {onSeek ? (
+                    <button
+                      type="button"
+                      onClick={() => onSeek(segment.start_seconds)}
+                      aria-label={`Play from ${formatTimestamp(segment.start_seconds)}`}
+                      className="text-[10px] font-mono text-muted-foreground/70 hover:text-foreground pt-0.5 shrink-0 tabular-nums cursor-pointer"
+                    >
+                      {formatTimestamp(segment.start_seconds)}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] font-mono text-muted-foreground/70 pt-0.5 shrink-0 tabular-nums">
+                      {formatTimestamp(segment.start_seconds)}
+                    </span>
+                  )}
                   <p className="text-sm text-foreground leading-relaxed">{segment.text}</p>
                 </div>
               </div>

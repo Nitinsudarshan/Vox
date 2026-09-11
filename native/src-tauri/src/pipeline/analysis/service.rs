@@ -384,13 +384,11 @@ pub fn prompt_budget_chars_for(prompt_id: PromptId, context_tokens: u32) -> usiz
 /// `ExecutedAnalysis` to read it off, and a second copy of this mapping is a
 /// second thing to get wrong.
 pub fn provider_name(provider: &ProviderType) -> String {
-    match provider {
-        ProviderType::Ollama => "ollama",
-        ProviderType::CloudOpenAI => "cloud_openai",
-        ProviderType::CloudGemini => "cloud_gemini",
-        ProviderType::CloudAnthropic => "cloud_anthropic",
-    }
-    .to_string()
+    // Delegates rather than repeating the mapping. The copy that used to live
+    // here was a second place to add a provider, and a provider added to one
+    // and not the other records the wrong name in a provenance entry that
+    // outlives the mistake.
+    provider.slug().to_string()
 }
 
 /// Extracts a JSON document from a model response, tolerating markdown fences.
