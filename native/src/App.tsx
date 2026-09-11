@@ -52,6 +52,8 @@ const TAB_LABELS: Record<MainTabType, string> = {
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<MainTabType>('home');
   const [settingsSection, setSettingsSection] = useState<SettingsSection | undefined>(undefined);
+  /** Whether the privacy explanation is owed once onboarding closes. */
+  const [explainAfterWelcome, setExplainAfterWelcome] = useState(false);
   /**
    * A capture mode requested from Home. Captures opens straight onto it, and it
    * is cleared by any other navigation so the Capture tab is not sticky.
@@ -217,8 +219,9 @@ export const App: React.FC = () => {
       });
       setProfile(updatedProfile);
       setAccount(acc);
-      setWelcomeOpen(false);
-      setExplanationOpen(true);
+      // The modal stays open for the speech-setup step; it closes from
+      // `onFinish`, and the privacy explanation follows that.
+      setExplainAfterWelcome(true);
     } catch (err) {
       console.error('Failed to complete Google onboarding:', err);
       throw err;
@@ -232,7 +235,6 @@ export const App: React.FC = () => {
         accountMode: 'local',
       });
       setProfile(updatedProfile);
-      setWelcomeOpen(false);
     } catch (err) {
       console.error('Failed to complete local onboarding:', err);
       throw err;
@@ -351,6 +353,13 @@ export const App: React.FC = () => {
         initialDisplayName={profile?.display_name && profile.display_name !== 'Local User' ? profile.display_name : ''}
         onContinueGoogle={handleWelcomeGoogle}
         onContinueLocally={handleWelcomeLocally}
+        onFinish={() => {
+          setWelcomeOpen(false);
+          if (explainAfterWelcome) {
+            setExplainAfterWelcome(false);
+            setExplanationOpen(true);
+          }
+        }}
       />
 
       {/* Account Trust & Privacy Explanation Modal */}
@@ -429,6 +438,7 @@ export const App: React.FC = () => {
           {activeTab === 'meetings' && (
             <MeetingsPage
               onOpenSpeechSettings={() => navigateTo('settings', { section: 'speech' })}
+              onOpenProviderSettings={() => navigateTo('settings', { section: 'advanced' })}
             />
           )}
 

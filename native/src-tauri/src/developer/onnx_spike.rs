@@ -472,4 +472,20 @@ mod tests {
         assert!(report.error.is_some());
         assert!(report.model_bytes > 0);
     }
+
+    /// Proves ONNX Runtime actually executes a graph inside this binary.
+    ///
+    /// The rest of this module's tests check the generated model; this one is
+    /// the measurement the spike exists for. Ignored by default because a
+    /// build without ONNX Runtime present should not fail the suite.
+    #[test]
+    #[cfg(feature = "onnx-spike")]
+    fn onnx_runtime_executes_the_graph() {
+        let report = run();
+        assert!(report.ort_compiled_in);
+        let outcome = report
+            .inference
+            .unwrap_or_else(|| panic!("no inference attempted: {:?}", report.error));
+        assert!(outcome.correct, "got {:?}, wanted {:?}", outcome.actual, outcome.expected);
+    }
 }

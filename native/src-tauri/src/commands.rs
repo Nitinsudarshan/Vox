@@ -680,6 +680,31 @@ pub async fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
     Ok(devices)
 }
 
+/// The output devices a meeting can capture in loopback.
+///
+/// Separate from [`get_audio_devices`], which lists microphones and is what
+/// every other surface asks for. A meeting is the one recording where the
+/// output matters too: the far end of a call arrives through whichever device
+/// the user is listening on, and a laptop with a headset connected has more
+/// than one.
+#[tauri::command]
+pub async fn get_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+
+    let mut devices = Vec::new();
+    if let Ok(found) = host.output_devices() {
+        for device in found {
+            if let Ok(name) = device.name() {
+                let is_default = default_name.as_deref() == Some(&name);
+                devices.push(AudioDeviceInfo { name, is_default });
+            }
+        }
+    }
+    Ok(devices)
+}
+
 #[tauri::command]
 pub async fn get_kanban_cards(state: State<'_, AppState>) -> Result<Vec<KanbanCard>, CommandError> {
     state
@@ -1679,7 +1704,7 @@ pub async fn test_stt_model(
 /// OS launch entry. A command that changes one STT field wants none of that —
 /// and, more to the point, a round trip through the frontend's copy of the
 /// document would let a stale copy overwrite whatever else changed meanwhile.
-fn persist_settings(
+pub(crate) fn persist_settings(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: AppSettings,
@@ -1690,6 +1715,67 @@ fn persist_settings(
     *state.settings.lock_or_recover() = settings.clone();
     let _ = app.emit("settings-changed", &settings);
     Ok(())
+}
+
+/// The event an Ollama install reports progress on.
+pub const OLLAMA_INSTALL_EVENT: &str = "ollama-install";
+
+/// What installing Ollama on this machine would involve, or `None` where Vox
+/// has no way to.
+#[tauri::command]
+pub async fn get_ollama_install_plan(
+) -> Result<Option<crate::providers::ollama_install::InstallPlan>, CommandError> {
+    Ok(crate::providers::ollama_install::plan_for_this_machine())
+}
+
+/// Downloads and installs Ollama, reporting progress on
+/// [`OLLAMA_INSTALL_EVENT`].
+///
+/// Runs only because someone pressed a button. On Windows it opens the
+/// platform's own installer and returns — the user completes it and can
+/// cancel, which is the right shape for running something freshly downloaded.
+/// Elsewhere the archive is unpacked into Vox's data directory, needing no
+/// root and touching nothing outside it.
+#[tauri::command]
+pub async fn install_ollama(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::providers::ollama_install::InstallProgress, CommandError> {
+    use crate::providers::ollama_install::{self, ArtifactKind, InstallProgress};
+
+    let plan = ollama_install::plan_for_this_machine().ok_or_else(|| {
+        CommandError::new(
+            "OLLAMA_UNSUPPORTED_PLATFORM",
+            &ollama_install::InstallError::UnsupportedPlatform.to_string(),
+        )
+    })?;
+
+    let data_dir = state.config_dir.clone();
+    let downloads = data_dir.join("downloads");
+    let emitter = app.clone();
+
+    let archive = ollama_install::download(&plan, &downloads, move |progress| {
+        let _ = emitter.emit(OLLAMA_INSTALL_EVENT, &progress);
+    })
+    .await
+    .map_err(|e| CommandError::new("OLLAMA_INSTALL_FAILED", &e.to_string()))?;
+
+    let outcome = match plan.kind {
+        ArtifactKind::Installer => {
+            ollama_install::launch_installer(&archive)
+                .map_err(|e| CommandError::new("OLLAMA_INSTALL_FAILED", &e.to_string()))?;
+            InstallProgress::AwaitingUser
+        }
+        ArtifactKind::Archive => {
+            let binary = ollama_install::extract_archive(&archive, &data_dir)
+                .map_err(|e| CommandError::new("OLLAMA_INSTALL_FAILED", &e.to_string()))?;
+            crate::providers::set_managed_binary(Some(binary));
+            InstallProgress::Ready
+        }
+    };
+
+    let _ = app.emit(OLLAMA_INSTALL_EVENT, &outcome);
+    Ok(outcome)
 }
 
 /// The event a speech-model download reports progress on.

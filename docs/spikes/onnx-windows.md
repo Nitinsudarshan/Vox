@@ -1,15 +1,48 @@
 ﻿# Spike — Does `ort` build, bundle and run on Windows?
 
-**Status**: written, never run. Needs a Windows machine.
-**What has been checked**: the spike type-checks against `ort` 2.0.0-rc.13, and
-the generated ONNX model has tests that re-parse it. Neither was linked or
-executed — the container this was written in cannot reach `cdn.pyke.io`, where
-`ort` fetches its prebuilt runtime, so `cargo check --features onnx-spike`
-fails there with a proxy 403 that says nothing about Windows.
+**Status**: question 1 answered on Linux; questions 2 and 3 still need a
+Windows machine.
+**What has been checked**: `ort` 2.0.0-rc.13 compiles and links into the real
+`vox_lib` binary, and ONNX Runtime loads, builds a session and computes the
+right answer inside it —
+`developer::onnx_spike::tests::onnx_runtime_executes_the_graph` is that
+measurement and it passes. So the runtime works; what is still unknown is
+whether Windows packaging carries it, which is the failure this spike was
+written for.
+
+**How it was linked, and why that matters.** `cdn.pyke.io` — where `ort`
+fetches its prebuilt runtime — is blocked by egress policy in the container
+this ran in, so the download path could not be used. ONNX Runtime came from
+the `onnxruntime` wheel on PyPI instead, and `ort` was pointed at it:
+
+```bash
+pip download onnxruntime --no-deps -d /tmp/ort && cd /tmp/ort && unzip -q *.whl
+mkdir lib && cp onnxruntime/capi/libonnxruntime.so.* lib/
+ln -s libonnxruntime.so.1.* lib/libonnxruntime.so
+ln -s libonnxruntime.so.1.* lib/libonnxruntime.so.1   # the SONAME the linker wants
+
+cd native/src-tauri
+ORT_LIB_LOCATION=/tmp/ort/lib ORT_PREFER_DYNAMIC_LINK=1 LD_LIBRARY_PATH=/tmp/ort/lib \
+  cargo test --features onnx-spike --lib developer::onnx_spike
+```
+
+`ORT_PREFER_DYNAMIC_LINK=1` is required: given `ORT_LIB_LOCATION`, `ort-sys`
+attempts a *static* link by default and fails against a wheel's shared object
+with "could not link to the ONNX Runtime build in …", which reads like a
+missing library rather than the wrong linkage.
+
+That this works at all is itself useful for question 2. It means Vox does not
+have to depend on `cdn.pyke.io` being reachable at build time — a runtime
+supplied by the build, at a path Vox chooses, links fine. Whichever way the
+Windows answer goes, "fetch the DLL ourselves and point `ort` at it" is a
+route that is known to work, and one an offline or policy-restricted build can
+take.
 **Blocks**: `maybe_later.md` item 1 (T4 smart turn detection, Silero VAD, wake
 word) and item 3's neighbour, G6 denoise. Both are approved in principle and
 neither should be started until this passes.
-**Owner**: whoever has the Windows box. It is a half-hour job.
+**Owner**: whoever has the Windows box. It is a half-hour job, and smaller
+than it was — the build and the inference are no longer in question, only the
+bundling.
 
 ---
 

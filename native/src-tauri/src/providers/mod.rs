@@ -1,7 +1,9 @@
 mod ollama_manager;
 
+pub mod ollama_install;
+
 pub use ollama_manager::{
-    ensure_ollama_ready, list_installed_models, test_ollama_prompt, OllamaModelDetails,
+    ensure_ollama_ready, set_managed_binary, list_installed_models, test_ollama_prompt, OllamaModelDetails,
     OllamaPromptTestResult, OllamaStatus,
 };
 use serde::{Deserialize, Serialize};
@@ -104,6 +106,110 @@ pub enum ProviderError {
 /// none, and the wrong one for anything persisted as understanding.
 pub const HEURISTIC_FALLBACK_MODEL: &str = "heuristic-fallback";
 
+/// Why the configured provider cannot answer, in words that name the fix.
+///
+/// This exists because of what the failure looked like without it. A summary
+/// on a machine with no Ollama installed spent three attempts and a minute of
+/// backoff reaching `http://localhost:11434`, then stored
+/// "error sending request for url (http://localhost:11434/api/generate)" as
+/// the meeting's report status. Every word of that is true and none of it
+/// tells the user they need to install something.
+///
+/// Meetily has the same shape of bug from the other end: it returns the raw
+/// provider response body as the error string and shows it in the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderUnavailable {
+    /// The `ollama` binary is not on PATH. Vox can start a server it can find
+    /// and cannot install one.
+    OllamaNotInstalled,
+    /// Configured against a host that did not answer.
+    OllamaUnreachable { host: String },
+    /// A cloud provider with no key saved for it.
+    NoApiKey { provider: &'static str },
+    /// `custom_openai` selected with nothing in the endpoint field.
+    NoEndpoint,
+}
+
+impl std::fmt::Display for ProviderUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderUnavailable::OllamaNotInstalled => write!(
+                f,
+                "Ollama is not installed on this machine, so there is no local model to write \
+                 the report with. Install it from ollama.com, or choose a different provider \
+                 under Settings › AI Models & STT."
+            ),
+            ProviderUnavailable::OllamaUnreachable { host } => write!(
+                f,
+                "Nothing answered at {host}. Start Ollama, or point Vox at a different host \
+                 under Settings › AI Models & STT."
+            ),
+            ProviderUnavailable::NoApiKey { provider } => write!(
+                f,
+                "No API key is saved for {provider}. Add one under Settings › AI Models & STT, \
+                 or switch to Ollama to keep everything on this machine."
+            ),
+            ProviderUnavailable::NoEndpoint => write!(
+                f,
+                "The custom provider has no endpoint URL. Set one under Settings › AI Models & \
+                 STT — for a local server it is usually http://localhost:1234/v1."
+            ),
+        }
+    }
+}
+
+/// A human name for a provider, for messages.
+fn display_name(provider: &ProviderType) -> &'static str {
+    match provider {
+        ProviderType::Ollama => "Ollama",
+        ProviderType::CloudOpenAI => "OpenAI",
+        ProviderType::CloudGemini => "Google Gemini",
+        ProviderType::CloudAnthropic => "Anthropic",
+        ProviderType::Groq => "Groq",
+        ProviderType::OpenRouter => "OpenRouter",
+        ProviderType::CustomOpenAI => "the custom endpoint",
+    }
+}
+
+/// Checks the configured provider can be reached before work is queued against it.
+///
+/// Only the local case costs a request, and it is a cheap one. A cloud
+/// provider is checked for configuration rather than reachability: a key that
+/// exists and is rejected is a different failure with a different message, and
+/// spending a round trip to discover that before every summary is a poor
+/// trade when the request itself is about to report it anyway.
+pub async fn check_ready(config: &ProviderConfig) -> Result<(), ProviderUnavailable> {
+    match config.active_provider {
+        ProviderType::Ollama => match ensure_ollama_ready(&config.ollama_host, &config.ollama_model).await {
+            OllamaStatus::Running | OllamaStatus::Started => Ok(()),
+            OllamaStatus::NotInstalled => Err(ProviderUnavailable::OllamaNotInstalled),
+            OllamaStatus::Unreachable { .. } => Err(ProviderUnavailable::OllamaUnreachable {
+                host: config.ollama_host.clone(),
+            }),
+        },
+        ProviderType::CustomOpenAI => {
+            if config
+                .custom_openai_endpoint
+                .as_deref()
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+                .is_none()
+            {
+                return Err(ProviderUnavailable::NoEndpoint);
+            }
+            Ok(())
+        }
+        ref provider => {
+            if config.active_api_key().is_none() {
+                return Err(ProviderUnavailable::NoApiKey {
+                    provider: display_name(provider),
+                });
+            }
+            Ok(())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub text: String,
@@ -112,7 +218,7 @@ pub struct LLMResponse {
     pub completion_tokens: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderType {
     #[serde(rename = "ollama")]
     Ollama,
@@ -122,6 +228,87 @@ pub enum ProviderType {
     CloudGemini,
     #[serde(rename = "cloud_anthropic")]
     CloudAnthropic,
+    #[serde(rename = "groq")]
+    Groq,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
+    /// Any server that speaks the OpenAI chat-completions API, at an address
+    /// the user gives.
+    ///
+    /// The one genuinely open extension point here: vLLM, LM Studio, LiteLLM,
+    /// text-generation-webui and Azure OpenAI all work through it without a
+    /// line of code, which is a better answer than adding a variant per
+    /// vendor and is why Meetily's equivalent is the part of its provider
+    /// layer worth copying.
+    #[serde(rename = "custom_openai")]
+    CustomOpenAI,
+}
+
+impl ProviderType {
+    /// The stable string this provider is stored and keyed under.
+    ///
+    /// Matches the serde rename, and is what `provider_keys` uses — so a key
+    /// saved for one provider is still there after switching away and back.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            ProviderType::Ollama => "ollama",
+            ProviderType::CloudOpenAI => "cloud_openai",
+            ProviderType::CloudGemini => "cloud_gemini",
+            ProviderType::CloudAnthropic => "cloud_anthropic",
+            ProviderType::Groq => "groq",
+            ProviderType::OpenRouter => "openrouter",
+            ProviderType::CustomOpenAI => "custom_openai",
+        }
+    }
+
+    /// Whether this provider runs on the user's own machine.
+    ///
+    /// Ollama always does. A custom endpoint does when it points at loopback,
+    /// which is the usual case — LM Studio and vLLM both listen there. The
+    /// distinction is not cosmetic: it decides whether a meeting transcript
+    /// leaves the machine, which is the one claim this app makes about itself.
+    pub fn is_local(&self, endpoint: Option<&str>) -> bool {
+        match self {
+            ProviderType::Ollama => true,
+            ProviderType::CustomOpenAI => endpoint.map(is_loopback_url).unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    /// Whether this provider needs an API key to answer at all.
+    ///
+    /// A custom endpoint usually does not — a local vLLM accepts anything —
+    /// so requiring one would lock out the configuration the variant exists
+    /// to serve.
+    pub fn requires_api_key(&self) -> bool {
+        !matches!(
+            self,
+            ProviderType::Ollama | ProviderType::CustomOpenAI
+        )
+    }
+}
+
+/// Whether a URL points at this machine.
+///
+/// Host-only, and deliberately conservative: anything it cannot parse counts
+/// as remote, because the cost of being wrong in that direction is a warning
+/// the user does not need, and the cost the other way is telling someone their
+/// transcript stays local when it does not.
+fn is_loopback_url(url: &str) -> bool {
+    let rest = match url.split_once("://") {
+        Some((_, rest)) => rest,
+        None => url,
+    };
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit_once(':')
+        .map(|(host, _port)| host)
+        .unwrap_or_else(|| rest.split(['/', '?', '#']).next().unwrap_or(""));
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0")
+        || host.starts_with("127.")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +330,51 @@ pub struct ProviderConfig {
     /// number rather than assuming one.
     #[serde(default = "default_context_tokens", alias = "contextTokens")]
     pub context_tokens: u32,
+    /// API keys, one per provider, keyed by [`ProviderType::slug`].
+    ///
+    /// `cloud_api_key` above holds exactly one, which was fine with one cloud
+    /// provider configured at a time and is not with six: switching from
+    /// OpenAI to Groq to compare them meant pasting a key, losing it, and
+    /// pasting the first one back. Keys land here; `cloud_api_key` is still
+    /// read as a fallback so an install that predates this keeps working.
+    #[serde(default, alias = "providerKeys")]
+    pub provider_keys: std::collections::BTreeMap<String, String>,
+    /// Base URL for [`ProviderType::CustomOpenAI`], e.g. `http://localhost:1234/v1`.
+    ///
+    /// The path `/chat/completions` is appended, so this is the same value
+    /// these servers call `base_url` and the one their own documentation
+    /// prints.
+    #[serde(default, alias = "customOpenaiEndpoint")]
+    pub custom_openai_endpoint: Option<String>,
+    /// Model name sent to the custom endpoint. Many ignore it; vLLM does not.
+    #[serde(default, alias = "customOpenaiModel")]
+    pub custom_openai_model: Option<String>,
+}
+
+impl ProviderConfig {
+    /// The API key for whichever provider is active.
+    ///
+    /// Per-provider first, then the legacy single key — so an existing install
+    /// keeps working and a new one stops overwriting itself.
+    pub fn active_api_key(&self) -> Option<&str> {
+        self.api_key_for(&self.active_provider)
+    }
+
+    /// The API key stored for one provider, if any.
+    pub fn api_key_for(&self, provider: &ProviderType) -> Option<&str> {
+        self.provider_keys
+            .get(provider.slug())
+            .map(String::as_str)
+            .or(self.cloud_api_key.as_deref())
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+    }
+
+    /// Whether the active provider will keep the transcript on this machine.
+    pub fn active_provider_is_local(&self) -> bool {
+        self.active_provider
+            .is_local(self.custom_openai_endpoint.as_deref())
+    }
 }
 
 /// Chosen to fit a ~20-minute meeting in one pass on the 8k-window models
@@ -185,6 +417,9 @@ impl Default for ProviderConfig {
             cloud_api_key: None,
             cloud_model: Some("gpt-4o-mini".to_string()),
             context_tokens: default_context_tokens(),
+            provider_keys: std::collections::BTreeMap::new(),
+            custom_openai_endpoint: None,
+            custom_openai_model: None,
         }
     }
 }
@@ -415,10 +650,79 @@ impl LLMClient {
                 auth_header: ("x-goog-api-key".to_string(), api_key.to_string()),
                 extra_headers: Vec::new(),
             }),
+            // Groq and OpenRouter both serve the OpenAI chat-completions
+            // shape, so only the address and the key header differ.
+            ProviderType::Groq => Ok(CloudRoute {
+                url: "https://api.groq.com/openai/v1/chat/completions".to_string(),
+                auth_header: ("Authorization".to_string(), format!("Bearer {}", api_key)),
+                extra_headers: Vec::new(),
+            }),
+            ProviderType::OpenRouter => Ok(CloudRoute {
+                url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                auth_header: ("Authorization".to_string(), format!("Bearer {}", api_key)),
+                // OpenRouter attributes requests by these and rate-limits
+                // unattributed traffic harder. Constant, and nothing about the
+                // user is in them.
+                extra_headers: vec![
+                    ("HTTP-Referer".to_string(), "https://github.com/Nitinsudarshan/Vox".to_string()),
+                    ("X-Title".to_string(), "Vox".to_string()),
+                ],
+            }),
+            ProviderType::CustomOpenAI => Err(ProviderError::ConfigError(
+                "a custom endpoint is routed from its configured URL, not from here".to_string(),
+            )),
             ProviderType::Ollama => Err(ProviderError::ConfigError(
                 "Ollama is not a cloud provider".to_string(),
             )),
         }
+    }
+
+    /// The route for a user-supplied OpenAI-compatible endpoint.
+    ///
+    /// Separate from [`cloud_route`](Self::cloud_route) because the address is
+    /// data rather than a constant, and because it is the one route that can
+    /// be misconfigured — so this is where that is caught, with a message that
+    /// says what to type.
+    pub fn custom_route(endpoint: &str, api_key: Option<&str>) -> Result<CloudRoute, ProviderError> {
+        let base = endpoint.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Err(ProviderError::ConfigError(
+                "Set the endpoint URL for the custom provider, e.g. http://localhost:1234/v1"
+                    .to_string(),
+            ));
+        }
+        if !base.starts_with("http://") && !base.starts_with("https://") {
+            return Err(ProviderError::ConfigError(format!(
+                "'{base}' is not a URL. It should start with http:// or https://"
+            )));
+        }
+        // Plain HTTP is right for a server on this machine and wrong for one
+        // that is not: an API key over unencrypted HTTP to a remote host is
+        // the key in clear text on every hop between here and there. Meetily
+        // accepts either without comment; this refuses the one that leaks.
+        if base.starts_with("http://") && !is_loopback_url(base) && api_key.is_some() {
+            return Err(ProviderError::ConfigError(format!(
+                "'{base}' is plain HTTP and not on this machine, so the API key would be sent \
+                 unencrypted. Use https://, or clear the key if the endpoint needs none."
+            )));
+        }
+
+        // Both spellings are in the wild — some servers document the `/v1`
+        // and some do not — and appending blindly gives `/v1/v1`.
+        let url = if base.ends_with("/chat/completions") {
+            base.to_string()
+        } else {
+            format!("{base}/chat/completions")
+        };
+
+        Ok(CloudRoute {
+            url,
+            auth_header: (
+                "Authorization".to_string(),
+                format!("Bearer {}", api_key.unwrap_or("")),
+            ),
+            extra_headers: Vec::new(),
+        })
     }
 
     /// Pulls the completion text out of whichever response shape came back.
@@ -456,6 +760,13 @@ impl LLMClient {
         match provider {
             ProviderType::CloudAnthropic => "claude-sonnet-4-5",
             ProviderType::CloudGemini => "gemini-2.0-flash",
+            ProviderType::Groq => "llama-3.3-70b-versatile",
+            ProviderType::OpenRouter => "openai/gpt-4o-mini",
+            // Nothing sensible to guess: a custom server hosts whatever it
+            // hosts. Many ignore the field entirely, and the ones that do not
+            // reject a name they have never heard of — which is a clearer
+            // failure than silently answering from the wrong model.
+            ProviderType::CustomOpenAI => "",
             _ => "gpt-4o-mini",
         }
     }
@@ -517,36 +828,65 @@ impl LLMClient {
         })
     }
 
+    /// The route for whichever provider is active.
+    ///
+    /// One place that knows a custom endpoint is routed from configuration
+    /// rather than from a constant, so the completion path and the streaming
+    /// path cannot disagree about it.
+    fn route_for(
+        &self,
+        provider: &ProviderType,
+        model: &str,
+        api_key: Option<&str>,
+    ) -> Result<CloudRoute, ProviderError> {
+        match provider {
+            ProviderType::CustomOpenAI => Self::custom_route(
+                self.config.custom_openai_endpoint.as_deref().unwrap_or(""),
+                api_key,
+            ),
+            other => Self::cloud_route(other, model, api_key.unwrap_or("")),
+        }
+    }
+
+    /// The model name to send, whichever provider is active.
+    fn effective_model(&self) -> String {
+        let provider = &self.config.active_provider;
+        let configured = match provider {
+            ProviderType::CustomOpenAI => self.config.custom_openai_model.as_deref(),
+            _ => self.config.cloud_model.as_deref(),
+        };
+        configured
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| Self::default_cloud_model(provider))
+            .to_string()
+    }
+
     async fn complete_cloud_with(
         &self,
         prompt: &str,
         system_prompt: Option<&str>,
         options: CompletionOptions,
     ) -> Result<LLMResponse, ProviderError> {
-        let api_key = self
-            .config
-            .cloud_api_key
-            .as_ref()
-            .filter(|k| !k.trim().is_empty())
-            .ok_or_else(|| ProviderError::ConfigError("Cloud API key is missing".to_string()))?;
-
         let provider = &self.config.active_provider;
-        let model = self
-            .config
-            .cloud_model
-            .as_deref()
-            .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| Self::default_cloud_model(provider));
+        let api_key = self.config.active_api_key();
+        if provider.requires_api_key() && api_key.is_none() {
+            return Err(ProviderError::ConfigError(format!(
+                "No API key is set for {}.",
+                provider.slug()
+            )));
+        }
 
-        let route = Self::cloud_route(provider, model, api_key)?;
+        let model = self.effective_model();
+        let route = self.route_for(provider, &model, api_key)?;
         let body = match provider {
             ProviderType::CloudAnthropic => {
-                Self::anthropic_request_body(model, prompt, system_prompt, options)
+                Self::anthropic_request_body(&model, prompt, system_prompt, options)
             }
             ProviderType::CloudGemini => {
                 Self::gemini_request_body(prompt, system_prompt, options)
             }
-            _ => Self::openai_request_body(model, prompt, system_prompt, options),
+            _ => Self::openai_request_body(&model, prompt, system_prompt, options),
         };
 
         let mut request = self
@@ -599,7 +939,11 @@ impl LLMClient {
                     Ok(Self::heuristic_fallback(prompt, system_prompt))
                 }
             },
-            ProviderType::CloudOpenAI | ProviderType::CloudGemini | ProviderType::CloudAnthropic => {
+            // Everything else is a cloud or cloud-shaped endpoint, and they
+            // all fail the same way: filler rather than an error, because this
+            // entry point serves dictation, where some output beats none.
+            // `complete_verified` is the one analysis and summaries use.
+            _ => {
                 match self.complete_cloud(prompt, system_prompt).await {
                     Ok(resp) => Ok(resp),
                     Err(err) => {
@@ -748,12 +1092,10 @@ impl LLMClient {
     pub fn model_name(&self) -> String {
         match self.config.active_provider {
             ProviderType::Ollama => self.config.ollama_model.clone(),
-            ref provider => self
-                .config
-                .cloud_model
-                .clone()
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or_else(|| Self::default_cloud_model(provider).to_string()),
+            // Delegates so provenance records the name that was actually sent.
+            // A second copy of this resolution is a provenance entry that
+            // disagrees with the request it describes.
+            _ => self.effective_model(),
         }
     }
 
@@ -889,15 +1231,14 @@ impl LLMClient {
                 ))
             }
             ref provider => {
-                let api_key = self
-                    .config
-                    .cloud_api_key
-                    .as_ref()
-                    .filter(|k| !k.trim().is_empty())
-                    .ok_or_else(|| {
-                        ProviderError::ConfigError("Cloud API key is missing".to_string())
-                    })?;
-                let route = Self::cloud_route(provider, model, api_key)?;
+                let api_key = self.config.active_api_key();
+                if provider.requires_api_key() && api_key.is_none() {
+                    return Err(ProviderError::ConfigError(format!(
+                        "No API key is set for {}.",
+                        provider.slug()
+                    )));
+                }
+                let route = self.route_for(provider, model, api_key)?;
 
                 let mut body = match provider {
                     ProviderType::CloudAnthropic => {
@@ -1352,5 +1693,255 @@ mod tests {
             result,
             Err(ProviderError::OllamaUnavailable { .. })
         ));
+    }
+    #[test]
+    fn the_openai_shaped_providers_route_to_their_own_hosts() {
+        for (provider, host) in [
+            (ProviderType::Groq, "api.groq.com"),
+            (ProviderType::OpenRouter, "openrouter.ai"),
+        ] {
+            let route = LLMClient::cloud_route(&provider, "whatever", "k").unwrap();
+            assert!(route.url.contains(host), "{} routed to {}", provider.slug(), route.url);
+            assert_eq!(route.auth_header.0, "Authorization");
+            assert_eq!(route.auth_header.1, "Bearer k");
+        }
+    }
+
+    #[test]
+    fn a_custom_endpoint_gets_the_completions_path_exactly_once() {
+        // Both spellings are in the wild — some servers document the `/v1` and
+        // some do not — and appending blindly gives `/v1/v1`.
+        for given in [
+            "http://localhost:1234/v1",
+            "http://localhost:1234/v1/",
+            "http://localhost:1234/v1/chat/completions",
+        ] {
+            let route = LLMClient::custom_route(given, None).unwrap();
+            assert_eq!(route.url, "http://localhost:1234/v1/chat/completions");
+        }
+    }
+
+    #[test]
+    fn a_custom_endpoint_that_is_not_a_url_says_what_to_type() {
+        let err = LLMClient::custom_route("localhost:1234", None).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("http://"), "unhelpful message: {message}");
+
+        let err = LLMClient::custom_route("   ", None).unwrap_err();
+        assert!(err.to_string().contains("endpoint URL"));
+    }
+
+    #[test]
+    fn a_key_is_never_sent_unencrypted_to_a_remote_endpoint() {
+        // Plain HTTP on this machine is the ordinary case — LM Studio and vLLM
+        // both listen there — and plain HTTP to somewhere else with a key
+        // attached puts that key in clear text on every hop.
+        assert!(LLMClient::custom_route("http://localhost:1234/v1", Some("k")).is_ok());
+        assert!(LLMClient::custom_route("http://127.0.0.1:8000/v1", Some("k")).is_ok());
+        assert!(LLMClient::custom_route("https://models.example.com/v1", Some("k")).is_ok());
+        // No key, nothing to leak.
+        assert!(LLMClient::custom_route("http://models.example.com/v1", None).is_ok());
+
+        let err = LLMClient::custom_route("http://models.example.com/v1", Some("k")).unwrap_err();
+        assert!(err.to_string().contains("unencrypted"), "{err}");
+    }
+
+    #[test]
+    fn a_key_saved_for_one_provider_survives_switching_away_and_back() {
+        let mut config = ProviderConfig {
+            active_provider: ProviderType::Groq,
+            ..ProviderConfig::default()
+        };
+        config
+            .provider_keys
+            .insert("groq".into(), "groq-key".into());
+        config
+            .provider_keys
+            .insert("cloud_openai".into(), "openai-key".into());
+
+        assert_eq!(config.active_api_key(), Some("groq-key"));
+        config.active_provider = ProviderType::CloudOpenAI;
+        assert_eq!(config.active_api_key(), Some("openai-key"));
+    }
+
+    #[test]
+    fn an_install_that_predates_per_provider_keys_still_has_one() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::CloudAnthropic,
+            cloud_api_key: Some("legacy".into()),
+            ..ProviderConfig::default()
+        };
+        assert_eq!(config.active_api_key(), Some("legacy"));
+    }
+
+    #[test]
+    fn a_blank_key_counts_as_no_key() {
+        let mut config = ProviderConfig {
+            active_provider: ProviderType::Groq,
+            ..ProviderConfig::default()
+        };
+        config.provider_keys.insert("groq".into(), "   ".into());
+        assert_eq!(config.active_api_key(), None);
+    }
+
+    #[test]
+    fn only_ollama_and_a_loopback_endpoint_count_as_local() {
+        assert!(ProviderType::Ollama.is_local(None));
+        assert!(ProviderType::CustomOpenAI.is_local(Some("http://localhost:1234/v1")));
+        assert!(ProviderType::CustomOpenAI.is_local(Some("http://127.0.0.1:8000/v1")));
+        assert!(!ProviderType::CustomOpenAI.is_local(Some("https://models.example.com/v1")));
+        // Unconfigured is not a promise that it stays here.
+        assert!(!ProviderType::CustomOpenAI.is_local(None));
+        assert!(!ProviderType::Groq.is_local(None));
+        assert!(!ProviderType::CloudOpenAI.is_local(None));
+    }
+
+    #[test]
+    fn only_the_providers_that_need_a_key_demand_one() {
+        assert!(!ProviderType::Ollama.requires_api_key());
+        // A local vLLM accepts anything; demanding a key would lock out the
+        // configuration this variant exists to serve.
+        assert!(!ProviderType::CustomOpenAI.requires_api_key());
+        for provider in [
+            ProviderType::CloudOpenAI,
+            ProviderType::CloudAnthropic,
+            ProviderType::CloudGemini,
+            ProviderType::Groq,
+            ProviderType::OpenRouter,
+        ] {
+            assert!(provider.requires_api_key(), "{}", provider.slug());
+        }
+    }
+
+    #[test]
+    fn every_provider_slug_is_its_serde_name() {
+        for provider in [
+            ProviderType::Ollama,
+            ProviderType::CloudOpenAI,
+            ProviderType::CloudGemini,
+            ProviderType::CloudAnthropic,
+            ProviderType::Groq,
+            ProviderType::OpenRouter,
+            ProviderType::CustomOpenAI,
+        ] {
+            let serialized = serde_json::to_string(&provider).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", provider.slug()));
+        }
+    }
+
+    #[test]
+    fn a_custom_endpoint_reports_the_model_it_was_given_rather_than_openais() {
+        let client = LLMClient::new(ProviderConfig {
+            active_provider: ProviderType::CustomOpenAI,
+            custom_openai_endpoint: Some("http://localhost:1234/v1".into()),
+            custom_openai_model: Some("qwen2.5-7b-instruct".into()),
+            cloud_model: Some("gpt-4o-mini".into()),
+            ..ProviderConfig::default()
+        });
+        assert_eq!(client.model_name(), "qwen2.5-7b-instruct");
+    }
+    #[tokio::test]
+    async fn a_cloud_provider_with_no_key_names_the_provider_and_the_fix() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::Groq,
+            ..ProviderConfig::default()
+        };
+        let reason = check_ready(&config).await.unwrap_err();
+        assert_eq!(reason, ProviderUnavailable::NoApiKey { provider: "Groq" });
+
+        let message = reason.to_string();
+        assert!(message.contains("Groq"), "{message}");
+        assert!(message.contains("Settings"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_cloud_provider_with_a_key_is_not_checked_over_the_network() {
+        // Deliberate: a key that exists and is rejected is a different failure
+        // with a different message, and spending a round trip to discover that
+        // before every summary is a poor trade when the request itself is
+        // about to report it anyway.
+        let mut config = ProviderConfig {
+            active_provider: ProviderType::CloudOpenAI,
+            ..ProviderConfig::default()
+        };
+        config
+            .provider_keys
+            .insert("cloud_openai".into(), "sk-whatever".into());
+        assert!(check_ready(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_custom_provider_with_no_endpoint_says_what_to_type() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::CustomOpenAI,
+            ..ProviderConfig::default()
+        };
+        let reason = check_ready(&config).await.unwrap_err();
+        assert_eq!(reason, ProviderUnavailable::NoEndpoint);
+        assert!(reason.to_string().contains("http://localhost:1234/v1"));
+    }
+
+    #[tokio::test]
+    async fn a_custom_provider_needs_an_endpoint_and_not_a_key() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::CustomOpenAI,
+            custom_openai_endpoint: Some("http://localhost:1234/v1".into()),
+            ..ProviderConfig::default()
+        };
+        assert!(check_ready(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_remote_ollama_that_does_not_answer_names_the_host() {
+        // Port 1 on loopback is closed everywhere, and a non-local host skips
+        // the "try to start it ourselves" branch.
+        let config = ProviderConfig {
+            active_provider: ProviderType::Ollama,
+            ollama_host: "http://198.51.100.7:1".into(),
+            ..ProviderConfig::default()
+        };
+        let reason = check_ready(&config).await.unwrap_err();
+        assert_eq!(
+            reason,
+            ProviderUnavailable::OllamaUnreachable {
+                host: "http://198.51.100.7:1".into()
+            }
+        );
+        assert!(reason.to_string().contains("198.51.100.7"));
+    }
+
+    #[test]
+    fn every_unavailable_reason_says_where_to_go() {
+        // The whole point of the type. A message that reports a failure
+        // without naming the fix is the string this replaced.
+        for reason in [
+            ProviderUnavailable::OllamaNotInstalled,
+            ProviderUnavailable::OllamaUnreachable {
+                host: "http://localhost:11434".into(),
+            },
+            ProviderUnavailable::NoApiKey { provider: "OpenAI" },
+            ProviderUnavailable::NoEndpoint,
+        ] {
+            let message = reason.to_string();
+            assert!(
+                message.contains("Settings") || message.contains("ollama.com"),
+                "no route to a fix in: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_provider_has_a_display_name() {
+        for provider in [
+            ProviderType::Ollama,
+            ProviderType::CloudOpenAI,
+            ProviderType::CloudGemini,
+            ProviderType::CloudAnthropic,
+            ProviderType::Groq,
+            ProviderType::OpenRouter,
+            ProviderType::CustomOpenAI,
+        ] {
+            assert!(!display_name(&provider).is_empty());
+        }
     }
 }

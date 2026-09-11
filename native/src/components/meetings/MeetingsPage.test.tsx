@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 
 import { MeetingsPage } from './MeetingsPage';
@@ -61,6 +61,12 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
       summary: null,
       notes: '',
     },
+    get_meeting_devices: { microphone: null, system_audio: null },
+    get_audio_devices: [
+      { name: 'Yeti Stereo Microphone', is_default: true },
+      { name: 'Headset (WH-1000XM4 Hands-Free AG Audio)', is_default: false },
+    ],
+    get_audio_output_devices: [{ name: 'Speakers (Realtek)', is_default: true }],
     list_speech_models: {
       models_dir: '/models',
       models: [
@@ -270,5 +276,244 @@ describe('MeetingsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /change/i }));
     expect(onOpenSpeechSettings).toHaveBeenCalled();
+  });
+  test('plays a stored recording and seeks to the line that was clicked', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting({ audio_path: '/vault/meetings/meeting-1/audio/recording.wav' }),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+          {
+            sequence: 1,
+            text: 'yes, go ahead',
+            start_seconds: 65,
+            end_seconds: 68,
+            channel: 'system',
+            no_speech_prob: 0.02,
+            recorded_at: '2026-09-10T09:01:05Z',
+          },
+        ],
+        summary: null,
+        notes: '',
+      },
+    });
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    const audio = (await screen.findByTestId('meeting-audio')) as HTMLAudioElement;
+    expect(screen.getByRole('button', { name: /play recording/i })).toBeInTheDocument();
+
+    // The timestamp on a line is the seek control — the transcript is how you
+    // get to a moment, not a separate scrubbing exercise.
+    fireEvent.click(screen.getByRole('button', { name: /play from 01:05/i }));
+    await waitFor(() => expect(audio.currentTime).toBe(65));
+  });
+
+  test('shows transcript and report together on a wide window', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: {
+          markdown: '# Weekly sync\n\nWe agreed to ship.',
+          status: 'completed',
+          template_id: 'general',
+          generated_at: '2026-09-10T10:00:00Z',
+          model: 'llama3.2:latest',
+          language: '',
+          error: null,
+        },
+        notes: '',
+      },
+    });
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    const both = await screen.findByRole('tab', { name: /both/i });
+    expect(both).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('shall we start')).toBeInTheDocument();
+    expect(screen.getByText(/we agreed to ship\./i)).toBeInTheDocument();
+  });
+
+  test('offers no seek control for a meeting with no saved recording', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    await screen.findByText('shall we start');
+
+    expect(screen.queryByTestId('meeting-audio')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /play from/i })).not.toBeInTheDocument();
+  });
+  test('offers a microphone and an output device before recording', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    const mic = (await screen.findByLabelText('Microphone')) as HTMLSelectElement;
+    const system = screen.getByLabelText('System audio from') as HTMLSelectElement;
+
+    // The first option is not a device: it means "resolve this the way every
+    // other surface does", which is what the app keeps doing until asked not to.
+    expect(mic.value).toBe('');
+    expect(within(mic).getByRole('option', { name: /system default/i })).toBeInTheDocument();
+    expect(
+      within(mic).getByRole('option', { name: /yeti stereo microphone \(default\)/i }),
+    ).toBeInTheDocument();
+    expect(within(system).getByRole('option', { name: /speakers \(realtek\)/i })).toBeInTheDocument();
+  });
+
+  test('remembers the chosen device and records with it', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    const mic = await screen.findByLabelText('Microphone');
+    fireEvent.change(mic, { target: { value: 'Yeti Stereo Microphone' } });
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('set_meeting_devices', {
+        devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /start recording/i }));
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('start_meeting', {
+        title: undefined,
+        captureSystemAudio: undefined,
+        devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
+      });
+    });
+  });
+
+  test('says a saved device is gone rather than quietly reading as the default', async () => {
+    mockBackend({
+      get_meeting_devices: { microphone: 'Unplugged USB Mic', system_audio: null },
+    });
+    render(<MeetingsPage />);
+
+    const mic = (await screen.findByLabelText('Microphone')) as HTMLSelectElement;
+    await waitFor(() => expect(mic.value).toBe('Unplugged USB Mic'));
+    expect(screen.getByText(/not connected — recording will fall back/i)).toBeInTheDocument();
+  });
+
+  test('names the devices a running recording opened', async () => {
+    mockBackend({
+      get_meeting_recording_status: {
+        ...idleStatus,
+        active: true,
+        meeting_id: 'meeting-1',
+        state: 'recording',
+        microphone_active: true,
+        microphone_heard: false,
+        system_audio_active: true,
+        system_audio_heard: true,
+        devices: {
+          microphone: 'Yeti Stereo Microphone',
+          system_audio: 'Speakers (Realtek)',
+        },
+      },
+    });
+    render(<MeetingsPage />);
+
+    // "Nothing heard yet" is how a wrong device is noticed; the name is what
+    // makes it actionable without leaving the app.
+    expect(await screen.findByText(/· Yeti Stereo Microphone/)).toBeInTheDocument();
+    expect(screen.getByText(/· Speakers \(Realtek\)/)).toBeInTheDocument();
+    expect(screen.getByText('nothing heard yet')).toBeInTheDocument();
+  });
+  test('a report that has no provider offers the settings that fix it', async () => {
+    // The failure this replaces: three attempts, a minute of backoff, and
+    // "error sending request for url (http://localhost:11434/api/generate)"
+    // stored as the meeting's report status.
+    const onOpenProviderSettings = vi.fn();
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: {
+          markdown: null,
+          status: 'failed',
+          template_id: 'general',
+          generated_at: null,
+          model: null,
+          language: '',
+          error:
+            'Ollama is not installed on this machine, so there is no local model to write the report with. Install it from ollama.com, or choose a different provider under Settings › AI Models & STT.',
+        },
+        notes: '',
+      },
+    });
+    render(<MeetingsPage onOpenProviderSettings={onOpenProviderSettings} />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByText(/Ollama is not installed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /open settings/i }));
+    expect(onOpenProviderSettings).toHaveBeenCalled();
+  });
+
+  test('a model failure is shown as a failure, with no settings to open', async () => {
+    const onOpenProviderSettings = vi.fn();
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: {
+          markdown: null,
+          status: 'failed',
+          template_id: 'general',
+          generated_at: null,
+          model: 'llama3.2:latest',
+          language: '',
+          error: 'the model returned nothing',
+        },
+        notes: '',
+      },
+    });
+    render(<MeetingsPage onOpenProviderSettings={onOpenProviderSettings} />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByText(/the model returned nothing/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open settings/i })).not.toBeInTheDocument();
   });
 });

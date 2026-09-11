@@ -353,13 +353,37 @@ export interface TriggerConfig {
   enabled: boolean;
 }
 
+/** Every model provider Vox can send a prompt to. */
+export type ProviderSlug =
+  | 'ollama'
+  | 'cloud_openai'
+  | 'cloud_gemini'
+  | 'cloud_anthropic'
+  | 'groq'
+  | 'openrouter'
+  /** Any server speaking the OpenAI chat-completions API, at `custom_openai_endpoint`. */
+  | 'custom_openai';
+
 export interface ProviderSettings {
-  active_provider: 'ollama' | 'cloud_openai' | 'cloud_gemini' | 'cloud_anthropic';
+  active_provider: ProviderSlug;
   ollama_host: string;
   ollama_model: string;
+  /**
+   * The single key this held before keys were stored per provider. Still read
+   * as a fallback so an install that predates `provider_keys` keeps working.
+   */
   cloud_api_key?: string;
   cloud_model?: string;
+  /** API keys keyed by provider slug, so switching providers does not lose one. */
+  provider_keys?: Record<string, string>;
+  /** Base URL for `custom_openai`, e.g. `http://localhost:1234/v1`. */
+  custom_openai_endpoint?: string | null;
+  /** Model name sent to that endpoint. Many servers ignore it; vLLM does not. */
+  custom_openai_model?: string | null;
 }
+
+/** Alias matching the Rust struct's name, for components that take one. */
+export type ProviderConfig = ProviderSettings;
 
 export interface SttSettings {
   /** Path to a GGML Whisper model file (e.g. ggml-small.bin). */

@@ -15,6 +15,7 @@ import {
   MEETING_EVENTS,
   type MeetingDetail as MeetingDetailData,
   type MeetingListItem,
+  type MeetingDevices,
   type MeetingRecordingStatus,
   type MeetingTemplate,
   type SummaryProgress,
@@ -36,9 +37,14 @@ const STATUS_POLL_MS = 1000;
 interface MeetingsPageProps {
   /** Opens Settings › Speech, so a missing model can be installed from here. */
   onOpenSpeechSettings?: () => void;
+  /** Opens Settings › AI Models & STT, for a report that has no provider. */
+  onOpenProviderSettings?: () => void;
 }
 
-export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings }) => {
+export const MeetingsPage: React.FC<MeetingsPageProps> = ({
+  onOpenSpeechSettings,
+  onOpenProviderSettings,
+}) => {
   const [status, setStatus] = React.useState<MeetingRecordingStatus>({
     active: false,
     elapsed_seconds: 0,
@@ -61,6 +67,8 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings
   const [busy, setBusy] = React.useState(false);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
+  /** The saved microphone/output choice. Empty means "let Vox decide". */
+  const [devices, setDevices] = React.useState<MeetingDevices>({});
   const [message, setMessage] = React.useState<{ kind: 'info' | 'error'; text: string } | null>(
     null,
   );
@@ -105,6 +113,13 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings
       })
       .catch(() => setTemplates([]));
     void meetings.getRecordingStatus().then(setStatus).catch(() => undefined);
+    // `?? {}` rather than the raw answer: a command that fails, or a settings
+    // file written before this existed, must leave the picker on its defaults
+    // and not hand the recorder an undefined to read through.
+    void meetings
+      .getMeetingDevices()
+      .then((saved) => setDevices(saved ?? {}))
+      .catch(() => undefined);
     // Templates and the initial list are read once; everything after is driven
     // by events and by explicit refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -185,7 +200,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings
   const handleStart = () =>
     run(async () => {
       try {
-        const meeting = await meetings.startMeeting();
+        const meeting = await meetings.startMeeting(undefined, undefined, devices);
         setSelectedId(meeting.id);
         await refreshList();
       } catch (error) {
@@ -294,6 +309,14 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings
           onStart={handleStart}
           onPause={() => run(meetings.pauseMeeting)}
           onResume={() => run(meetings.resumeMeeting)}
+          devices={devices}
+          onDevicesChange={(next) => {
+            // Optimistic: the picker must not lag the click, and a failed
+            // write costs the choice sticking rather than this recording,
+            // which passes the devices explicitly anyway.
+            setDevices(next);
+            void meetings.saveMeetingDevices(next).catch(() => undefined);
+          }}
           onStop={handleStop}
         />
         <MeetingModelGate
@@ -376,6 +399,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings
               onCancelSummary={handleCancelSummary}
               onSaveSummary={handleSaveSummary}
               onPromote={handlePromote}
+              onOpenProviderSettings={onOpenProviderSettings}
             />
           ) : (
             <div className="h-full flex items-center justify-center">

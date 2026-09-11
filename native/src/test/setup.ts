@@ -35,6 +35,12 @@ vi.mock('@tauri-apps/api/window', () => ({
 // resize would otherwise throw rather than fail on the thing being tested.
 Element.prototype.scrollIntoView = vi.fn();
 
+// jsdom has no media stack at all: `play()` throws "Not implemented" and
+// `duration` is NaN forever. The meeting player is otherwise ordinary React,
+// so stubbing the two methods is enough to test everything around them.
+HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
+HTMLMediaElement.prototype.pause = vi.fn(() => undefined);
+
 globalThis.ResizeObserver = class {
   observe() {}
   unobserve() {}
