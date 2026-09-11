@@ -17,6 +17,7 @@ is right and the document is a bug to be fixed in the same change.
 | [data-model.md](data-model.md) | Vault file layouts, frontmatter schemas, settings shape. |
 | [api.md](api.md) | Tauri command conventions and the `CommandError` contract. |
 | [user-flows.md](user-flows.md) | End-to-end flows through the shipped features. |
+| [meetings.md](meetings.md) | Meetings: dual-stream capture, streaming segmentation, the serial decoder, durable checkpoints, templated reports, and every place this deliberately differs from Meetily. |
 | [capture.md](capture.md) | Web capture: the browser extension, the loopback bridge, the reveal-and-extract architecture, what a capture may claim about its own completeness, and why captured content is never an instruction. |
 | [testing.md](testing.md) | What is tested, with what, and where the tests live. |
 | [GOOGLE_OAUTH_SETUP.md](GOOGLE_OAUTH_SETUP.md) | The OAuth 2.0 PKCE architecture and Google Cloud setup. |
@@ -56,7 +57,6 @@ describes code that exists.
 
 | File | Scope |
 |---|---|
-| [../removed.md](../removed.md) | Architectural and functional knowledge of removed Meetings (meetings_v2) and Talkback subsystems. |
 | [archive/prompt-mode.md](archive/prompt-mode.md) | Prompt Mode, removed in v0.15.0, and the thinking behind it. |
 
 ## Elsewhere in the repo

@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Mic,
+  Users,
   Sparkles,
   Settings,
   ShieldCheck,
@@ -86,6 +87,13 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
       label: 'Voice Notes',
       icon: Mic,
       color: 'text-emerald-500',
+      activeBg: 'bg-sidebar-accent text-sidebar-accent-foreground',
+    },
+    {
+      id: 'meetings',
+      label: 'Meetings',
+      icon: Users,
+      color: 'text-rose-500',
       activeBg: 'bg-sidebar-accent text-sidebar-accent-foreground',
     },
     {

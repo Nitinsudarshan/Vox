@@ -16,6 +16,7 @@ Vox/
     src-tauri/                Rust backend
       src/
         capture/               Push-to-talk, local Whisper/Parakeet STT, web capture wiring
+        meetings/              Meeting recording, segmentation, transcription, reports
         pipeline/              Kanban parser, scribble->structured-output
         triggers/              Configurable trigger-phrase system
         providers/             Local / cloud LLM providers
@@ -40,7 +41,7 @@ Vox/
 - Shared, non-primitive components go in `native/src/components/shared` or
   feature-specific component directories.
 - Rust modules under `src-tauri/src/` are organized by domain
-  (`capture/`, `pipeline/`, `triggers/`, `providers/`, `vault/`, `mcp/`), not
+  (`capture/`, `meetings/`, `pipeline/`, `triggers/`, `providers/`, `vault/`, `mcp/`), not
   by technical layer — a feature's parsing, validation, and persistence logic
   live together in its own module, not scattered across generic `services/`
   or `utils/` folders.

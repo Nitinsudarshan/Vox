@@ -53,6 +53,7 @@ import { AccountSettings } from './AccountSettings';
 import { DeveloperSettingsView } from './DeveloperSettingsView';
 import { DictionarySnippetsSettings } from './DictionarySnippetsSettings';
 import { CaptureSettingsView } from './CaptureSettingsView';
+import { MeetingSettingsView } from './MeetingSettingsView';
 
 export type SettingsSection =
   | 'account'
@@ -60,6 +61,7 @@ export type SettingsSection =
   | 'dictation'
   | 'dictionary'
   | 'capture'
+  | 'meetings'
   | 'languages'
   | 'advanced'
   | 'privacy'
@@ -89,6 +91,7 @@ const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'dictation', label: 'Dictation & Audio', icon: Mic },
   { id: 'dictionary', label: 'Dictionary & Snippets', icon: BookOpen },
   { id: 'capture', label: 'Web Capture', icon: Globe },
+  { id: 'meetings', label: 'Meetings', icon: Users },
   { id: 'languages', label: 'Languages & Script', icon: Languages },
   { id: 'advanced', label: 'AI Models & STT', icon: Cpu },
   { id: 'privacy', label: 'Privacy & Vault', icon: ShieldCheck },
@@ -2389,6 +2392,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         )}
 
         {activeSection === 'capture' && <CaptureSettingsView />}
+
+        {activeSection === 'meetings' && <MeetingSettingsView />}
 
         {activeSection === 'trash' && <TrashSettings />}
 

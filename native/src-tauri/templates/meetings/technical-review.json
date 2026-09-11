@@ -1,0 +1,33 @@
+{
+  "id": "technical-review",
+  "name": "Technical Review",
+  "description": "A design or code discussion: the proposal, the objections, and what was settled.",
+  "sections": [
+    {
+      "heading": "Proposal",
+      "instruction": "What was being reviewed and what it proposes to do, as the proposer described it.",
+      "style": "prose"
+    },
+    {
+      "heading": "Concerns Raised",
+      "instruction": "Each technical objection, with the reasoning behind it and who raised it where the transcript is clear.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Alternatives Considered",
+      "instruction": "Other approaches discussed and why each was or was not preferred. Omit if none were discussed.",
+      "style": "bullets",
+      "required": false
+    },
+    {
+      "heading": "Decisions",
+      "instruction": "What was settled, and explicitly what was left unsettled.",
+      "style": "bullets"
+    },
+    {
+      "heading": "Action Items",
+      "instruction": "Work the review created, with an owner for each.",
+      "style": "checklist"
+    }
+  ]
+}

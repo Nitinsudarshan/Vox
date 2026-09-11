@@ -578,6 +578,45 @@ impl VocabularyCorrection {
     }
 }
 
+/// Meetings surface preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingSettings {
+    /// Whether a recording opens the system-audio loopback as well as the
+    /// microphone. On by default: a meeting recorder that captures only the
+    /// person holding the laptop is a dictaphone.
+    #[serde(default = "default_true")]
+    pub capture_system_audio: bool,
+    /// The summary template a new report uses unless one is chosen.
+    #[serde(default = "default_meeting_template")]
+    pub default_template_id: String,
+    /// BCP-47 code for the report's language. Empty means English.
+    #[serde(default)]
+    pub summary_language: String,
+    /// Whether stopping a recording starts a summary immediately.
+    ///
+    /// Off by default. Summarising is minutes of local inference, and doing it
+    /// unasked the moment a meeting ends is the kind of thing a laptop's fans
+    /// announce.
+    #[serde(default)]
+    pub auto_summarize: bool,
+}
+
+fn default_meeting_template() -> String {
+    "general".to_string()
+}
+
+impl Default for MeetingSettings {
+    fn default() -> Self {
+        Self {
+            capture_system_audio: true,
+            default_template_id: default_meeting_template(),
+            summary_language: String::new(),
+            auto_summarize: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -606,6 +645,8 @@ pub struct AppSettings {
     pub startup: StartupSettings,
     #[serde(default)]
     pub audio_input: AudioInputSettings,
+    #[serde(default)]
+    pub meetings: MeetingSettings,
     #[serde(default = "default_dictionary_words")]
     pub dictionary: Vec<String>,
     #[serde(default = "default_snippets")]
@@ -634,6 +675,7 @@ impl Default for AppSettings {
             capture: CaptureSettings::default(),
             startup: StartupSettings::default(),
             audio_input: AudioInputSettings::default(),
+            meetings: MeetingSettings::default(),
             dictionary: default_dictionary_words(),
             snippets: default_snippets(),
             vocabulary_corrections: Vec::new(),

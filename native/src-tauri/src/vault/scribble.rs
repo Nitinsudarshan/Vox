@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 pub const SOURCE_TYPE_VOICE: &str = "voice";
 pub const SOURCE_TYPE_TEXT: &str = "text";
 pub const SOURCE_TYPE_FILE: &str = "file";
+pub const SOURCE_TYPE_MEETING: &str = "meeting";
 pub const SOURCE_TYPE_CLIPBOARD: &str = "clipboard";
 pub const SOURCE_TYPE_BROWSER_SELECTION: &str = "browser_selection";
 pub const SOURCE_TYPE_BROWSER_PAGE: &str = "browser_page";
@@ -160,6 +161,24 @@ impl Scribble {
         scribble
     }
 
+
+    /// A Scribble promoted from a recorded meeting.
+    ///
+    /// `body` is the generated report where one exists and the rendered
+    /// transcript otherwise — a meeting with no summary is still a record
+    /// worth connecting into the graph. The meeting id is kept in
+    /// `source_metadata` so the Scribble can be traced back to its recording
+    /// and its audio.
+    pub fn from_meeting(meeting_id: &str, title: &str, body: &str) -> Self {
+        let mut scribble = Self::new_text(body, Some(title));
+        scribble.source_type = SOURCE_TYPE_MEETING.to_string();
+        scribble.source_metadata = serde_json::json!({
+            "source_meeting_id": meeting_id,
+            "source_modality": "MEETING",
+            "promoted_at": chrono::Utc::now().to_rfc3339()
+        });
+        scribble
+    }
 
     pub fn from_file(
         filename: &str,

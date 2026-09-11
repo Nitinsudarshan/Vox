@@ -7,7 +7,7 @@ state of play. CI runs all of it on every push and pull request —
 
 ## 1. Rust backend (`native/src-tauri/`)
 
-1117 tests (+4 ignored benchmarks), `cargo test`.
+665 tests, `cargo test`.
 
 ```bash
 cd native/src-tauri
@@ -26,43 +26,27 @@ releases, so a floating `stable` turns "passes locally" into a coin flip.
 
 Where the coverage sits:
 
-- `meetings_v2/processing/` — the largest concentration by far: normalization,
-  speaker attribution, extraction, qualification, validation, summarization,
-  and the context windower.
-- `meetings_v2/processing/eval.rs` — a deterministic, model-free scorer over a
-  fixture set, with hallucination as a hard fail. This is the quality gate for
-  summary output; it does not call a model and does not need one.
-- `meetings_v2/transcript_health.rs` — the screen that decides whether decoded
-  text is speech. Fixtures include the reported failure verbatim (seventy-three
-  repetitions of "Thank you.") and thirty seconds of synthesized room tone
-  whose mean RMS deliberately clears the fixed threshold this replaced, so the
-  gate test proves something rather than passing on a quiet fixture. Both
-  directions of the filler rule are covered: the same phrase is rejected over
-  silence and kept over speech.
-- `meetings_v2/diarize/` — `fixtures.rs` synthesizes voices that behave like
-  real ones (conversational pitch spread, overlapping formants, one shared
-  recording chain) and is the ground truth every engine is calibrated against;
-  it exists because the fixtures it replaces were an octave apart, which is why
-  a three-person meeting shipped reporting one speaker. On top of it: three
-  voices separating, one wandering voice staying one, two similar voices
-  merging rather than risking an invented speaker, the expected count
-  recovering a forced split, and the ceiling capping rather than collapsing.
-  `incremental.rs` covers a registry finding voices as they arrive and
-  identifying the local user by comparison; `engine.rs` runs all three methods
-  over one on-disk recording. `diarize/mod.rs` drives the whole path against
-  real WAVs in a temporary vault, including an assertion that it never writes
-  to `transcript.jsonl`.
-- `meetings_v2/selftest.rs` — asserts every check the Diagnostics panel offers
-  passes on a correct build, and that each one reports a measurement rather
-  than a bare verdict. A red panel a user cannot interpret is worse than none.
-- `meetings_v2/processing/{metadata,names,directives,share}.rs` — the counted
-  header, name inference from self-introductions and direct address, applying
-  typed notes to the speaker registry, and composing a shareable document
-  including its own disclosures.
-- `meetings_v2/processing/validate.rs` — among the rest, that a summary
-  omitting a section the facts have content for is rejected, that headings are
-  matched on their words rather than byte-identically, and that a meeting which
-  settled nothing is not failed for having no Decisions section.
+- `meetings/` — the largest concentration. `segmenter.rs` asserts the
+  behaviours that decide whether a transcript is usable at all: pre-roll so a
+  segment starts before onset was detected, a 200 ms breath not splitting a
+  sentence while a 1.2 s pause does, a 40-second monologue split at its
+  quietest frame with no audio lost across the cut, a click too short to be
+  speech discarded, steady room tone never opening a segment, speech over that
+  same room tone still doing so, and ragged buffer sizes segmenting
+  identically to one block — because device callbacks never deliver whole
+  frames. `capture.rs` covers lockstep draining, a silent loopback not
+  stalling the recording, and a mix curve with no step in it (the previous one
+  dropped from 1.0 to 0.5 across one sample's worth of level). `checkpoint.rs`
+  covers the crash path directly: a writer dropped without finalizing, merged
+  afterwards, sample-for-sample. `store.rs` covers atomic writes, id traversal
+  refusal, recovery recomputing duration from the audio that reached disk, and
+  a corrupt meeting not hiding the rest. `summary/` covers prompt construction
+  (including that a hostile transcript stays inside the source-boundary
+  envelope), chunking that loses no line and terminates with a pathological
+  overlap, and the cache fingerprint — that a changed transcript, template,
+  model or context window invalidates it, and that a changed *output language*
+  does not. `transcription.rs` pins the shutdown deadlock: dropping the queue
+  must end the worker.
 - `settings/` — schema defaults, serde aliases, and backward compatibility with
   settings files written by earlier versions.
 - `vault/` — frontmatter parsing, note and scribble CRUD, merge behaviour.
@@ -78,12 +62,19 @@ Where the coverage sits:
 - `sync.rs` — mutex poison recovery, including a test that pins the failure
   mode it exists to prevent.
 
-Providers are exercised through a fake LLM (`processing/llm.rs`'s test module),
-never a live Ollama instance or a cloud API.
+No test calls a live Ollama instance or a cloud API. Meeting summarization is
+covered at the prompt-construction and cache-fingerprint level — both pure
+functions — rather than by mocking a provider, so what is asserted is the text
+Vox actually sends.
+
+What is **not** covered: anything requiring a real audio device or a loaded
+Whisper model. `DualCapture::start`, the decode inside the transcription
+worker, and a full record-to-report round trip are exercised by hand on
+Windows, not in CI.
 
 ## 2. Native frontend (`native/src/`)
 
-461 tests, Vitest + React Testing Library, jsdom.
+370 tests, Vitest + React Testing Library, jsdom.
 
 ```bash
 cd native
@@ -97,41 +88,20 @@ npm run typecheck     # tsc --noEmit
 Tauri modules (`@tauri-apps/api/core`, `/event`, `/window`) are stubbed
 globally in `src/test/setup.ts`, because they only resolve inside a Tauri
 webview. A test overrides one with
-`vi.mocked(invoke).mockImplementation(...)`. `src/test/factories.ts` builds
-complete, typed domain objects so a test states only what it is about.
+`vi.mocked(invoke).mockImplementation(...)`.
 
 Where the coverage sits:
 
-- `meetings_v2/meetingProcessing.ts` — speaker and owner label resolution,
-  title preference, timestamp formatting, processing status.
-- `meetings_v2/meetingsViewState.ts` — active-state classification, word
-  counting across the durable and live streams, selected-session resolution.
-- `meetings_v2/MeetingsV2View.tsx` — behaviour tests driven entirely through
-  `invoke` responses: what the list shows, adopting a recording already in
-  progress, and surviving a failed load.
-- `meetings_v2/MeetingMetadataHeader.tsx` — that the header names participants
-  rather than only counting chunks, distinguishes a confirmed name from an
-  inferred one, marks somebody who was mentioned but never heard, and says how
-  much of a recording was discarded (and that the audio is intact).
-- `meetings_v2/MeetingNotesTab.tsx` — that the structured kinds come before the
-  paragraph box, that a name correction reaches the backend as a typed
-  directive against a real speaker, that one which names nobody cannot be
-  submitted, and that a rejected directive is shown rather than swallowed.
-- `meetings_v2/MeetingConversationTab.tsx` — that a channel-only roster says so
-  and offers to separate the voices, that a marginal split is reported as
-  marginal, that unattributed stretches are reported rather than guessed, and
-  that renaming a speaker leaves the turn text alone.
-- `meetings_v2/MeetingRawTranscriptTab.tsx` — that a rejected chunk renders as
-  rejected with its reason and voiced-time measurement, that the discarded text
-  stays available as the evidence, and that a silent chunk is distinguishable
-  from a discarded one.
-- `diagnostics/MeetingPipelineDiagnostics.tsx` — that nothing runs until asked,
-  that each verdict arrives with the measurement behind it, and that what the
-  installed Whisper model invented on room tone is shown.
-- `diagnostics/SpeakerEngineComparison.tsx` — that all three separation methods
-  are run over one existing recording, that the one in use is marked, that a
-  method which could not run is reported rather than dropped, and that a
-  confident roster reads differently from one worth checking.
+- `lib/meetings.ts` — the formatting the surface depends on: a clock that
+  grows a leading hour only when there is one and never renders negative, a
+  duration that shows a dash rather than "0 sec", and a transcript rendering
+  that names the speaker when the channel changes and skips blank turns.
+- `components/meetings/MeetingsPage.tsx` — behaviour driven entirely through
+  `invoke` responses: the list, both level meters and the live controls
+  appearing while recording, the microphone-only warning, opening a meeting
+  onto its transcript with the speaker label, a report offered when there is
+  none, filtering without a second backend call, an empty vault saying so, and
+  a failed start being reported rather than swallowed.
 - `knowledge/graph/graphPhysics.ts` — layout invariants: pinned nodes never
   drift, alpha always decays to zero, coincident nodes separate rather than
   producing `NaN`.

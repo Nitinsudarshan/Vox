@@ -38,7 +38,7 @@ this as the primary reference for `native/src-tauri/`.
 - Run `cargo clippy` and `cargo fmt` before considering a change done — same
   bar as `npm run lint` for the frontend surfaces.
 - Module boundaries follow `project-structure.md`'s domain split
-  (`capture/`, `pipeline/`, `triggers/`, `providers/`, `vault/`, `mcp/`) —
+  (`capture/`, `meetings/`, `pipeline/`, `triggers/`, `providers/`, `vault/`, `mcp/`) —
   don't introduce a generic `utils.rs` or `helpers.rs` as a catch-all; if
   something doesn't obviously belong to one domain module, that's a sign the
   module boundaries need revisiting, not a reason to add a junk-drawer file.

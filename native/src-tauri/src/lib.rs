@@ -8,6 +8,7 @@ pub mod entities;
 pub mod hotkeys;
 pub mod identity;
 pub mod mcp;
+pub mod meetings;
 pub mod memory;
 pub mod oauth;
 pub mod overlay;
@@ -120,6 +121,12 @@ pub fn run() {
     let relationship_store = Arc::new(relationships::RelationshipStore::new(&vault_dir));
     let entity_store = Arc::new(entities::EntityStore::new(&vault_dir));
 
+    let meeting_store = Arc::new(meetings::MeetingStore::new(&vault_dir));
+    let meeting_engine = Arc::new(meetings::engine::MeetingEngine::new(Arc::clone(&meeting_store)));
+    let summary_service = Arc::new(meetings::summary::service::SummaryService::new(Arc::clone(
+        &meeting_store,
+    )));
+
     let state = AppState {
         recorder,
         vault: VaultManager::new(vault_dir),
@@ -133,6 +140,10 @@ pub fn run() {
         memory_store,
         relationship_store,
         entity_store,
+        meeting_store,
+        meeting_engine: Arc::clone(&meeting_engine),
+        summary_service,
+        meeting_imports: Arc::new(meetings::commands::ImportRegistry::default()),
     };
 
     tauri::Builder::default()
@@ -203,6 +214,17 @@ pub fn run() {
             // more docked/floating product-mode choice to hide it behind
             // (see docs/decisions.md Decision 36) — so it's always shown.
             overlay::ensure_pill_window(handle, true, pill_position);
+
+            // Finalize any meeting a crash left mid-recording. Its audio
+            // checkpoints and flushed transcript are on disk; without this it
+            // would sit in the list forever claiming to be recording.
+            let recovery_engine = Arc::clone(&meeting_engine);
+            std::thread::spawn(move || {
+                let recovered = recovery_engine.recover_interrupted();
+                if !recovered.is_empty() {
+                    tracing::info!("recovered {} interrupted meeting(s)", recovered.len());
+                }
+            });
 
             Ok(())
         })
@@ -326,6 +348,29 @@ pub fn run() {
             commands::dispatch_universal_action,
             commands::list_relationships,
             commands::add_relationship,
+            meetings::commands::start_meeting,
+            meetings::commands::pause_meeting,
+            meetings::commands::resume_meeting,
+            meetings::commands::stop_meeting,
+            meetings::commands::get_meeting_recording_status,
+            meetings::commands::list_meetings,
+            meetings::commands::get_meeting,
+            meetings::commands::search_meetings,
+            meetings::commands::rename_meeting,
+            meetings::commands::save_meeting_notes,
+            meetings::commands::delete_meeting,
+            meetings::commands::open_meeting_folder,
+            meetings::commands::list_meeting_templates,
+            meetings::commands::generate_meeting_summary,
+            meetings::commands::cancel_meeting_summary,
+            meetings::commands::get_meeting_summary,
+            meetings::commands::save_meeting_summary,
+            meetings::commands::promote_meeting_to_scribble,
+            meetings::commands::meeting_audio_extensions,
+            meetings::commands::pick_meeting_audio_file,
+            meetings::commands::import_meeting_audio,
+            meetings::commands::retranscribe_meeting,
+            meetings::commands::cancel_meeting_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

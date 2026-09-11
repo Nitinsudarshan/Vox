@@ -97,6 +97,14 @@ pub struct AppState {
     pub memory_store: Arc<crate::memory::MemoryStore>,
     pub relationship_store: Arc<crate::relationships::RelationshipStore>,
     pub entity_store: Arc<crate::entities::EntityStore>,
+    /// Meetings on disk. Shared with the engine and the summary service, which
+    /// both write through it rather than keeping their own view.
+    pub meeting_store: Arc<crate::meetings::MeetingStore>,
+    /// The one recording that can be in flight.
+    pub meeting_engine: Arc<crate::meetings::engine::MeetingEngine>,
+    pub summary_service: Arc<crate::meetings::summary::service::SummaryService>,
+    /// Cancellation handles for in-flight imports and re-transcriptions.
+    pub meeting_imports: Arc<crate::meetings::commands::ImportRegistry>,
 }
 
 impl AppState {
@@ -2745,7 +2753,9 @@ pub async fn analyze_capture_context(
     Ok(context)
 }
 
-fn picked_path(
+/// Turns a dialog result into a path string, or `None` when the user
+/// cancelled.
+pub fn picked_path(
     picked: Option<tauri_plugin_dialog::FilePath>,
 ) -> Result<Option<String>, CommandError> {
     match picked {
