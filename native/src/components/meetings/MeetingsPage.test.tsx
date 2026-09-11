@@ -61,6 +61,27 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
       summary: null,
       notes: '',
     },
+    list_speech_models: {
+      models_dir: '/models',
+      models: [
+        {
+          id: 'whisper-small',
+          name: 'Small',
+          filename: 'ggml-small.bin',
+          path: '/models/ggml-small.bin',
+          size_bytes: 487_601_967,
+          installed: true,
+          managed: true,
+          multilingual: true,
+          parameters_millions: 244,
+          tier: 'balanced',
+          blurb: 'The default.',
+        },
+      ],
+      active_meeting_model: 'whisper-small',
+      active_dictation_model: 'whisper-small',
+      recommended_meeting_model: 'whisper-large-v3-turbo',
+    },
   };
   const answers = { ...defaults, ...overrides };
   vi.mocked(invoke).mockImplementation(async (command: string) => {
@@ -196,5 +217,58 @@ describe('MeetingsPage', () => {
     mockBackend({ list_meetings: [meeting({ dropped_segments: 3 })] });
     render(<MeetingsPage />);
     expect(await screen.findByText('3 lost')).toBeInTheDocument();
+  });
+  test('names the model a recording will be transcribed with', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+    expect(await screen.findByText(/transcribing with small/i)).toBeInTheDocument();
+  });
+
+  test('offers to install a model instead of only saying one is missing', async () => {
+    // The failure this replaces: pressing Record produced "Install one under
+    // Settings › Speech" and nothing else, for a section that did not exist.
+    mockBackend({
+      list_speech_models: {
+        models_dir: '/models',
+        models: [
+          {
+            id: 'whisper-large-v3-turbo',
+            name: 'Large v3 Turbo',
+            filename: 'ggml-large-v3-turbo.bin',
+            path: '/models/ggml-large-v3-turbo.bin',
+            size_bytes: 1_624_555_275,
+            installed: false,
+            managed: true,
+            multilingual: true,
+            parameters_millions: 809,
+            tier: 'accurate',
+            blurb: 'Best meeting model for most machines.',
+          },
+        ],
+        active_meeting_model: null,
+        active_dictation_model: null,
+        recommended_meeting_model: 'whisper-large-v3-turbo',
+      },
+    });
+    render(<MeetingsPage />);
+
+    expect(await screen.findByText('Recording needs a speech model')).toBeInTheDocument();
+    const install = screen.getByRole('button', { name: /install large v3 turbo/i });
+
+    fireEvent.click(install);
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('download_speech_model', {
+        id: 'whisper-large-v3-turbo',
+      });
+    });
+  });
+
+  test('links to Settings › Speech for a different model', async () => {
+    const onOpenSpeechSettings = vi.fn();
+    mockBackend();
+    render(<MeetingsPage onOpenSpeechSettings={onOpenSpeechSettings} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /change/i }));
+    expect(onOpenSpeechSettings).toHaveBeenCalled();
   });
 });
