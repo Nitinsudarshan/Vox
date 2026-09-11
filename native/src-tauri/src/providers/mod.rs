@@ -104,6 +104,110 @@ pub enum ProviderError {
 /// none, and the wrong one for anything persisted as understanding.
 pub const HEURISTIC_FALLBACK_MODEL: &str = "heuristic-fallback";
 
+/// Why the configured provider cannot answer, in words that name the fix.
+///
+/// This exists because of what the failure looked like without it. A summary
+/// on a machine with no Ollama installed spent three attempts and a minute of
+/// backoff reaching `http://localhost:11434`, then stored
+/// "error sending request for url (http://localhost:11434/api/generate)" as
+/// the meeting's report status. Every word of that is true and none of it
+/// tells the user they need to install something.
+///
+/// Meetily has the same shape of bug from the other end: it returns the raw
+/// provider response body as the error string and shows it in the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderUnavailable {
+    /// The `ollama` binary is not on PATH. Vox can start a server it can find
+    /// and cannot install one.
+    OllamaNotInstalled,
+    /// Configured against a host that did not answer.
+    OllamaUnreachable { host: String },
+    /// A cloud provider with no key saved for it.
+    NoApiKey { provider: &'static str },
+    /// `custom_openai` selected with nothing in the endpoint field.
+    NoEndpoint,
+}
+
+impl std::fmt::Display for ProviderUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderUnavailable::OllamaNotInstalled => write!(
+                f,
+                "Ollama is not installed on this machine, so there is no local model to write \
+                 the report with. Install it from ollama.com, or choose a different provider \
+                 under Settings › AI Models & STT."
+            ),
+            ProviderUnavailable::OllamaUnreachable { host } => write!(
+                f,
+                "Nothing answered at {host}. Start Ollama, or point Vox at a different host \
+                 under Settings › AI Models & STT."
+            ),
+            ProviderUnavailable::NoApiKey { provider } => write!(
+                f,
+                "No API key is saved for {provider}. Add one under Settings › AI Models & STT, \
+                 or switch to Ollama to keep everything on this machine."
+            ),
+            ProviderUnavailable::NoEndpoint => write!(
+                f,
+                "The custom provider has no endpoint URL. Set one under Settings › AI Models & \
+                 STT — for a local server it is usually http://localhost:1234/v1."
+            ),
+        }
+    }
+}
+
+/// A human name for a provider, for messages.
+fn display_name(provider: &ProviderType) -> &'static str {
+    match provider {
+        ProviderType::Ollama => "Ollama",
+        ProviderType::CloudOpenAI => "OpenAI",
+        ProviderType::CloudGemini => "Google Gemini",
+        ProviderType::CloudAnthropic => "Anthropic",
+        ProviderType::Groq => "Groq",
+        ProviderType::OpenRouter => "OpenRouter",
+        ProviderType::CustomOpenAI => "the custom endpoint",
+    }
+}
+
+/// Checks the configured provider can be reached before work is queued against it.
+///
+/// Only the local case costs a request, and it is a cheap one. A cloud
+/// provider is checked for configuration rather than reachability: a key that
+/// exists and is rejected is a different failure with a different message, and
+/// spending a round trip to discover that before every summary is a poor
+/// trade when the request itself is about to report it anyway.
+pub async fn check_ready(config: &ProviderConfig) -> Result<(), ProviderUnavailable> {
+    match config.active_provider {
+        ProviderType::Ollama => match ensure_ollama_ready(&config.ollama_host, &config.ollama_model).await {
+            OllamaStatus::Running | OllamaStatus::Started => Ok(()),
+            OllamaStatus::NotInstalled => Err(ProviderUnavailable::OllamaNotInstalled),
+            OllamaStatus::Unreachable { .. } => Err(ProviderUnavailable::OllamaUnreachable {
+                host: config.ollama_host.clone(),
+            }),
+        },
+        ProviderType::CustomOpenAI => {
+            if config
+                .custom_openai_endpoint
+                .as_deref()
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+                .is_none()
+            {
+                return Err(ProviderUnavailable::NoEndpoint);
+            }
+            Ok(())
+        }
+        ref provider => {
+            if config.active_api_key().is_none() {
+                return Err(ProviderUnavailable::NoApiKey {
+                    provider: display_name(provider),
+                });
+            }
+            Ok(())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub text: String,
@@ -1733,5 +1837,109 @@ mod tests {
             ..ProviderConfig::default()
         });
         assert_eq!(client.model_name(), "qwen2.5-7b-instruct");
+    }
+    #[tokio::test]
+    async fn a_cloud_provider_with_no_key_names_the_provider_and_the_fix() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::Groq,
+            ..ProviderConfig::default()
+        };
+        let reason = check_ready(&config).await.unwrap_err();
+        assert_eq!(reason, ProviderUnavailable::NoApiKey { provider: "Groq" });
+
+        let message = reason.to_string();
+        assert!(message.contains("Groq"), "{message}");
+        assert!(message.contains("Settings"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_cloud_provider_with_a_key_is_not_checked_over_the_network() {
+        // Deliberate: a key that exists and is rejected is a different failure
+        // with a different message, and spending a round trip to discover that
+        // before every summary is a poor trade when the request itself is
+        // about to report it anyway.
+        let mut config = ProviderConfig {
+            active_provider: ProviderType::CloudOpenAI,
+            ..ProviderConfig::default()
+        };
+        config
+            .provider_keys
+            .insert("cloud_openai".into(), "sk-whatever".into());
+        assert!(check_ready(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_custom_provider_with_no_endpoint_says_what_to_type() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::CustomOpenAI,
+            ..ProviderConfig::default()
+        };
+        let reason = check_ready(&config).await.unwrap_err();
+        assert_eq!(reason, ProviderUnavailable::NoEndpoint);
+        assert!(reason.to_string().contains("http://localhost:1234/v1"));
+    }
+
+    #[tokio::test]
+    async fn a_custom_provider_needs_an_endpoint_and_not_a_key() {
+        let config = ProviderConfig {
+            active_provider: ProviderType::CustomOpenAI,
+            custom_openai_endpoint: Some("http://localhost:1234/v1".into()),
+            ..ProviderConfig::default()
+        };
+        assert!(check_ready(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_remote_ollama_that_does_not_answer_names_the_host() {
+        // Port 1 on loopback is closed everywhere, and a non-local host skips
+        // the "try to start it ourselves" branch.
+        let config = ProviderConfig {
+            active_provider: ProviderType::Ollama,
+            ollama_host: "http://198.51.100.7:1".into(),
+            ..ProviderConfig::default()
+        };
+        let reason = check_ready(&config).await.unwrap_err();
+        assert_eq!(
+            reason,
+            ProviderUnavailable::OllamaUnreachable {
+                host: "http://198.51.100.7:1".into()
+            }
+        );
+        assert!(reason.to_string().contains("198.51.100.7"));
+    }
+
+    #[test]
+    fn every_unavailable_reason_says_where_to_go() {
+        // The whole point of the type. A message that reports a failure
+        // without naming the fix is the string this replaced.
+        for reason in [
+            ProviderUnavailable::OllamaNotInstalled,
+            ProviderUnavailable::OllamaUnreachable {
+                host: "http://localhost:11434".into(),
+            },
+            ProviderUnavailable::NoApiKey { provider: "OpenAI" },
+            ProviderUnavailable::NoEndpoint,
+        ] {
+            let message = reason.to_string();
+            assert!(
+                message.contains("Settings") || message.contains("ollama.com"),
+                "no route to a fix in: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_provider_has_a_display_name() {
+        for provider in [
+            ProviderType::Ollama,
+            ProviderType::CloudOpenAI,
+            ProviderType::CloudGemini,
+            ProviderType::CloudAnthropic,
+            ProviderType::Groq,
+            ProviderType::OpenRouter,
+            ProviderType::CustomOpenAI,
+        ] {
+            assert!(!display_name(&provider).is_empty());
+        }
     }
 }

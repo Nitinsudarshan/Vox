@@ -37,9 +37,14 @@ const STATUS_POLL_MS = 1000;
 interface MeetingsPageProps {
   /** Opens Settings › Speech, so a missing model can be installed from here. */
   onOpenSpeechSettings?: () => void;
+  /** Opens Settings › AI Models & STT, for a report that has no provider. */
+  onOpenProviderSettings?: () => void;
 }
 
-export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings }) => {
+export const MeetingsPage: React.FC<MeetingsPageProps> = ({
+  onOpenSpeechSettings,
+  onOpenProviderSettings,
+}) => {
   const [status, setStatus] = React.useState<MeetingRecordingStatus>({
     active: false,
     elapsed_seconds: 0,
@@ -394,6 +399,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({ onOpenSpeechSettings
               onCancelSummary={handleCancelSummary}
               onSaveSummary={handleSaveSummary}
               onPromote={handlePromote}
+              onOpenProviderSettings={onOpenProviderSettings}
             />
           ) : (
             <div className="h-full flex items-center justify-center">

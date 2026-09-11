@@ -107,6 +107,9 @@ impl From<SummaryError> for CommandError {
             SummaryError::AlreadyRunning => "MEETING_SUMMARY_RUNNING",
             SummaryError::Cancelled => "MEETING_SUMMARY_CANCELLED",
             SummaryError::Provider(_) => "MEETING_SUMMARY_PROVIDER_FAILED",
+            // Its own code: the frontend offers a way into Settings for this
+            // one, because the fix is a setting rather than a retry.
+            SummaryError::ProviderUnavailable(_) => "MEETING_SUMMARY_PROVIDER_UNAVAILABLE",
             SummaryError::Store(_) => "MEETING_STORAGE_FAILED",
         };
         CommandError::new(code, &err.to_string())

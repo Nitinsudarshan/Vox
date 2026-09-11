@@ -438,6 +438,7 @@ export const App: React.FC = () => {
           {activeTab === 'meetings' && (
             <MeetingsPage
               onOpenSpeechSettings={() => navigateTo('settings', { section: 'speech' })}
+              onOpenProviderSettings={() => navigateTo('settings', { section: 'advanced' })}
             />
           )}
 

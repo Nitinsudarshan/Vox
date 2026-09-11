@@ -441,4 +441,79 @@ describe('MeetingsPage', () => {
     expect(screen.getByText(/· Speakers \(Realtek\)/)).toBeInTheDocument();
     expect(screen.getByText('nothing heard yet')).toBeInTheDocument();
   });
+  test('a report that has no provider offers the settings that fix it', async () => {
+    // The failure this replaces: three attempts, a minute of backoff, and
+    // "error sending request for url (http://localhost:11434/api/generate)"
+    // stored as the meeting's report status.
+    const onOpenProviderSettings = vi.fn();
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: {
+          markdown: null,
+          status: 'failed',
+          template_id: 'general',
+          generated_at: null,
+          model: null,
+          language: '',
+          error:
+            'Ollama is not installed on this machine, so there is no local model to write the report with. Install it from ollama.com, or choose a different provider under Settings › AI Models & STT.',
+        },
+        notes: '',
+      },
+    });
+    render(<MeetingsPage onOpenProviderSettings={onOpenProviderSettings} />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByText(/Ollama is not installed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /open settings/i }));
+    expect(onOpenProviderSettings).toHaveBeenCalled();
+  });
+
+  test('a model failure is shown as a failure, with no settings to open', async () => {
+    const onOpenProviderSettings = vi.fn();
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: {
+          markdown: null,
+          status: 'failed',
+          template_id: 'general',
+          generated_at: null,
+          model: 'llama3.2:latest',
+          language: '',
+          error: 'the model returned nothing',
+        },
+        notes: '',
+      },
+    });
+    render(<MeetingsPage onOpenProviderSettings={onOpenProviderSettings} />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByText(/the model returned nothing/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open settings/i })).not.toBeInTheDocument();
+  });
 });

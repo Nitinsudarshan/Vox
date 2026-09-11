@@ -39,6 +39,7 @@ interface MeetingDetailProps {
   onCancelSummary: () => void;
   onSaveSummary: (markdown: string) => void;
   onPromote: () => void;
+  onOpenProviderSettings?: () => void;
 }
 
 /**
@@ -71,6 +72,7 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
   onCancelSummary,
   onSaveSummary,
   onPromote,
+  onOpenProviderSettings,
 }) => {
   const { meeting, segments, summary } = detail;
   const [pane, setPane] = React.useState<Pane>('transcript');
@@ -98,13 +100,17 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
   }, []);
 
   // A live recording shows only its transcript arriving — there is no report
-  // to put beside it yet. A finished one opens on both when there is, and on
-  // the transcript alone when there is not.
+  // to put beside it yet. A finished one opens on both when there is one to
+  // read, and on the transcript alone when there is not.
+  //
+  // A *failed* report counts as something to show. Opening on the transcript
+  // there leaves the user looking at a page with no sign that generating the
+  // report went wrong, which is the state a missing provider produces.
+  const hasReportToShow = Boolean(summary?.markdown) || summary?.status === 'failed';
   React.useEffect(() => {
-    if (live) setPane('transcript');
-    else if (!summary?.markdown) setPane('transcript');
+    if (live || !hasReportToShow) setPane('transcript');
     else setPane(wide ? 'split' : 'summary');
-  }, [meeting.id, live, summary?.markdown, wide]);
+  }, [meeting.id, live, hasReportToShow, wide]);
 
   // A new meeting is a different recording: the old clock means nothing.
   React.useEffect(() => {
@@ -330,6 +336,7 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
               onCancel={onCancelSummary}
               onSave={onSaveSummary}
               onPromote={onPromote}
+              onOpenProviderSettings={onOpenProviderSettings}
             />
           </div>
         )}

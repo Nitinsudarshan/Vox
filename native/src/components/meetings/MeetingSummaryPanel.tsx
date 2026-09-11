@@ -30,6 +30,20 @@ interface MeetingSummaryPanelProps {
   onCancel: () => void;
   onSave: (markdown: string) => void;
   onPromote: () => void;
+  /** Opens Settings › AI Models & STT, when the failure is a setting. */
+  onOpenProviderSettings?: () => void;
+}
+
+/**
+ * Whether a failure is "nothing is configured" rather than "the model failed".
+ *
+ * The backend distinguishes these with its own error code; the report record
+ * carries only the message, so the marker is the sentence itself. Both of the
+ * app's routes to a fix are named in every `ProviderUnavailable` message, and
+ * a test on the Rust side keeps that true.
+ */
+function isConfigurationProblem(error: string): boolean {
+  return error.includes('Settings') || error.includes('ollama.com');
 }
 
 /**
@@ -50,6 +64,7 @@ export const MeetingSummaryPanel: React.FC<MeetingSummaryPanelProps> = ({
   onCancel,
   onSave,
   onPromote,
+  onOpenProviderSettings,
 }) => {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
@@ -148,13 +163,33 @@ export const MeetingSummaryPanel: React.FC<MeetingSummaryPanelProps> = ({
       )}
 
       {summary?.status === 'failed' && summary.error && (
-        <p className="flex items-start gap-2 text-xs text-destructive mb-3 shrink-0">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <div
+          className={`flex items-start gap-2 text-xs mb-3 shrink-0 ${
+            isConfigurationProblem(summary.error) ? 'text-foreground' : 'text-destructive'
+          }`}
+        >
+          <AlertTriangle
+            className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+              isConfigurationProblem(summary.error) ? 'text-amber-500' : ''
+            }`}
+          />
           <span>
             {summary.error}
             {markdown && ' The previous report is still shown below.'}
+            {isConfigurationProblem(summary.error) && onOpenProviderSettings && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  onClick={onOpenProviderSettings}
+                  className="underline underline-offset-2 hover:text-primary"
+                >
+                  Open settings
+                </button>
+              </>
+            )}
           </span>
-        </p>
+        </div>
       )}
       {summary?.status === 'cancelled' && (
         <p className="text-xs text-muted-foreground mb-3 shrink-0">
