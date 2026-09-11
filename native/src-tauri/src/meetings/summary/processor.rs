@@ -434,7 +434,7 @@ pub fn clean_markdown(raw: &str) -> String {
         if let Some(first_newline) = text.find('\n') {
             let opener = &text[..first_newline];
             // An opening fence line is ``` plus at most a language tag.
-            if opener.trim_start_matches('`').trim().split_whitespace().count() <= 1 {
+            if opener.trim_start_matches('`').split_whitespace().count() <= 1 {
                 let body = &text[first_newline + 1..];
                 if let Some(end) = body.rfind("```") {
                     if body[end + 3..].trim().is_empty() {

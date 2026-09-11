@@ -50,6 +50,22 @@ urlencoding = "2.1"
 dotenvy = "0.15"
 sha2 = "0.10"
 pdf-extract = "0.7"
+# Decodes the audio formats a meeting recording arrives in when the user
+# imports one — mp3, m4a/aac, flac, ogg, wav. Pure Rust and decoded packet by
+# packet, so importing a three-hour recording neither pulls in an external
+# binary nor holds the whole file in memory. Meetily reaches for a bundled
+# FFmpeg here, which its build downloads at compile time and `panic!`s without
+# network, and then decodes whole files into RAM behind a 20 GB size guard.
+symphonia = { version = "0.5", default-features = false, features = [
+    "mp3",
+    "aac",
+    "isomp4",
+    "flac",
+    "ogg",
+    "vorbis",
+    "wav",
+    "pcm",
+] }
 quick-xml = "0.36"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 

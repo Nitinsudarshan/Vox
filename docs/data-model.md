@@ -351,3 +351,65 @@ other applications — see `maybe_later.md` §13.
 `enabled: false` keeps an entry visible and stops it being applied, so a
 correction that turns out to be wrong can be silenced without losing the record
 of having made it. Both are managed in Settings › Dictionary.
+
+---
+
+## 10. Meeting Schema (`.Vox/vault/meetings/<meeting_id>/`)
+
+One directory per meeting. The directory *is* the meeting: deleting it deletes
+the transcript, the report and the audio together.
+
+```text
+.Vox/vault/meetings/meeting-<uuid>/
+├── meeting.json      metadata
+├── transcript.json   Vec<TranscriptSegment>, ordered by `sequence`
+├── summary.json      the report, its fingerprint, and the English original
+├── notes.md          free text the user typed
+└── audio/
+    ├── chunk_000000.wav   durable 30 s checkpoints, present only while recording
+    └── audio.wav          the merged recording, 16 kHz mono 16-bit PCM
+```
+
+Every file above is written to a temporary path in the same directory and
+renamed into place, so an interrupted write never leaves a half-file where a
+complete one was.
+
+### `meeting.json`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `meeting-<uuid simple>` |
+| `title` | string | `Meeting YYYY-MM-DD HH:MM` until a report renames it — and only while it still matches that shape |
+| `state` | enum | `recording` / `paused` / `transcribing` / `completed` / `failed` |
+| `source` | enum | `recorded` / `imported` |
+| `duration_seconds` | number | Measured from the audio that reached disk, not from a wall clock |
+| `audio_path` | string? | Absolute path to `audio.wav` |
+| `transcript_model` | string? | The model file that produced the current transcript |
+| `system_audio_captured` | bool | `false` means only the microphone was recorded, which changes how the transcript should be read |
+| `segment_count` | number | |
+| `dropped_segments` | number | Segments queued but never decoded. Surfaced, not swallowed |
+| `error` | string? | Set by crash recovery and by a failed import |
+
+### `transcript.json`
+
+Each segment: `sequence` (monotonic, assigned before decoding so a slow span
+cannot reorder the transcript), `text`, `start_seconds` / `end_seconds`
+(recording-relative, so a transcript still lines up with its audio after a
+pause), `channel` (`microphone` / `system` / `mixed` — see Decision 68),
+`no_speech_prob` (Whisper's own, not a derived number), and `recorded_at`.
+
+### `summary.json`
+
+`status`, `template_id`, `markdown` (as the user should see it),
+`english_markdown` (the original, kept even when `markdown` is a translation),
+`previous_markdown` (held only during a regeneration, restored on failure),
+`fingerprint` (hash of transcript + template content + instructions + model +
+context window), `provider`, `model`, `language`, `chunk_count`,
+`processing_ms`.
+
+### Templates (`.Vox/config/meeting-templates/<id>.json`)
+
+`{ id, name, description, sections: [{ heading, instruction, style, required }] }`
+where `style` is `bullets` / `checklist` / `prose`. An `id` matching a bundled
+template replaces it; any other adds one. Ids are validated before they touch
+the filesystem.

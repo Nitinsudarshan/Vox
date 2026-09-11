@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { HomePage } from './components/home/HomePage';
 import { VoiceNotePage } from './components/voicenotes/VoiceNotePage';
+import { MeetingsPage } from './components/meetings/MeetingsPage';
 import { ScribbleViewer } from './components/scribble/ScribbleViewer';
 import { FilesPage } from './components/files/FilesPage';
 import { CapturesPage } from './components/captures/CapturesPage';
@@ -38,6 +39,7 @@ export type { MainTabType };
 const TAB_LABELS: Record<MainTabType, string> = {
   home: 'Home',
   capture: 'Voice Notes',
+  meetings: 'Meetings',
   scribble: 'Scribbles',
   graph: 'Knowledge Graph',
   files: 'Files & Docs',
@@ -423,6 +425,8 @@ export const App: React.FC = () => {
           )}
 
           {activeTab === 'capture' && <VoiceNotePage />}
+
+          {activeTab === 'meetings' && <MeetingsPage />}
 
           {activeTab === 'scribble' && (
             <ScribbleViewer

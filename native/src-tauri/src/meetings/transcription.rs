@@ -86,17 +86,29 @@ pub struct TranscriptionWarning {
     pub message: String,
 }
 
+/// Counts shared between the producers and the decoder.
+///
+/// Deliberately separate from [`TranscriptionQueue`], which owns the channel's
+/// sending half. The worker needs the counts and must *not* hold a sender: a
+/// `SyncSender` in the worker's own hands keeps the channel open forever, so
+/// `for job in rx` never ends and the stop path's `join` blocks for good.
+#[derive(Default)]
+struct QueueCounters {
+    next_sequence: AtomicU64,
+    queued: AtomicU64,
+    completed: AtomicU64,
+    dropped: AtomicU64,
+}
+
 /// The producer end of the decoder's queue.
 ///
 /// Cloneable so the capture loop and the stop path can both reach it; the
-/// counters are shared, so both see the same totals.
+/// counters are shared, so both see the same totals. Dropping every clone is
+/// what tells the decoder there is nothing more coming.
 #[derive(Clone)]
 pub struct TranscriptionQueue {
     tx: std_mpsc::SyncSender<DecodeJob>,
-    next_sequence: Arc<AtomicU64>,
-    queued: Arc<AtomicU64>,
-    completed: Arc<AtomicU64>,
-    dropped: Arc<AtomicU64>,
+    counters: Arc<QueueCounters>,
     app: Option<AppHandle>,
     meeting_id: String,
 }
@@ -111,14 +123,14 @@ impl TranscriptionQueue {
     ///
     /// Returns `false` when the queue was full and the segment was dropped.
     pub fn submit(&self, segment: SpeechSegment) -> bool {
-        let sequence = self.next_sequence.fetch_add(1, Ordering::SeqCst);
+        let sequence = self.counters.next_sequence.fetch_add(1, Ordering::SeqCst);
         match self.tx.try_send(DecodeJob { sequence, segment }) {
             Ok(()) => {
-                self.queued.fetch_add(1, Ordering::SeqCst);
+                self.counters.queued.fetch_add(1, Ordering::SeqCst);
                 true
             }
             Err(std_mpsc::TrySendError::Full(job)) => {
-                let dropped = self.dropped.fetch_add(1, Ordering::SeqCst) + 1;
+                let dropped = self.counters.dropped.fetch_add(1, Ordering::SeqCst) + 1;
                 tracing::warn!(
                     "meeting {}: transcription backlog full, dropped segment {} ({:.1}s); \
                      {} dropped so far",
@@ -138,7 +150,7 @@ impl TranscriptionQueue {
                 false
             }
             Err(std_mpsc::TrySendError::Disconnected(_)) => {
-                self.dropped.fetch_add(1, Ordering::SeqCst);
+                self.counters.dropped.fetch_add(1, Ordering::SeqCst);
                 false
             }
         }
@@ -146,16 +158,13 @@ impl TranscriptionQueue {
 
     /// Segments submitted, decoded, and refused.
     pub fn counts(&self) -> (u64, u64, u64) {
-        (
-            self.queued.load(Ordering::SeqCst),
-            self.completed.load(Ordering::SeqCst),
-            self.dropped.load(Ordering::SeqCst),
-        )
+        counts_of(&self.counters)
     }
 
     /// Whether every submitted segment has been decoded.
     pub fn is_drained(&self) -> bool {
-        self.completed.load(Ordering::SeqCst) >= self.queued.load(Ordering::SeqCst)
+        self.counters.completed.load(Ordering::SeqCst)
+            >= self.counters.queued.load(Ordering::SeqCst)
     }
 
     fn warn(&self, kind: &str, message: &str) {
@@ -195,29 +204,32 @@ pub fn spawn_worker(
     cancel: Arc<AtomicBool>,
 ) -> (TranscriptionQueue, std::thread::JoinHandle<()>) {
     let (tx, rx) = std_mpsc::sync_channel::<DecodeJob>(MAX_QUEUED_SEGMENTS);
-    let queued = Arc::new(AtomicU64::new(0));
-    let completed = Arc::new(AtomicU64::new(0));
-    let dropped = Arc::new(AtomicU64::new(0));
+    let counters = Arc::new(QueueCounters::default());
 
     let queue = TranscriptionQueue {
         tx,
-        next_sequence: Arc::new(AtomicU64::new(0)),
-        queued: queued.clone(),
-        completed: completed.clone(),
-        dropped: dropped.clone(),
+        counters: Arc::clone(&counters),
         app: app.clone(),
         meeting_id: config.meeting_id.clone(),
     };
 
-    let progress = queue.clone();
+    // The worker gets the counters, never the queue: see [`QueueCounters`].
     let handle = std::thread::Builder::new()
         .name("vox-meeting-transcribe".into())
         .spawn(move || {
-            run_worker(config, engine, store, app, cancel, rx, progress);
+            run_worker(config, engine, store, app, cancel, rx, counters);
         })
         .expect("spawning the meeting transcription thread");
 
     (queue, handle)
+}
+
+fn counts_of(counters: &QueueCounters) -> (u64, u64, u64) {
+    (
+        counters.queued.load(Ordering::SeqCst),
+        counters.completed.load(Ordering::SeqCst),
+        counters.dropped.load(Ordering::SeqCst),
+    )
 }
 
 fn run_worker(
@@ -227,7 +239,7 @@ fn run_worker(
     app: Option<AppHandle>,
     cancel: Arc<AtomicBool>,
     rx: std_mpsc::Receiver<DecodeJob>,
-    queue: TranscriptionQueue,
+    counters: Arc<QueueCounters>,
 ) {
     for job in rx {
         if cancel.load(Ordering::SeqCst) {
@@ -236,11 +248,11 @@ fn run_worker(
         }
 
         let outcome = decode_segment(&engine, &config, &job);
-        queue.completed.fetch_add(1, Ordering::SeqCst);
+        counters.completed.fetch_add(1, Ordering::SeqCst);
 
         match outcome {
             DecodeOutcome::Kept(segment) => {
-                if let Err(err) = store.append_segments(&config.meeting_id, &[segment.clone()]) {
+                if let Err(err) = store.append_segments(&config.meeting_id, std::slice::from_ref(&segment)) {
                     // A transcript that cannot be written is worth saying out
                     // loud: the meeting is still recording, and the user would
                     // otherwise find out at the end.
@@ -279,13 +291,13 @@ fn run_worker(
             }
         }
 
-        emit_progress(&app, &config.meeting_id, &queue);
+        emit_progress(&app, &config.meeting_id, &counters);
     }
-    emit_progress(&app, &config.meeting_id, &queue);
+    emit_progress(&app, &config.meeting_id, &counters);
     tracing::info!(
         "meeting {}: transcription worker finished ({:?})",
         config.meeting_id,
-        queue.counts()
+        counts_of(&counters)
     );
 }
 
@@ -359,9 +371,9 @@ fn decode_segment(engine: &SttEngine, config: &WorkerConfig, job: &DecodeJob) ->
     })
 }
 
-fn emit_progress(app: &Option<AppHandle>, meeting_id: &str, queue: &TranscriptionQueue) {
+fn emit_progress(app: &Option<AppHandle>, meeting_id: &str, counters: &QueueCounters) {
     let Some(app) = app else { return };
-    let (queued, completed, dropped) = queue.counts();
+    let (queued, completed, dropped) = counts_of(counters);
     let _ = app.emit(
         TRANSCRIPTION_PROGRESS_EVENT,
         TranscriptionProgress {
@@ -489,5 +501,52 @@ mod tests {
     #[test]
     fn rendering_nothing_produces_nothing() {
         assert_eq!(render_transcript(&[]), "");
+    }
+
+    #[test]
+    fn dropping_the_queue_ends_the_worker() {
+        // The stop path drops every queue clone and then joins the worker. If
+        // the worker holds a sender of its own, its channel never closes and
+        // that join blocks forever — which is a hang on every stop, not a
+        // slow one.
+        use crate::capture::stt::{SttEngine, SttLanguageConfig, WhisperDecodingConfig};
+        use std::sync::atomic::AtomicBool;
+
+        let (queue, worker) = spawn_worker(
+            WorkerConfig {
+                meeting_id: "meeting-shutdown".into(),
+                model_path: String::new(),
+                language: SttLanguageConfig {
+                    whisper_language: None,
+                    translate: false,
+                },
+                decoding: WhisperDecodingConfig::default(),
+                glossary: Vec::new(),
+            },
+            SttEngine::new(),
+            Arc::new(crate::meetings::MeetingStore::new(
+                std::env::temp_dir().join("vox-worker-shutdown"),
+            )),
+            None,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        // A second clone, the way the capture pump holds one.
+        let pump_clone = queue.clone();
+        drop(queue);
+        drop(pump_clone);
+
+        let finished = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = worker.join();
+            let _ = finished.0.send(());
+        });
+        assert!(
+            finished
+                .1
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "the worker did not exit when its queue was dropped"
+        );
     }
 }

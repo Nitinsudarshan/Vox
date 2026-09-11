@@ -45,6 +45,7 @@
 
 pub mod capture;
 pub mod checkpoint;
+pub mod commands;
 pub mod engine;
 pub mod import;
 pub mod model;

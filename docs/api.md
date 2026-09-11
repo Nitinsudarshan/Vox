@@ -89,9 +89,38 @@ That surface's contract, limits and threat model are in `docs/capture.md` §5.
 Progress is broadcast on the `capture-progress` event with a `stage` of
 `SAVING | SAVED | ANALYSING | ANALYSED | FAILED`.
 
+#### Meeting Commands
+- `start_meeting(title?: string, captureSystemAudio?: bool) -> Result<Meeting, CommandError>`
+  Opens the microphone and (unless disabled) the system loopback, and begins recording. Refuses with `MEETING_NO_SPEECH_MODEL` when no Whisper model is installed, rather than recording audio that can never become a transcript, and with `MEETING_ALREADY_RECORDING` when one is already in flight.
+- `pause_meeting()` / `resume_meeting() -> Result<(), CommandError>`
+  Paused audio is discarded, not stored as silence, so a meeting's length matches the speech in it.
+- `stop_meeting() -> Result<Meeting, CommandError>`
+  Returns only once the transcript is complete: capture stops, the segmenter flushes the sentence still being spoken, the decoder drains its backlog, and the audio checkpoints are merged. Starts the report too when `settings.meetings.autoSummarize` is on.
+- `get_meeting_recording_status() -> MeetingRecordingStatus`
+  Elapsed time, which streams are bound, whether either has ever carried audio, and the decode counters.
+- `list_meetings() -> Result<Vec<MeetingListItem>, CommandError>`
+- `get_meeting(meetingId) -> Result<MeetingDetail, CommandError>`
+  Metadata, transcript, report and notes in one round trip.
+- `search_meetings(query, limit?) -> Result<Vec<MeetingSearchHit>, CommandError>`
+- `rename_meeting(meetingId, title)` / `save_meeting_notes(meetingId, notes)` / `delete_meeting(meetingId)`
+  Deleting removes the meeting's directory — transcript, report and audio together.
+- `open_meeting_folder(meetingId) -> Result<(), CommandError>`
+- `list_meeting_templates() -> Vec<MeetingTemplate>`
+  The six bundled templates plus anything in `<config>/meeting-templates/`.
+- `generate_meeting_summary(meetingId, templateId?, language?, instructions?, force?) -> Result<(), CommandError>`
+  Returns as soon as the background task is spawned. Progress arrives on `meeting-summary-progress`; the result is read back with `get_meeting_summary`.
+- `cancel_meeting_summary(meetingId) -> bool` — restores the previous report.
+- `get_meeting_summary(meetingId)` / `save_meeting_summary(meetingId, markdown)`
+  Saving the user's own edits clears the English cache, so a later regeneration cannot silently discard them.
+- `promote_meeting_to_scribble(meetingId) -> Result<Scribble, CommandError>`
+- `pick_meeting_audio_file() -> Result<Option<String>, CommandError>` — the OS file picker, in Rust because the window's capability set grants no dialog permission to the frontend.
+- `meeting_audio_extensions() -> Vec<String>` / `import_meeting_audio(path, title?)` / `retranscribe_meeting(meetingId)` / `cancel_meeting_import(key)`
+
+Events: `meeting-state-changed`, `meeting-audio-level`, `meeting-transcript-segment`, `meeting-transcription-progress`, `meeting-transcription-warning`, `meeting-summary-progress`, `meeting-import-progress`. Shapes are in `native/src/types/meetings.ts`; the subsystem is documented in `docs/meetings.md`.
+
 #### Settings Commands
 - `get_settings() -> Result<AppSettings, CommandError>`
-  Returns the current provider/STT/TTS/hotkey configuration (see `docs/data-model.md` §4).
+  Returns the current provider/STT/meetings/hotkey configuration (see `docs/data-model.md` §4).
 - `save_settings(settings: AppSettings) -> Result<(), CommandError>`
   Persists settings to `.Vox/config/settings.json` and updates the running app's in-memory config immediately (LLM provider, STT model path, TTS paths). Hotkey changes take effect on next launch — they're only read once at startup.
 

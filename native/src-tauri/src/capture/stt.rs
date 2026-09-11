@@ -1206,14 +1206,19 @@ impl SttEngine {
             let whisper_total_ms = t_whisper_end.duration_since(t_whisper_start).as_millis();
             let other_ms = whisper_total_ms.saturating_sub(create_state_ms + state_full_ms);
 
-            println!("\n==================================================");
-            println!("WHISPER_INTERNAL_LATENCY");
-            println!("create_state: {} ms", create_state_ms);
-            println!("language_detection: 0 ms (embedded within state_full auto-detect pass)");
-            println!("state_full: {} ms", state_full_ms);
-            println!("other: {} ms", other_ms);
-            println!("whisper_total: {} ms", whisper_total_ms);
-            println!("==================================================\n");
+            // At `debug`, not on stdout. This is one record per decode, which
+            // is fine for a dictation phrase and is 500 of them for an hour of
+            // meeting — as eight lines of unconditional `println!` each, it
+            // buried every other log line the moment meetings existed.
+            // `rules/rust-backend.md` asks for `tracing` for exactly this
+            // reason.
+            tracing::debug!(
+                create_state_ms,
+                state_full_ms,
+                other_ms,
+                whisper_total_ms,
+                "whisper internal latency"
+            );
 
             tracing::debug!(
                 "Whisper STT finished: audio={:.2}s, latency={}ms, RTF={:.2}, lang={:?}, segments={}, chars={}",

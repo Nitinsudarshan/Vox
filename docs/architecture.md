@@ -57,6 +57,7 @@ Vox is a native-first Windows desktop assistant built with a Rust backend and Ta
   - `prompts.rs`: The prompt registry — stable ids, versions recorded on every result, and an applicability rule so a repository prompt cannot be run against a conversation.
   - `service.rs`: `AnalysisService` — the one place a prompt is resolved, the source boundary applied, the provider called, and structured output parsed and validated.
   - `derived.rs`: `DerivedData` — one record type with typed payloads, keyed by source id. See `docs/data-model.md` §7.
+- `meetings`: Meeting recording, transcription and reports. Two `cpal` streams — the microphone and the default output device in loopback — drained in temporal lockstep and soft-mixed, with per-channel energy kept so a transcript line can say "You" or "Others" (`capture.rs`). A streaming energy VAD emits speech spans with pre-roll and redemption (`segmenter.rs`), one serial decoder turns them into ordered transcript lines screened through `capture::speech_health` (`transcription.rs`), a WAV checkpoint lands every 30 s so a crash costs seconds (`checkpoint.rs`), and JSON templates plus `providers::LLMClient` produce the report (`summary/`). One directory per meeting under `<vault>/meetings/` (`store.rs`). Modelled on Meetily; `docs/meetings.md` lists every deliberate divergence.
 - `triggers`: Dynamic phrase matching and classification against `triggers.json`. Extracts parameters and dispatches to tool handlers. Skipped for chat mode.
 - `providers`: Unified `LLMClient`.
   - Ollama: Connects to `http://localhost:11434`.
@@ -69,8 +70,8 @@ Vox is a native-first Windows desktop assistant built with a Rust backend and Ta
 
 ## Window Architecture vs Native OS Notifications
 
-- **Persistent Custom Tauri Windows**: Reserved strictly for UI surfaces that genuinely require custom interactive windows (`"main"` application window and `"dictation-pill"` overlay).
-- **Transient Meeting Reminders**: Native OS Toast Notifications (`tauri_plugin_notification`). Transient notifications are presented directly via native Windows OS toasts without any React WebView or Tauri meeting-reminder window.
+- **Persistent Custom Tauri Windows**: Reserved strictly for UI surfaces that genuinely require custom interactive windows (`"main"` application window and `"dictation-pill"` overlay). Meetings are recorded and controlled from the main window and the tray — there is no meeting overlay window.
+- **Transient Notifications**: Native OS Toast Notifications (`tauri_plugin_notification`), presented directly without any React WebView or Tauri window of their own.
 
 ## Data Access & Security Model
 - **Local-Only Mode**: Default operating mode. No authentication required. Notes, scribbles, audio, and captures saved in `.Vox/vault`. Vector indices stored in `.Vox/lancedb`. Zero network transmission of user notes or audio.
