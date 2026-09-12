@@ -301,7 +301,7 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({
                   <div>
                     <p className="font-semibold">Text extraction not supported for legacy .doc format.</p>
                     <p className="text-xs mt-1">
-                      Relay copied your file safely into the Vault. To extract text and generate summaries, please convert the file to .docx or .pdf.
+                      Vox copied your file safely into the Vault. To extract text and generate summaries, please convert the file to .docx or .pdf.
                     </p>
                   </div>
                 </div>
@@ -475,7 +475,7 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({
                     File Identity
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Relay Stable ID:</span>
+                    <span className="text-muted-foreground">Vox Stable ID:</span>
                     <p className="font-mono text-foreground mt-0.5">{file.id}</p>
                   </div>
                   <div>
@@ -501,11 +501,11 @@ export const FileDetailModal: React.FC<FileDetailModalProps> = ({
                     <span className="text-muted-foreground">Last Known Original Source Path:</span>
                     <p className="font-mono text-foreground mt-0.5 truncate">{file.last_known_source_path}</p>
                     <p className="text-[10px] text-muted-foreground mt-0.5">
-                      ✓ Original file outside Relay remains 100% untouched.
+                      ✓ Original file outside Vox remains 100% untouched.
                     </p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Relay Vault Relative Path:</span>
+                    <span className="text-muted-foreground">Vox Vault Relative Path:</span>
                     <p className="font-mono text-foreground mt-0.5 truncate">{file.vault_path}</p>
                   </div>
                   <div>

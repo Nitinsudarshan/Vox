@@ -166,7 +166,7 @@ export const CapturesPage: React.FC<CapturesPageProps> = ({
       return scribble;
     } catch (err) {
       console.error('Failed to promote capture to a Scribble', err);
-      setError('Relay could not add this capture to Scribbles.');
+      setError('Vox could not add this capture to Scribbles.');
       return undefined;
     }
   };
@@ -179,7 +179,7 @@ export const CapturesPage: React.FC<CapturesPageProps> = ({
       await load();
     } catch (err) {
       console.error('Failed to delete capture', err);
-      setError('Relay could not move that capture to Trash.');
+      setError('Vox could not move that capture to Trash.');
     }
   };
 

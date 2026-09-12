@@ -72,8 +72,8 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
 
   if (!isRecording) {
     return (
-      <Card className="p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+      <Card className="p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex-1 min-w-0">
             <h2 className="text-sm font-semibold text-foreground">Record a meeting</h2>
             <p className="text-xs text-muted-foreground mt-1">
@@ -85,31 +85,6 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
             <Radio className="w-4 h-4" />
             Start recording
           </Button>
-        </div>
-
-        {/* Chosen before the meeting, because the cost of the wrong device is
-            only visible after it — an hour of audio with an empty transcript. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <DevicePicker
-            icon={Mic}
-            label="Microphone"
-            devices={inputs}
-            value={devices.microphone ?? ''}
-            defaultLabel="System default"
-            onChange={(name) =>
-              onDevicesChange({ ...devices, microphone: name === '' ? null : name })
-            }
-          />
-          <DevicePicker
-            icon={MonitorSpeaker}
-            label="System audio from"
-            devices={outputs}
-            value={devices.system_audio ?? ''}
-            defaultLabel="Default output"
-            onChange={(name) =>
-              onDevicesChange({ ...devices, system_audio: name === '' ? null : name })
-            }
-          />
         </div>
       </Card>
     );
@@ -257,7 +232,7 @@ const LevelMeter: React.FC<LevelMeterProps> = ({
   </div>
 );
 
-interface DevicePickerProps {
+export interface DevicePickerProps {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   devices: AudioDeviceInfo[];
@@ -278,7 +253,7 @@ interface DevicePickerProps {
  * way every other surface does", which is what the app should keep doing until
  * someone has a reason to disagree.
  */
-const DevicePicker: React.FC<DevicePickerProps> = ({
+export const DevicePicker: React.FC<DevicePickerProps> = ({
   icon: Icon,
   label,
   devices,

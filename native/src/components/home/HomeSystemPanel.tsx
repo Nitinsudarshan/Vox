@@ -89,7 +89,7 @@ export const HomeSystemPanel: React.FC<HomeSystemPanelProps> = ({
         ? `Hybrid cloud sync · ${account.email ?? 'signed in'}`
         : 'Local vault · 100% on-device',
       ok: null,
-      cta: { label: 'Account', onClick: () => onOpenSettings('account') },
+      cta: { label: 'Account', onClick: () => onOpenSettings('general') },
     },
     {
       id: 'vault',

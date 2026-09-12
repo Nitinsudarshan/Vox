@@ -37,6 +37,10 @@ export const deleteSpeechModel = (id: string): Promise<boolean> =>
 export const setMeetingSpeechModel = (id: string | null): Promise<void> =>
   invoke('set_meeting_speech_model', { id });
 
+/** Chooses the model dictation uses. `null` means default. */
+export const setDictationSpeechModel = (id: string | null): Promise<void> =>
+  invoke('set_dictation_speech_model', { id });
+
 /** Subscribes to download progress for every model at once. */
 export const onSpeechModelDownload = (
   handler: (progress: SpeechModelDownloadProgress) => void,

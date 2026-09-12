@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/rea
 import { invoke } from '@tauri-apps/api/core';
 
 import { MeetingsPage } from './MeetingsPage';
+import { MeetingSettingsView } from '../settings/MeetingSettingsView';
 import type { MeetingListItem, MeetingRecordingStatus } from '@/types/meetings';
 
 const idleStatus: MeetingRecordingStatus = {
@@ -365,9 +366,9 @@ describe('MeetingsPage', () => {
     expect(screen.queryByTestId('meeting-audio')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /play from/i })).not.toBeInTheDocument();
   });
-  test('offers a microphone and an output device before recording', async () => {
+  test('offers a microphone and an output device in meeting settings', async () => {
     mockBackend();
-    render(<MeetingsPage />);
+    render(<MeetingSettingsView />);
 
     const mic = (await screen.findByLabelText('Microphone')) as HTMLSelectElement;
     const system = screen.getByLabelText('System audio from') as HTMLSelectElement;
@@ -384,7 +385,7 @@ describe('MeetingsPage', () => {
 
   test('remembers the chosen device and records with it', async () => {
     mockBackend();
-    render(<MeetingsPage />);
+    const { unmount } = render(<MeetingSettingsView />);
 
     const mic = await screen.findByLabelText('Microphone');
     fireEvent.change(mic, { target: { value: 'Yeti Stereo Microphone' } });
@@ -394,8 +395,15 @@ describe('MeetingsPage', () => {
         devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
       });
     });
+    unmount();
 
-    fireEvent.click(screen.getByRole('button', { name: /start recording/i }));
+    // Now mock the saved devices returned to MeetingsPage
+    mockBackend({
+      get_meeting_devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
+    });
+    render(<MeetingsPage />);
+    const startBtn = await screen.findByRole('button', { name: /start recording/i });
+    fireEvent.click(startBtn);
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith('start_meeting', {
         title: undefined,
@@ -405,11 +413,11 @@ describe('MeetingsPage', () => {
     });
   });
 
-  test('says a saved device is gone rather than quietly reading as the default', async () => {
+  test('says a saved device is gone rather than quietly reading as the default in meeting settings', async () => {
     mockBackend({
       get_meeting_devices: { microphone: 'Unplugged USB Mic', system_audio: null },
     });
-    render(<MeetingsPage />);
+    render(<MeetingSettingsView />);
 
     const mic = (await screen.findByLabelText('Microphone')) as HTMLSelectElement;
     await waitFor(() => expect(mic.value).toBe('Unplugged USB Mic'));

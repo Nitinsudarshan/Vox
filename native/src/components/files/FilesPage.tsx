@@ -68,7 +68,7 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       setFiles(res);
     } catch (err) {
       console.error('Failed to load vault files:', err);
-      setErrorBanner('Failed to load Vault Files. Ensure Relay Vault is initialized.');
+      setErrorBanner('Failed to load Vault Files. Ensure Vox Vault is initialized.');
     } finally {
       setLoading(false);
     }
@@ -262,7 +262,7 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       await invoke('delete_vault_file', { id });
       setFiles((prev) => prev.filter((f) => f.id !== id));
       if (selectedFile?.id === id) setSelectedFile(null);
-      setSuccessBanner(`Moved ${filename} to Relay Trash (original file remains untouched).`);
+      setSuccessBanner(`Moved ${filename} to Vox Trash (original file remains untouched).`);
     } catch (err: any) {
       setErrorBanner(`Delete failed: ${err?.message || err}`);
     }
@@ -324,7 +324,7 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
             Files Vault
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Import existing documents into Relay's knowledge graph. Your original files outside Relay remain 100% untouched.
+            Import existing documents into Vox's knowledge graph. Your original files outside Vox remain 100% untouched.
           </p>
         </div>
 
@@ -430,7 +430,7 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
           <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
             {searchQuery || selectedFilter !== 'all'
               ? 'No imported files match your search criteria.'
-              : 'Add documents to Relay to extract text, summarize, analyze, and integrate into knowledge context.'}
+              : 'Add documents to Vox to extract text, summarize, analyze, and integrate into knowledge context.'}
           </p>
         </div>
       ) : (
@@ -466,7 +466,7 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
 
                   <button
                     onClick={() => setFileToDelete(file)}
-                    title="Move file to Relay Trash"
+                    title="Move file to Vox Trash"
                     className="p-1.5 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -545,7 +545,7 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       <ConfirmationModal
         isOpen={Boolean(fileToDelete)}
         title="Move File to Trash"
-        description={`Are you sure you want to move "${fileToDelete?.original_filename || 'this file'}" to Relay Trash? Deleted files remain in Trash for 30 days before permanent automatic purge.`}
+        description={`Are you sure you want to move "${fileToDelete?.original_filename || 'this file'}" to Vox Trash? Deleted files remain in Trash for 30 days before permanent automatic purge.`}
         confirmLabel="Move to Trash"
         variant="destructive"
         onConfirm={async () => {

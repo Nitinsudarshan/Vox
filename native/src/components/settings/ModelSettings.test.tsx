@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ProviderSettings } from './ProviderSettings';
 import { DiagnosticsPage } from '../diagnostics/DiagnosticsPage';
 import type { AppSettings, OllamaModelDetails, SttModelsOverview } from '../../types';
+import type { SpeechModelCatalogue } from '@/types/models';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -112,6 +113,54 @@ const MOCK_STT_OVERVIEW: SttModelsOverview = {
   ],
 };
 
+const MOCK_SPEECH_CATALOGUE: SpeechModelCatalogue = {
+  models_dir: 'C:\\Vox\\models',
+  models: [
+    {
+      id: 'whisper-base',
+      name: 'Base',
+      filename: 'ggml-base.bin',
+      path: 'C:\\Vox\\models\\ggml-base.bin',
+      size_bytes: 148000000,
+      installed: true,
+      managed: true,
+      multilingual: true,
+      parameters_millions: 39,
+      tier: 'fast',
+      blurb: 'Fast model',
+    },
+    {
+      id: 'whisper-small',
+      name: 'Small',
+      filename: 'ggml-small.bin',
+      path: 'C:\\Vox\\models\\ggml-small.bin',
+      size_bytes: 488000000,
+      installed: true,
+      managed: true,
+      multilingual: true,
+      parameters_millions: 244,
+      tier: 'balanced',
+      blurb: 'The default.',
+    },
+    {
+      id: 'whisper-large-v3-turbo',
+      name: 'Large v3 Turbo',
+      filename: 'ggml-large-v3-turbo.bin',
+      path: 'C:\\Vox\\models\\ggml-large-v3-turbo.bin',
+      size_bytes: 1624555275,
+      installed: false,
+      managed: true,
+      multilingual: true,
+      parameters_millions: 809,
+      tier: 'accurate',
+      blurb: 'The accuracy ceiling.',
+    },
+  ],
+  active_meeting_model: null,
+  active_dictation_model: 'whisper-small',
+  recommended_meeting_model: 'whisper-large-v3-turbo',
+};
+
 describe('AI Models & STT Settings — Refactored Model Selection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,6 +176,14 @@ describe('AI Models & STT Settings — Refactored Model Selection', () => {
           return { state: 'ready', path: 'C:\\Vox\\models\\ggml-small.bin' };
         case 'get_available_stt_models':
           return MOCK_STT_OVERVIEW;
+        case 'list_speech_models':
+          return MOCK_SPEECH_CATALOGUE;
+        case 'download_speech_model':
+          return { id: 'whisper-large-v3-turbo', name: 'Large v3 Turbo', installed: true };
+        case 'set_dictation_speech_model':
+          return undefined;
+        case 'set_meeting_speech_model':
+          return undefined;
         case 'get_audio_devices':
           return [{ name: 'Default Mic', is_default: true }];
         case 'get_app_version':
@@ -143,16 +200,22 @@ describe('AI Models & STT Settings — Refactored Model Selection', () => {
     });
   });
 
-  it('renders available Ollama models queried from backend instead of only raw text input', async () => {
-    render(<ProviderSettings initialSection="advanced" />);
+  it('renders available Ollama models queried from backend in AI & LLMs tab', async () => {
+    const user = userEvent.setup();
+    render(<ProviderSettings initialSection="speech" />);
 
-    // Wait for settings and models to load
+    // Switch to AI & LLM tab
+    await waitFor(() => {
+      expect(screen.getByText('AI & LLM')).toBeDefined();
+    });
+    await user.click(screen.getByText('AI & LLM'));
+
+    // Wait for models to load
     await waitFor(() => {
       expect(screen.getByText('qwen2.5:7b')).toBeDefined();
     });
 
-    // Both installed models should be rendered in the available models picker
-    expect(screen.getAllByText('llama3.2:latest').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('llama3.2:latest').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Available Models from Ollama (2)')).toBeDefined();
 
     // Verify parameter size badges
@@ -162,7 +225,12 @@ describe('AI Models & STT Settings — Refactored Model Selection', () => {
 
   it('allows user to select an available Ollama model', async () => {
     const user = userEvent.setup();
-    render(<ProviderSettings initialSection="advanced" />);
+    render(<ProviderSettings initialSection="speech" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('AI & LLM')).toBeDefined();
+    });
+    await user.click(screen.getByText('AI & LLM'));
 
     await waitFor(() => {
       expect(screen.getByText('qwen2.5:7b')).toBeDefined();
@@ -183,82 +251,51 @@ describe('AI Models & STT Settings — Refactored Model Selection', () => {
   });
 
   it('renders active STT model and data-driven available models list', async () => {
-    render(<ProviderSettings initialSection="advanced" />);
+    render(<ProviderSettings initialSection="speech" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Active STT Model')).toBeDefined();
+      expect(screen.getByText('Active Models:')).toBeDefined();
     });
 
-    // STT Model should be ready
-    expect(screen.getByText('✓ Model ready · Whisper')).toBeDefined();
-
-    // Available models list should show Whisper Base and Whisper Small
-    expect(screen.getByText('Available STT Models on Disk (3)')).toBeDefined();
-    expect(screen.getByText('Fast (Base Model)')).toBeDefined();
-    expect(screen.getByText('Accurate (Small Model)')).toBeDefined();
+    // Models list should show Base and Small cards
+    expect(screen.getByTestId('speech-model-card-whisper-base')).toBeDefined();
+    expect(screen.getByTestId('speech-model-card-whisper-small')).toBeDefined();
   });
-
-  // Two settings that shipped without a way to reach them: the accuracy tier
-  // was listed as "missing" with no download, and the decode preset had
-  // per-surface defaults with no control to override them.
 
   it('offers a download for a managed model that is listed but not on disk', async () => {
     const user = userEvent.setup();
-    render(<ProviderSettings initialSection="advanced" />);
+    render(<ProviderSettings initialSection="speech" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Whisper Large v3 Turbo')).toBeDefined();
+      expect(screen.getByTestId('speech-model-card-whisper-large-v3-turbo')).toBeDefined();
     });
 
-    const card = screen.getByText('Whisper Large v3 Turbo').closest('div.p-2\\.5');
-    expect(card).not.toBeNull();
-    const download = within(card as HTMLElement).getByRole('button', { name: /download/i });
+    const card = screen.getByTestId('speech-model-card-whisper-large-v3-turbo');
+    const download = within(card).getByRole('button', { name: /download/i });
 
     await user.click(download);
 
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith('download_stt_model', {
-        filename: 'ggml-large-v3-turbo.bin',
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('download_speech_model', {
+        id: 'whisper-large-v3-turbo',
       });
     });
   });
 
   it('does not offer a download for a model already on disk', async () => {
-    render(<ProviderSettings initialSection="advanced" />);
+    render(<ProviderSettings initialSection="speech" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Whisper Base')).toBeDefined();
+      expect(screen.getByTestId('speech-model-card-whisper-base')).toBeDefined();
     });
 
-    const card = screen.getByText('Whisper Base').closest('div.p-2\\.5');
-    expect(card).not.toBeNull();
-    expect(within(card as HTMLElement).queryByRole('button', { name: /download/i })).toBeNull();
-  });
-
-  it('exposes the decode preset and defaults to letting each surface choose', async () => {
-    const user = userEvent.setup();
-    render(<ProviderSettings initialSection="advanced" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Decode Preset')).toBeDefined();
-    });
-
-    // Automatic is the shipped default.
-    const automatic = screen.getByText('Automatic').closest('button');
-    expect(automatic?.className).toContain('border-primary');
-
-    const quality = screen.getByText('Quality').closest('button');
-    expect(quality).not.toBeNull();
-    await user.click(quality as HTMLElement);
-
-    await waitFor(() => {
-      expect(screen.getByText('Quality').closest('button')?.className).toContain('border-primary');
-    });
+    const card = screen.getByTestId('speech-model-card-whisper-base');
+    expect(within(card).queryByRole('button', { name: /download/i })).toBeNull();
   });
 
   it('includes a link to dedicated Diagnostics page and removes telemetry from configuration view', async () => {
     const onNavigateTab = vi.fn();
-    render(<ProviderSettings initialSection="advanced" onNavigateTab={onNavigateTab} />);
+    render(<ProviderSettings initialSection="speech" onNavigateTab={onNavigateTab} />);
 
     await waitFor(() => {
       expect(screen.getByText('Need Technical Testing or Observability?')).toBeDefined();
@@ -266,6 +303,8 @@ describe('AI Models & STT Settings — Refactored Model Selection', () => {
 
     const openDiagBtn = screen.getByText('Open Diagnostics');
     expect(openDiagBtn).toBeDefined();
+    await userEvent.click(openDiagBtn);
+    expect(onNavigateTab).toHaveBeenCalledWith('diagnostics');
 
     // Verify telemetry is NOT present on the settings page
     expect(screen.queryByText('Last Transcription Snapshot')).toBeNull();

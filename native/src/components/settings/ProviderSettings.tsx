@@ -58,6 +58,7 @@ import { MeetingSettingsView } from './MeetingSettingsView';
 import { SpeechModelsView } from './SpeechModelsView';
 import { CloudProviderSettings } from './CloudProviderSettings';
 import { OllamaInstallCard } from './OllamaInstallCard';
+import { UnifiedModelsView } from './UnifiedModelsView';
 
 export type SettingsSection =
   | 'account'
@@ -91,15 +92,13 @@ interface SettingsNavItem {
  * with several modes, and only the browser bridge is configured here.
  */
 const SETTINGS_NAV: SettingsNavItem[] = [
-  { id: 'account', label: 'Account & Identity', icon: User },
-  { id: 'general', label: 'General', icon: Sliders },
+  { id: 'general', label: 'General & Account', icon: Sliders },
   { id: 'dictation', label: 'Dictation & Audio', icon: Mic },
-  { id: 'speech', label: 'Speech', icon: AudioLines },
+  { id: 'speech', label: 'Models & Speech', icon: Cpu },
   { id: 'dictionary', label: 'Dictionary & Snippets', icon: BookOpen },
   { id: 'capture', label: 'Web Capture', icon: Globe },
   { id: 'meetings', label: 'Meetings', icon: Users },
   { id: 'languages', label: 'Languages & Script', icon: Languages },
-  { id: 'advanced', label: 'AI Models & STT', icon: Cpu },
   { id: 'privacy', label: 'Privacy & Vault', icon: ShieldCheck },
   { id: 'trash', label: 'Trash & Deleted', icon: Trash2, accent: 'text-amber-500' },
   { id: 'developer', label: 'Developer', icon: Terminal, accent: 'text-amber-500' },
@@ -190,15 +189,22 @@ interface ProviderSettingsProps {
   onNavigateTab?: (tab: MainTabType) => void;
 }
 
+const normalizeSection = (sec?: string): SettingsSection => {
+  if (!sec) return 'general';
+  if (sec === 'advanced') return 'speech';
+  if (sec === 'account') return 'general';
+  return sec as SettingsSection;
+};
+
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   initialSection = 'general',
   onNavigateTab,
 }) => {
-  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+  const [activeSection, setActiveSection] = useState<SettingsSection>(normalizeSection(initialSection));
 
   useEffect(() => {
     if (initialSection) {
-      setActiveSection(initialSection);
+      setActiveSection(normalizeSection(initialSection));
     }
   }, [initialSection]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -403,7 +409,12 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     try {
       const picked = await invoke<string | null>('choose_vault_folder');
       if (!picked) return;
-      setVaultLocation(await invoke<VaultLocationInfo>('set_vault_location', { path: picked }));
+      const info = await invoke<VaultLocationInfo>('set_vault_location', { path: picked });
+      setVaultLocation(info);
+      setSettings((prev) => ({
+        ...prev,
+        vault: { ...prev.vault, directory: picked },
+      }));
     } catch (err: any) {
       console.error('Failed to set Vault Directory Location', err);
       setVaultError(err?.message || "Couldn't use that folder — choose another.");
@@ -589,15 +600,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
         {error && <p className="mb-4 text-xs text-amber-500">{error}</p>}
 
-        {/* 0. ACCOUNT & IDENTITY SECTION */}
-        {activeSection === 'account' && (
-          <AccountSettings
-            settings={settings}
-            onUpdateSettings={setSettings}
-          />
-        )}
-
-        {/* 1. GENERAL SECTION */}
+        {/* 1. GENERAL & ACCOUNT SECTION */}
         {activeSection === 'general' && (
           <form onSubmit={handleSave} className="space-y-6">
             <div>
@@ -607,43 +610,82 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               <h2 className="text-lg font-bold text-foreground">Desktop App & Startup Defaults</h2>
             </div>
 
-            <div className="space-y-4">
-              {/* Show/Hide Global Hotkey */}
-              <div className="py-3 border-b border-border">
-                <div className="flex items-center gap-2 mb-2">
-                  <Keyboard className="w-4 h-4 text-primary" />
-                  <p className="text-xs font-semibold text-foreground">Show/Hide Hotkey</p>
-                </div>
-                <div className="max-w-md">
-                  <label htmlFor="show-hide-hotkey" className="block text-[11px] text-muted-foreground mb-1">
-                    Show/Hide Vox window (anywhere in the OS)
-                  </label>
-                  <HotkeyRecorder
-                    id="show-hide-hotkey"
-                    value={settings.hotkeys.show_hide_hotkey}
-                    onCapture={(accelerator) => applyHotkey('show_hide_hotkey', accelerator)}
-                  />
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-2">
-                  Click the box, then press your desired key combination — it takes effect immediately.
-                </p>
-              </div>
-
-              {/* Startup Group (OpenWhispr Style) */}
-              <div className="py-3 border-b border-border space-y-3">
-                <div className="flex items-center gap-2">
-                  <Power className="w-4 h-4 text-primary" />
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {/* Card 1: Hotkeys & Pill Position */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Keyboard className="w-4 h-4 text-primary" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Show/Hide Hotkey</p>
+                      <p className="text-[11px] text-muted-foreground">Toggle Vox window anywhere</p>
+                    </div>
+                  </div>
                   <div>
-                    <p className="text-xs font-semibold text-foreground">Startup</p>
-                    <p className="text-[11px] text-muted-foreground">Control how Vox behaves when it launches</p>
+                    <HotkeyRecorder
+                      id="show-hide-hotkey"
+                      value={settings.hotkeys.show_hide_hotkey}
+                      onCapture={(accelerator) => applyHotkey('show_hide_hotkey', accelerator)}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1.5">
+                      Click box, press desired key combination.
+                    </p>
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-lg bg-muted/40 border border-border space-y-3">
-                  <div className="flex items-center justify-between">
+                <div className="pt-3 border-t border-border/60">
+                  <p className="text-xs font-semibold text-foreground mb-0.5">Pill Screen Position</p>
+                  <p className="text-[11px] text-muted-foreground mb-2">
+                    Where the floating dictation pill anchors
+                  </p>
+                  <div className="flex bg-muted p-1 rounded-lg border border-border w-full">
+                    {(
+                      [
+                        { value: 'bottom_left', label: 'Left' },
+                        { value: 'bottom_center', label: 'Center' },
+                        { value: 'bottom_right', label: 'Right' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={async () => {
+                          const updated = { ...settings, ui: { ...settings.ui, pill_position: opt.value } };
+                          setSettings(updated);
+                          try {
+                            await invoke('set_pill_position', { position: opt.value });
+                          } catch (err) {
+                            console.error('Failed to set pill position', err);
+                          }
+                        }}
+                        className={`flex-1 px-2 py-1 text-xs font-medium rounded-md transition-all ${
+                          settings.ui.pill_position === opt.value
+                            ? 'bg-card text-foreground font-semibold shadow-xs'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Startup Behavior */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4">
+                <div className="flex items-center gap-2">
+                  <Power className="w-4 h-4 text-primary" />
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Startup Behavior</p>
+                    <p className="text-[11px] text-muted-foreground">Control launch and window states</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3.5 pt-1">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-foreground">Launch at login</p>
-                      <p className="text-[11px] text-muted-foreground">Start Vox in the background when you log in</p>
+                      <p className="text-[11px] text-muted-foreground">Start Vox in the background at log in</p>
                     </div>
                     <Switch
                       checked={settings.startup?.launch_at_login ?? false}
@@ -668,10 +710,10 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
                   <div className="h-px bg-border/60" />
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-foreground">Start minimized</p>
-                      <p className="text-[11px] text-muted-foreground">Launch without showing the main control panel window</p>
+                      <p className="text-[11px] text-muted-foreground">Launch without showing control panel</p>
                     </div>
                     <Switch
                       checked={settings.startup?.start_minimized ?? false}
@@ -696,65 +738,40 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 </div>
               </div>
 
-              {/* Floating Pill Position */}
-              <div className="py-3 border-b border-border">
-                <p className="text-xs font-semibold text-foreground mb-1">Pill Screen Position</p>
-                <p className="text-[11px] text-muted-foreground mb-2">
-                  Which edge of your screen the floating dictation pill anchors to
-                </p>
-                <div className="flex bg-muted p-1 rounded-lg border border-border w-fit">
-                  {(
-                    [
-                      { value: 'bottom_left', label: 'Bottom Left' },
-                      { value: 'bottom_center', label: 'Bottom Center' },
-                      { value: 'bottom_right', label: 'Bottom Right' },
-                    ] as const
-                  ).map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={async () => {
-                        const updated = { ...settings, ui: { ...settings.ui, pill_position: opt.value } };
-                        setSettings(updated);
-                        try {
-                          await invoke('set_pill_position', { position: opt.value });
-                        } catch (err) {
-                          console.error('Failed to set pill position', err);
-                        }
-                      }}
-                      className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-                        settings.ui.pill_position === opt.value
-                          ? 'bg-card text-foreground font-semibold shadow-xs'
-                          : 'text-muted-foreground'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-
-
-              {/* Vault Directory Location */}
-              <div className="py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
+              {/* Card 3: Vault Directory Location */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-primary" />
-                    <p className="text-xs font-semibold text-foreground">Vault Directory Location</p>
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Vault Storage</p>
+                      <p className="text-[11px] text-muted-foreground">Local markdown notes & vectors</p>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-muted-foreground font-mono truncate">
-                    {vaultLocation?.path || 'Loading…'}
-                  </p>
+
+                  <div className="p-2.5 rounded-lg bg-muted/40 border border-border/80">
+                    <p className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider mb-1">
+                      Active Directory
+                    </p>
+                    <p className="text-xs font-mono text-foreground break-all leading-tight">
+                      {vaultLocation?.path || 'Loading…'}
+                    </p>
+                  </div>
+
                   {vaultLocation && !vaultLocation.configured && (
-                    <p className="text-[10px] text-muted-foreground mt-0.5">Using the default location</p>
+                    <p className="text-[10px] text-muted-foreground">Using the default OS app location</p>
                   )}
-                  {vaultError && <p className="text-[10px] text-destructive mt-0.5">{vaultError}</p>}
+                  {vaultError && <p className="text-[10px] text-destructive">{vaultError}</p>}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {vaultLocation?.accessible === false && (
+
+                <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-2">
+                  {vaultLocation?.accessible === false ? (
                     <Badge variant="outline" className="text-xs font-mono border-destructive/50 text-destructive">
                       Inaccessible
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                      Accessible
                     </Badge>
                   )}
                   <Button
@@ -769,8 +786,16 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   </Button>
                 </div>
               </div>
+            </div>
 
-              <Button type="submit" size="sm" variant="default" className="mt-2">
+            {/* Account & Identity Subsection */}
+            <AccountSettings
+              settings={settings}
+              onUpdateSettings={setSettings}
+            />
+
+            <div className="pt-2">
+              <Button type="submit" size="sm" variant="default">
                 Save General Settings
               </Button>
             </div>
@@ -787,67 +812,113 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               <h2 className="text-lg font-bold text-foreground">Microphone, Clipboard & Sound Behavior</h2>
             </div>
 
-            <div className="space-y-4">
-              {/* Universal Dictation Hotkey */}
-              <div className="py-3 border-b border-border">
-                <div className="flex items-center gap-2 mb-2">
-                  <Keyboard className="w-4 h-4 text-primary" />
-                  <p className="text-xs font-semibold text-foreground">Universal Dictation Hotkey</p>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Card 1: Universal Dictation Hotkey & Toggle Mode */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Keyboard className="w-4 h-4 text-primary" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Universal Dictation Hotkey</p>
+                      <p className="text-[11px] text-muted-foreground">Dictate anywhere into the active focused field</p>
+                    </div>
+                  </div>
+                  <div>
+                    <HotkeyRecorder
+                      id="dictation-hotkey"
+                      value={settings.hotkeys.dictation_hotkey}
+                      onCapture={(accelerator) => applyHotkey('dictation_hotkey', accelerator)}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1.5">
+                      Press and hold (or toggle) to speak into any app.
+                    </p>
+                  </div>
                 </div>
-                <div className="max-w-md">
-                  <label htmlFor="dictation-hotkey" className="block text-[11px] text-muted-foreground mb-1">
-                    Dictate anywhere (types directly into active focused field)
-                  </label>
-                  <HotkeyRecorder
-                    id="dictation-hotkey"
-                    value={settings.hotkeys.dictation_hotkey}
-                    onCapture={(accelerator) => applyHotkey('dictation_hotkey', accelerator)}
+
+                <div className="pt-3 border-t border-border/60 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Toggle-to-Talk Mode</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Press once to start, press again to stop
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.hotkeys.toggle_to_talk}
+                    onCheckedChange={async (checked) => {
+                      const updated = {
+                        ...settings,
+                        hotkeys: { ...settings.hotkeys, toggle_to_talk: checked },
+                      };
+                      setSettings(updated);
+                      try {
+                        await invoke('save_settings', { settings: updated });
+                      } catch (err) {
+                        console.error('Failed to toggle toggle-to-talk mode', err);
+                      }
+                    }}
                   />
                 </div>
-                <p className="text-[10px] text-muted-foreground mt-2">
-                  Press and hold (or toggle) to speak into any text box across your operating system.
-                </p>
               </div>
 
-
-
-              {/* Toggle-to-Talk Switch */}
-              <div className="py-3 border-b border-border flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-foreground">Toggle-to-Talk Mode</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    Press dictation hotkey once to start recording, press again to finish — instead of holding the key.
-                  </p>
+              {/* Card 2: Sound Effects & Audio Tones */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Volume2 className="w-4 h-4 text-primary" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Sound Effects & Feedback</p>
+                      <p className="text-[11px] text-muted-foreground">Audio cues for dictation states</p>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/40 border border-border/80 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium text-foreground">Dictation Start / Stop Tone</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Play an audible chime when voice recording activates and completes
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.sound?.dictation_sounds ?? true}
+                      onCheckedChange={async (checked) => {
+                        const updated: AppSettings = {
+                          ...settings,
+                          sound: {
+                            ...settings.sound,
+                            dictation_sounds: checked,
+                          },
+                        };
+                        setSettings(updated);
+                        try {
+                          await invoke('save_settings', { settings: updated });
+                        } catch (err) {
+                          console.error('Failed to toggle dictation sounds', err);
+                        }
+                      }}
+                    />
+                  </div>
                 </div>
-                <Switch
-                  checked={settings.hotkeys.toggle_to_talk}
-                  onCheckedChange={async (checked) => {
-                    const updated = {
-                      ...settings,
-                      hotkeys: { ...settings.hotkeys, toggle_to_talk: checked },
-                    };
-                    setSettings(updated);
-                    try {
-                      await invoke('save_settings', { settings: updated });
-                    } catch (err) {
-                      console.error('Failed to toggle toggle-to-talk mode', err);
-                    }
-                  }}
-                />
+
+                <div className="p-2.5 rounded-lg bg-primary/5 border border-primary/20 text-[11px] text-muted-foreground">
+                  Sub-100ms low latency feedback is synced with your push-to-talk key presses.
+                </div>
               </div>
 
-              {/* Clipboard Group (OpenWhispr Style) */}
-              <div className="py-3 border-b border-border space-y-3">
+              {/* Card 3: Clipboard & Injection Method */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4">
                 <div className="flex items-center gap-2">
                   <Clipboard className="w-4 h-4 text-primary" />
-                  <p className="text-xs font-semibold text-foreground">Clipboard</p>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Clipboard & Text Injection</p>
+                    <p className="text-[11px] text-muted-foreground">Control how transcribed text reaches target apps</p>
+                  </div>
                 </div>
-                <div className="p-3.5 rounded-lg bg-muted/40 border border-border space-y-3">
-                  <div className="flex items-center justify-between">
+
+                <div className="space-y-3 pt-1">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-foreground">Automatic pasting</p>
                       <p className="text-[11px] text-muted-foreground">
-                        Automatically paste transcribed text into the active app when dictation finishes
+                        Paste transcribed text into active app when dictation finishes
                       </p>
                     </div>
                     <Switch
@@ -871,17 +942,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     />
                   </div>
 
-                  {/* Injection Method Selector */}
                   {(settings.clipboard?.auto_paste ?? true) && (
                     <>
                       <div className="h-px bg-border/60" />
                       <div className="space-y-2">
-                        <div>
-                          <p className="text-xs font-medium text-foreground">Injection Method</p>
-                          <p className="text-[11px] text-muted-foreground">
-                            Choose how transcribed text is inserted into the active application
-                          </p>
-                        </div>
+                        <p className="text-xs font-medium text-foreground">Injection Method</p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <button
                             type="button"
@@ -903,18 +968,18 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                                 console.error('Failed to update injection method', err);
                               }
                             }}
-                            className={`p-3 rounded-lg border text-left transition-all ${
+                            className={`p-2.5 rounded-lg border text-left transition-all ${
                               (settings.clipboard?.injection_method ?? 'clipboard_paste') === 'clipboard_paste'
                                 ? 'border-primary bg-primary/10 text-foreground shadow-xs'
                                 : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
                             }`}
                           >
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs font-bold text-foreground">Clipboard Paste (Instant)</span>
+                              <span className="text-xs font-bold text-foreground">Clipboard Paste</span>
                               <Badge variant="emerald" className="text-[9px] px-1.5 py-0">Default</Badge>
                             </div>
-                            <p className="text-[11px] text-muted-foreground leading-snug">
-                              Pastes text instantly via Ctrl+V. Fast and 100% reliable across all apps including Notepad, Word, and terminals.
+                            <p className="text-[10px] text-muted-foreground leading-snug">
+                              Instant Ctrl+V. Reliable across Notepad, browsers, Word, terminals.
                             </p>
                           </button>
 
@@ -938,17 +1003,17 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                                 console.error('Failed to update injection method', err);
                               }
                             }}
-                            className={`p-3 rounded-lg border text-left transition-all ${
+                            className={`p-2.5 rounded-lg border text-left transition-all ${
                               (settings.clipboard?.injection_method ?? 'clipboard_paste') === 'keystrokes'
                                 ? 'border-primary bg-primary/10 text-foreground shadow-xs'
                                 : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
                             }`}
                           >
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs font-bold text-foreground">Simulated Keystrokes</span>
+                              <span className="text-xs font-bold text-foreground">Simulated Keys</span>
                             </div>
-                            <p className="text-[11px] text-muted-foreground leading-snug">
-                              Simulates physical key presses per character. Use if the target application strictly blocks clipboard paste.
+                            <p className="text-[10px] text-muted-foreground leading-snug">
+                              Types each character physically. For apps that block pasting.
                             </p>
                           </button>
                         </div>
@@ -958,11 +1023,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
                   <div className="h-px bg-border/60" />
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-xs font-medium text-foreground">Keep transcription in clipboard</p>
+                      <p className="text-xs font-medium text-foreground">Keep in OS clipboard</p>
                       <p className="text-[11px] text-muted-foreground">
-                        Keep dictated text in your clipboard so you can paste it manually if needed
+                        Keep text in clipboard for manual pasting if desired
                       </p>
                     </div>
                     <Switch
@@ -988,22 +1053,22 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 </div>
               </div>
 
-              {/* Microphone Hardware & Warm-up (OpenWhispr Style) */}
-              <div className="py-3 border-b border-border space-y-3">
+              {/* Card 4: Microphone Hardware & Warm-up */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4">
                 <div className="flex items-center gap-2">
                   <Mic className="w-4 h-4 text-primary" />
                   <div>
-                    <p className="text-xs font-semibold text-foreground">Microphone</p>
-                    <p className="text-[11px] text-muted-foreground">Select which input device to use for dictation</p>
+                    <p className="text-xs font-semibold text-foreground">Microphone & Audio Input</p>
+                    <p className="text-[11px] text-muted-foreground">Device selection and warm-up latency</p>
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-lg bg-muted/40 border border-border space-y-3">
-                  <div className="flex items-center justify-between">
+                <div className="space-y-3 pt-1">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-foreground">Prefer Built-in Microphone</p>
                       <p className="text-[11px] text-muted-foreground">
-                        External microphones may cause latency or reduced transcription quality
+                        Lowers external microphone latency
                       </p>
                     </div>
                     <Switch
@@ -1028,11 +1093,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     />
                   </div>
 
-                  {/* Microphone choice. Until this existed the banner below
-                      reported a device from a setting nothing could set. */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="input-device" className="block text-xs font-semibold text-foreground">
-                      Microphone
+                  <div className="space-y-1">
+                    <label htmlFor="input-device" className="block text-xs font-medium text-foreground">
+                      Input Device
                     </label>
                     <select
                       id="input-device"
@@ -1055,7 +1118,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                           console.error('Failed to save microphone selection', err);
                         }
                       }}
-                      className="w-full text-xs rounded-lg border border-border bg-card/50 px-2 py-1.5 text-foreground"
+                      className="w-full text-xs rounded-md border border-border bg-background px-2.5 py-1.5 text-foreground"
                     >
                       <option value="">
                         System default{defaultDevice ? ` (${defaultDevice.name})` : ''}
@@ -1066,27 +1129,21 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                         </option>
                       ))}
                     </select>
-                    <p className="text-[10px] text-muted-foreground leading-snug">
-                      Applies to dictation. A device that is
-                      unplugged falls back to the system default rather than failing the
-                      recording.
-                    </p>
                   </div>
 
-                  {/* Active Input Device Badge (Green Banner) */}
-                  <div className="p-2.5 rounded-lg bg-emerald-500/10 dark:bg-emerald-950/30 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2 font-medium">
-                    <Mic className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span>Using: {activeDeviceName}</span>
+                  {/* Active Input Device Badge */}
+                  <div className="p-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2 font-medium">
+                    <Mic className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span className="truncate">Active: {activeDeviceName}</span>
                   </div>
 
                   <div className="h-px bg-border/60" />
 
-                  {/* Keep Microphone Warm */}
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-foreground">Keep Microphone Warm</p>
                       <p className="text-[11px] text-muted-foreground">
-                        After a dictation ends, keep the microphone open briefly so the next one starts instantly with nothing clipped
+                        Keep mic open briefly to eliminate start clip
                       </p>
                     </div>
                     <select
@@ -1108,53 +1165,21 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                           console.error('Failed to save keep mic warm', err);
                         }
                       }}
-                      className="h-8 rounded-md bg-background border border-input px-2.5 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="h-7 rounded-md bg-background border border-input px-2 text-xs text-foreground focus:outline-none"
                     >
                       <option value="off">Off</option>
-                      <option value="15s">15 seconds</option>
-                      <option value="30s">30 seconds</option>
-                      <option value="1m">1 minute</option>
-                      <option value="5m">5 minutes</option>
+                      <option value="15s">15s</option>
+                      <option value="30s">30s</option>
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
                     </select>
                   </div>
                 </div>
               </div>
+            </div>
 
-              {/* Sound Effects */}
-              <div className="py-3 border-b border-border space-y-3">
-                <div className="flex items-center gap-2">
-                  <Volume2 className="w-4 h-4 text-primary" />
-                  <p className="text-xs font-semibold text-foreground">Sound Effects</p>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium text-foreground">Dictation sounds</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Play a tone when recording starts and stops
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.sound?.dictation_sounds ?? true}
-                    onCheckedChange={async (checked) => {
-                      const updated: AppSettings = {
-                        ...settings,
-                        sound: {
-                          ...settings.sound,
-                          dictation_sounds: checked,
-                        },
-                      };
-                      setSettings(updated);
-                      try {
-                        await invoke('save_settings', { settings: updated });
-                      } catch (err) {
-                        console.error('Failed to toggle dictation sounds', err);
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-
-              <Button type="submit" size="sm" variant="default" className="mt-2">
+            <div className="pt-2">
+              <Button type="submit" size="sm" variant="default">
                 Save Dictation Settings
               </Button>
             </div>
@@ -1180,16 +1205,18 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               <h2 className="text-lg font-bold text-foreground">Language & Writing Script Preferences</h2>
             </div>
 
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Primary Dictation Language */}
-                <div>
-                  <label htmlFor="primary-dictation-lang" className="block text-xs font-medium text-foreground mb-1">
-                    Primary Dictation Language
-                  </label>
-                  <p className="text-[10px] text-muted-foreground mb-1.5">
-                    Default language for push-to-talk and quick speech-to-text.
-                  </p>
+            <div className="space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* 1. Primary Dictation Language */}
+                <div className="p-4 rounded-lg border border-border bg-card space-y-2 flex flex-col justify-between">
+                  <div>
+                    <label htmlFor="primary-dictation-lang" className="block text-xs font-semibold text-foreground mb-0.5">
+                      Primary Dictation Language
+                    </label>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      Default language for push-to-talk dictation
+                    </p>
+                  </div>
                   <select
                     id="primary-dictation-lang"
                     value={settings.language?.primary_dictation_language || 'en'}
@@ -1208,7 +1235,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                         },
                       });
                     }}
-                    className="w-full h-9 rounded-lg bg-background border border-input px-3 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="w-full h-8 rounded-md bg-background border border-input px-2 text-xs text-foreground focus:outline-none"
                   >
                     {WHISPER_SUPPORTED_LANGUAGES.map((lang) => (
                       <option key={lang.code} value={lang.code}>
@@ -1218,15 +1245,17 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   </select>
                 </div>
 
-                {/* Output Writing Script */}
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">
-                    Output Writing Script
-                  </label>
-                  <p className="text-[10px] text-muted-foreground mb-1.5">
-                    Controls alphabet used, independent of spoken language.
-                  </p>
-                  <div className="flex bg-muted p-1 rounded-lg border border-border">
+                {/* 2. Output Writing Script */}
+                <div className="p-4 rounded-lg border border-border bg-card space-y-2 flex flex-col justify-between">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-0.5">
+                      Output Writing Script
+                    </label>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      Alphabet format, independent of spoken language
+                    </p>
+                  </div>
+                  <div className="flex bg-muted p-1 rounded-lg border border-border w-full">
                     {[
                       { value: 'latin', label: 'Latin / English' },
                       { value: 'native', label: 'Native Script' },
@@ -1243,7 +1272,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                             },
                           })
                         }
-                        className={`flex-1 px-3 py-1 text-xs font-medium rounded-lg transition-all ${
+                        className={`flex-1 px-2 py-1 text-xs font-medium rounded-md transition-all ${
                           (settings.language?.output_script || 'latin') === opt.value
                             ? 'bg-card text-foreground font-semibold shadow-xs'
                             : 'text-muted-foreground hover:text-foreground'
@@ -1254,19 +1283,53 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     ))}
                   </div>
                 </div>
+
+                {/* 3. Notes & Summarization Language */}
+                <div className="p-4 rounded-lg border border-border bg-card space-y-2 flex flex-col justify-between">
+                  <div>
+                    <label htmlFor="notes-lang" className="block text-xs font-semibold text-foreground mb-0.5">
+                      Notes & Summarization Language
+                    </label>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      Language for synthesized notes and summaries
+                    </p>
+                  </div>
+                  <select
+                    id="notes-lang"
+                    value={settings.language?.notes_language || 'en'}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        language: {
+                          ...settings.language,
+                          notes_language: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full h-8 rounded-md bg-background border border-input px-2 text-xs text-foreground focus:outline-none"
+                  >
+                    {WHISPER_SUPPORTED_LANGUAGES.map((lang) => (
+                      <option key={lang.code} value={lang.code}>
+                        {lang.name} ({lang.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* Languages I Speak (Multi-select) */}
-              <div className="pt-2">
-                <label className="block text-xs font-medium text-foreground mb-1">
-                  Languages I Speak (Spoken Profile)
-                </label>
-                <p className="text-[10px] text-muted-foreground mb-2">
-                  Select all languages you commonly speak. Vox recognizes and transcribes speech across your spoken languages profile.
-                </p>
+              <div className="p-4 rounded-lg border border-border bg-card space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-foreground mb-0.5">
+                    Languages I Speak (Spoken Profile)
+                  </label>
+                  <p className="text-[11px] text-muted-foreground">
+                    Select all languages you commonly speak. Vox recognizes and transcribes speech across your profile.
+                  </p>
+                </div>
 
                 {/* Selected language chips */}
-                <div className="flex flex-wrap gap-1.5 mb-2.5 min-h-[32px] p-2 rounded-lg bg-muted/40 border border-border items-center">
+                <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 rounded-lg bg-muted/40 border border-border items-center">
                   {(settings.language?.spoken_languages || ['en']).map((code) => {
                     const langObj = WHISPER_SUPPORTED_LANGUAGES.find((l) => l.code === code);
                     const label = langObj ? `${langObj.name} (${code})` : code;
@@ -1275,7 +1338,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       <Badge
                         key={code}
                         variant="secondary"
-                        className="text-[11px] font-medium py-1 px-2.5 gap-1.5 rounded-lg border border-border/80 flex items-center bg-card text-foreground"
+                        className="text-[11px] font-medium py-1 px-2.5 gap-1.5 rounded-md border border-border/80 flex items-center bg-card text-foreground shadow-2xs"
                       >
                         <span>{label}</span>
                         {isPrimary && (
@@ -1307,9 +1370,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 </div>
 
                 {/* Quick-add toggle badges */}
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
                   <span className="text-[10px] text-muted-foreground mr-1">Quick add:</span>
-                  {WHISPER_SUPPORTED_LANGUAGES.slice(0, 10).map((lang) => {
+                  {WHISPER_SUPPORTED_LANGUAGES.slice(0, 12).map((lang) => {
                     const isSelected = (settings.language?.spoken_languages || ['en']).includes(lang.code);
                     if (isSelected) return null;
                     return (
@@ -1326,7 +1389,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                             },
                           });
                         }}
-                        className="px-2 py-0.5 text-[10px] rounded-lg border border-border bg-background text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
+                        className="px-2 py-0.5 text-[10px] rounded-md border border-border bg-background text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
                       >
                         + {lang.name}
                       </button>
@@ -1335,642 +1398,23 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 </div>
               </div>
 
-              {/* Notes & Summarization Language */}
-              <div className="py-3 border-t border-border">
-                <label htmlFor="notes-lang" className="block text-xs font-semibold text-foreground mb-1">
-                  Notes & Summarization Language
-                </label>
-                <p className="text-[11px] text-muted-foreground mb-2">
-                  Language used by local/cloud LLM when synthesizing structured voice notes and summaries.
-                </p>
-                <select
-                  id="notes-lang"
-                  value={settings.language?.notes_language || 'en'}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      language: {
-                        ...settings.language,
-                        notes_language: e.target.value,
-                      },
-                    })
-                  }
-                  className="max-w-md w-full h-9 rounded-lg bg-background border border-input px-3 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {WHISPER_SUPPORTED_LANGUAGES.map((lang) => (
-                    <option key={lang.code} value={lang.code}>
-                      {lang.name} ({lang.code})
-                    </option>
-                  ))}
-                </select>
+              <div className="pt-1">
+                <Button type="submit" size="sm" variant="default">
+                  Save Language Settings
+                </Button>
               </div>
-
-              <Button type="submit" size="sm" variant="default" className="mt-2">
-                Save Language Settings
-              </Button>
             </div>
           </form>
         )}
 
-        {/* 5. AI MODELS & STT SECTION */}
-        {activeSection === 'advanced' && (
-          <div className="space-y-6 animate-in fade-in-50">
-            {/* First, and only when it applies: without a local model nothing
-                below this can write a report. Renders nothing once Ollama is
-                running. */}
-            <OllamaInstallCard />
-
-            {/* Dedicated Diagnostics Redirect Banner */}
-            <div className="p-4 rounded-lg border border-primary/20 bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5 sm:mt-0">
-                  <Activity className="w-4 h-4" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-foreground">Need Technical Testing or Observability?</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
-                    Live audio telemetry, VAD decisions, decoding diagnostics, and STT accuracy benchmarking have moved to the dedicated Diagnostics page.
-                  </p>
-                </div>
-              </div>
-              {onNavigateTab && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onNavigateTab('diagnostics')}
-                  className="text-xs gap-1.5 shrink-0 self-start sm:self-auto border-primary/30 text-primary hover:bg-primary/10"
-                >
-                  <Activity className="w-3.5 h-3.5" />
-                  Open Diagnostics
-                </Button>
-              )}
-            </div>
-
-            <form onSubmit={handleSave} className="space-y-6">
-              <div>
-                <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
-                  AI INTELLIGENCE & SPEECH ENGINE
-                </p>
-                <h2 className="text-lg font-bold text-foreground">Model Configuration & Selection</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Configure local or cloud LLM intelligence and universal speech-to-text models.
-                </p>
-              </div>
-
-              <div className="space-y-6">
-                {/* 1. ACTIVE LLM BACKEND */}
-                <div className="p-4 rounded-lg border border-border bg-card/60 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-border/60">
-                    <div>
-                      <p className="text-xs font-semibold text-foreground">Active LLM Execution Backend</p>
-                      <p className="text-[11px] text-muted-foreground">100% Local Ollama ($0) vs OpenAI / Gemini / Claude Cloud API</p>
-                    </div>
-                    <div className="flex bg-muted p-1 rounded-lg border border-border shrink-0 self-start sm:self-auto">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSettings({ ...settings, provider: { ...settings.provider, active_provider: 'ollama' } })
-                        }
-                        className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-                          settings.provider.active_provider === 'ollama'
-                            ? 'bg-card text-foreground font-semibold shadow-xs'
-                            : 'text-muted-foreground'
-                        }`}
-                      >
-                        Local Ollama
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSettings({ ...settings, provider: { ...settings.provider, active_provider: 'cloud_openai' } })
-                        }
-                        className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-                          settings.provider.active_provider !== 'ollama'
-                            ? 'bg-card text-foreground font-semibold shadow-xs'
-                            : 'text-muted-foreground'
-                        }`}
-                      >
-                        Cloud API
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Local Ollama Options */}
-                  {settings.provider.active_provider === 'ollama' ? (
-                    <div className="space-y-4">
-                      {/* Host & Health */}
-                      <div className="space-y-2">
-                        <label htmlFor="ollama-host" className="block text-xs font-medium text-foreground">
-                          Ollama Host Endpoint
-                        </label>
-                        <div className="flex gap-2">
-                          <Input
-                            id="ollama-host"
-                            value={settings.provider.ollama_host}
-                            onChange={(e) =>
-                              setSettings({ ...settings, provider: { ...settings.provider, ollama_host: e.target.value } })
-                            }
-                            placeholder="http://localhost:11434"
-                            className="text-xs"
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => checkLocalLlm(settings.provider.ollama_host)}
-                            className="text-xs gap-1.5 shrink-0"
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 ${ollamaStatus.state === 'checking' ? 'animate-spin' : ''}`} />
-                            Scan Models
-                          </Button>
-                        </div>
-
-                        {/* Status readout */}
-                        <div className="flex items-center gap-2 text-xs pt-1">
-                          {ollamaStatus.state === 'checking' && (
-                            <Badge variant="outline" className="text-[10px] font-mono">Checking local Ollama…</Badge>
-                          )}
-                          {ollamaStatus.state === 'running' && (
-                            <Badge variant="emerald" className="text-[10px] font-mono">Ollama running ✓</Badge>
-                          )}
-                          {ollamaStatus.state === 'started' && (
-                            <Badge variant="emerald" className="text-[10px] font-mono">Vox started Ollama for you ✓</Badge>
-                          )}
-                          {ollamaStatus.state === 'not_installed' && (
-                            <Badge variant="outline" className="text-[10px] font-mono border-amber-500/50 text-amber-500">
-                              Ollama isn't installed — install Ollama once to run locally
-                            </Badge>
-                          )}
-                          {ollamaStatus.state === 'unreachable' && (
-                            <Badge variant="outline" className="text-[10px] font-mono border-destructive/50 text-destructive">
-                              {ollamaStatus.message || 'Ollama is unreachable'}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Active & Available Models */}
-                      <div className="space-y-3 pt-2">
-                        <div className="flex items-center justify-between">
-                          <label className="block text-xs font-semibold text-foreground">
-                            Active LLM Model
-                          </label>
-                          {/* Readiness badge for currently selected model */}
-                          {(() => {
-                            const isInstalled = ollamaModels.some(
-                              (m) => m.name === settings.provider.ollama_model || m.model === settings.provider.ollama_model
-                            );
-                            if (ollamaStatus.state === 'checking') {
-                              return <Badge variant="outline" className="text-[10px] font-mono">↻ Checking</Badge>;
-                            }
-                            if (ollamaStatus.state === 'running' || ollamaStatus.state === 'started') {
-                              if (isInstalled) {
-                                return <Badge variant="emerald" className="text-[10px] font-mono">✓ Ready · Ollama</Badge>;
-                              } else {
-                                return (
-                                  <Badge variant="outline" className="text-[10px] font-mono border-amber-500/50 text-amber-500">
-                                    ⚠ Model not found
-                                  </Badge>
-                                );
-                              }
-                            }
-                            return (
-                              <Badge variant="outline" className="text-[10px] font-mono border-destructive/50 text-destructive">
-                                ✕ Backend unavailable
-                              </Badge>
-                            );
-                          })()}
-                        </div>
-
-                        {/* Active Model Summary Card */}
-                        <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 flex items-center justify-between">
-                          <div className="space-y-0.5">
-                            <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground font-semibold">
-                              Current Selection
-                            </span>
-                            <p className="text-sm font-bold text-foreground font-mono">
-                              {settings.provider.ollama_model || 'llama3.2:latest'}
-                            </p>
-                          </div>
-                          {ollamaModels.some((m) => m.name === settings.provider.ollama_model) ? (
-                            <Badge variant="emerald" className="text-[10px] font-mono">
-                              Installed
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-[10px] font-mono border-amber-500/50 text-amber-500">
-                              Not in registry
-                            </Badge>
-                          )}
-                        </div>
-
-                        {/* Available Models Picker */}
-                        <div className="space-y-2">
-                          <span className="text-[11px] font-medium text-foreground">
-                            Available Models from Ollama ({ollamaModels.length})
-                          </span>
-
-                          {loadingOllamaModels ? (
-                            <div className="p-4 text-center text-xs text-muted-foreground border border-dashed rounded-lg">
-                              Scanning models from Ollama…
-                            </div>
-                          ) : ollamaModels.length > 0 ? (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              {ollamaModels.map((m) => {
-                                const isSelected = settings.provider.ollama_model === m.name;
-                                return (
-                                  <button
-                                    key={m.name}
-                                    type="button"
-                                    onClick={() =>
-                                      setSettings({
-                                        ...settings,
-                                        provider: { ...settings.provider, ollama_model: m.name },
-                                      })
-                                    }
-                                    className={`p-2.5 rounded-lg border text-left transition-all flex items-start justify-between ${
-                                      isSelected
-                                        ? 'border-primary bg-primary/10 text-foreground shadow-xs'
-                                        : 'border-border bg-muted/20 text-muted-foreground hover:border-border/80 hover:text-foreground'
-                                    }`}
-                                  >
-                                    <div className="space-y-1 min-w-0 pr-2">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-xs font-semibold font-mono truncate">{m.name}</span>
-                                        {isSelected && (
-                                          <Check className="w-3.5 h-3.5 text-primary shrink-0" />
-                                        )}
-                                      </div>
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        {m.parameter_size && (
-                                          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
-                                            {m.parameter_size}
-                                          </Badge>
-                                        )}
-                                        {m.quantization_level && (
-                                          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
-                                            {m.quantization_level}
-                                          </Badge>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <span className="text-[10px] font-mono text-muted-foreground shrink-0">
-                                      {m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB` : ''}
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="p-3.5 rounded-lg border border-border bg-muted/20 text-xs text-muted-foreground space-y-1">
-                              <p className="font-semibold text-foreground">No installed models found in Ollama.</p>
-                              <p className="text-[11px]">
-                                Run <code className="px-1.5 py-0.5 rounded bg-muted border border-border font-mono text-foreground">ollama pull llama3.2</code> in your terminal, or enter a model name manually below.
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Manual / Custom Model toggle */}
-                          <div className="pt-2">
-                            <button
-                              type="button"
-                              onClick={() => setCustomLlmMode(!customLlmMode)}
-                              className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-                            >
-                              {customLlmMode ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                              <span>{customLlmMode ? 'Hide advanced model input' : 'Specify custom / unpulled model name manually…'}</span>
-                            </button>
-
-                            {customLlmMode && (
-                              <div className="mt-2 space-y-1 animate-in fade-in-50">
-                                <label htmlFor="custom-ollama-model" className="block text-[11px] text-muted-foreground">
-                                  Manual Model Name
-                                </label>
-                                <Input
-                                  id="custom-ollama-model"
-                                  value={settings.provider.ollama_model}
-                                  onChange={(e) =>
-                                    setSettings({
-                                      ...settings,
-                                      provider: { ...settings.provider, ollama_model: e.target.value },
-                                    })
-                                  }
-                                  placeholder="e.g. qwen2.5:7b, gemma3:4b"
-                                  className="text-xs"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Cloud API Options */
-                    <CloudProviderSettings
-                      provider={settings.provider}
-                      onChange={(next) => setSettings({ ...settings, provider: next })}
-                    />
-                  )}
-                </div>
-
-                {/* 2. SPEECH-TO-TEXT MODEL (WHISPER) */}
-                <div className="p-4 rounded-lg border border-border bg-card/60 space-y-4">
-                  <div className="flex items-center justify-between pb-3 border-b border-border/60">
-                    <div className="flex items-center gap-2">
-                      <Mic className="w-4 h-4 text-primary" />
-                      <div>
-                        <p className="text-xs font-semibold text-foreground">Speech-to-Text Model (Whisper)</p>
-                        <p className="text-[11px] text-muted-foreground">On-device acoustic transcription via GGML Whisper</p>
-                      </div>
-                    </div>
-                    {/* Active STT Model Status Badge */}
-                    {sttOverview?.models.find((m) => m.path === sttOverview.active_model_path)?.status === 'ready' ? (
-                      <Badge variant="emerald" className="text-[10px] font-mono">✓ Model ready · Whisper</Badge>
-                    ) : sttModelStatus.state === 'checking' ? (
-                      <Badge variant="outline" className="text-[10px] font-mono">↻ Checking</Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] font-mono border-amber-500/50 text-amber-500">
-                        ⚠ Model missing
-                      </Badge>
-                    )}
-                  </div>
-
-                  {/* Active STT Model Readout */}
-                  <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 flex items-center justify-between">
-                    <div className="space-y-0.5 min-w-0 pr-2">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground font-semibold">
-                        Active STT Model
-                      </span>
-                      <p className="text-sm font-bold text-foreground font-mono truncate">
-                        {sttOverview?.active_model_name || 'Whisper Small (Default)'}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground font-mono truncate">
-                        {sttOverview?.active_model_path || '%APPDATA%\\Vox\\models\\ggml-small.bin'}
-                      </p>
-                    </div>
-                    <Badge variant="emerald" className="text-[10px] font-mono shrink-0">
-                      Active
-                    </Badge>
-                  </div>
-
-                  {/* Available STT Models List */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-foreground">
-                        Available STT Models on Disk ({sttOverview?.models.length || 0})
-                      </span>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={fetchSttModels}
-                        disabled={loadingSttModels}
-                        className="text-[11px] h-6 px-2 gap-1"
-                      >
-                        <RefreshCw className={`w-3 h-3 ${loadingSttModels ? 'animate-spin' : ''}`} />
-                        Scan
-                      </Button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {sttOverview?.models.map((m) => {
-                        const isActive = m.path === sttOverview.active_model_path;
-                        return (
-                          <div
-                            key={m.filename}
-                            className={`p-2.5 rounded-lg border text-xs space-y-1 ${
-                              isActive
-                                ? 'border-primary bg-primary/10 text-foreground'
-                                : 'border-border bg-muted/20 text-muted-foreground'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-foreground flex items-center gap-1.5">
-                                {m.name}
-                                {isActive && <Check className="w-3.5 h-3.5 text-primary" />}
-                              </span>
-                              <Badge
-                                variant={m.status === 'ready' ? 'emerald' : 'outline'}
-                                className="text-[9px] font-mono"
-                              >
-                                {m.status === 'ready' ? '✓ Ready' : '⚠ Missing'}
-                              </Badge>
-                            </div>
-                            <div className="text-[10px] font-mono text-muted-foreground flex items-center justify-between">
-                              <span>{m.filename}</span>
-                              <span>{m.size_bytes ? `${(m.size_bytes / (1024 * 1024)).toFixed(0)} MB` : ''}</span>
-                            </div>
-
-                            {/* The overview has always listed a missing managed
-                                model so the option is visible rather than
-                                hidden. This is the offer it was listed for. */}
-                            {m.is_managed && m.status !== 'ready' && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => downloadSttModel(m.filename)}
-                                disabled={downloadingModel !== null}
-                                className="w-full text-[11px] h-7 gap-1.5 mt-1"
-                              >
-                                {downloadingModel === m.filename ? (
-                                  <>
-                                    <RefreshCw className="w-3 h-3 animate-spin" />
-                                    Downloading…
-                                  </>
-                                ) : (
-                                  <>
-                                    <Download className="w-3 h-3" />
-                                    Download
-                                  </>
-                                )}
-                              </Button>
-                            )}
-
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {modelDownloadError && (
-                      <div className="p-2 rounded-lg border border-destructive/30 bg-destructive/10 text-destructive text-[11px] flex items-start gap-1.5">
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
-                        <span>{modelDownloadError}</span>
-                      </div>
-                    )}
-
-                    <p className="text-[10px] text-muted-foreground leading-snug">
-                      Whisper Large v3 Turbo is the accuracy ceiling and a ~1.6 GB download. It is
-                      markedly better on Hindi and other non-English speech than Small, and slower
-                      on every utterance. Downloading it does not switch to it.
-                    </p>
-                  </div>
-
-                  {/* Performance Profile Toggle */}
-                  <div className="space-y-2 pt-2">
-                    <label className="block text-xs font-semibold text-foreground">
-                      Universal Dictation Performance Profile
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSettings({
-                            ...settings,
-                            stt: {
-                              ...settings.stt,
-                              dictation_quality: 'fast',
-                              dictationQuality: 'fast',
-                              whisper_model_path: null,
-                            },
-                          });
-                        }}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          (settings.stt.dictation_quality ?? 'fast') === 'fast' &&
-                          !settings.stt.whisper_model_path
-                            ? 'border-primary bg-primary/10 text-foreground shadow-xs'
-                            : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-bold text-foreground">Fast (Base Model)</span>
-                          <Badge variant="emerald" className="text-[9px] px-1.5 py-0">~0.8s</Badge>
-                        </div>
-                        <p className="text-[11px] text-muted-foreground leading-snug">
-                          3x lower latency using Base model (39M params). Recommended for conversational speech.
-                        </p>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSettings({
-                            ...settings,
-                            stt: {
-                              ...settings.stt,
-                              dictation_quality: 'accurate',
-                              dictationQuality: 'accurate',
-                              whisper_model_path: null,
-                            },
-                          });
-                        }}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          settings.stt.dictation_quality === 'accurate' &&
-                          !settings.stt.whisper_model_path
-                            ? 'border-primary bg-primary/10 text-foreground shadow-xs'
-                            : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-bold text-foreground">Accurate (Small Model)</span>
-                          <Badge variant="outline" className="text-[9px] px-1.5 py-0">~2.4s</Badge>
-                        </div>
-                        <p className="text-[11px] text-muted-foreground leading-snug">
-                          Maximum vocabulary fidelity (244M params). Recommended for complex technical monologues.
-                        </p>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Decode Preset */}
-                  <div className="space-y-2 pt-2">
-                    <label className="block text-xs font-semibold text-foreground">
-                      Decode Preset
-                    </label>
-                    <p className="text-[11px] text-muted-foreground leading-snug">
-                      Trades decode time for how much borderline speech survives.
-                    </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {([
-                        {
-                          value: '',
-                          label: 'Automatic',
-                          hint: 'Fast for dictation',
-                        },
-                        { value: 'fast', label: 'Fast', hint: 'Greedy. Lowest latency' },
-                        { value: 'balanced', label: 'Balanced', hint: 'Beam search at 3' },
-                        { value: 'quality', label: 'Quality', hint: 'Beam search at 5. Keeps the most' },
-                      ] as const).map((option) => {
-                        const current = settings.stt.preset ?? settings.stt.sttPreset ?? '';
-                        const selected = current === option.value;
-                        return (
-                          <button
-                            key={option.value || 'auto'}
-                            type="button"
-                            onClick={() => {
-                              setSettings({
-                                ...settings,
-                                stt: {
-                                  ...settings.stt,
-                                  preset: option.value,
-                                  sttPreset: option.value,
-                                },
-                              });
-                            }}
-                            className={`p-2.5 rounded-lg border text-left transition-all ${
-                              selected
-                                ? 'border-primary bg-primary/10 text-foreground shadow-xs'
-                                : 'border-border bg-card/50 text-muted-foreground hover:border-border/80'
-                            }`}
-                          >
-                            <div className="text-[11px] font-bold text-foreground mb-0.5">
-                              {option.label}
-                            </div>
-                            <p className="text-[10px] text-muted-foreground leading-snug">
-                              {option.hint}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Custom Model Path (Advanced) */}
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setCustomSttMode(!customSttMode)}
-                      className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-                    >
-                      {customSttMode ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      <span>{customSttMode ? 'Hide custom model path' : 'Use external or custom GGML model file…'}</span>
-                    </button>
-
-                    {customSttMode && (
-                      <div className="mt-2 space-y-1 animate-in fade-in-50">
-                        <label htmlFor="whisper-model-path" className="block text-[11px] text-muted-foreground">
-                          Custom GGML Model Path (leave empty to use Vox managed models)
-                        </label>
-                        <Input
-                          id="whisper-model-path"
-                          placeholder="e.g. C:\models\ggml-medium.bin"
-                          value={settings.stt.whisper_model_path || ''}
-                          onChange={(e) =>
-                            setSettings({
-                              ...settings,
-                              stt: { ...settings.stt, whisper_model_path: e.target.value },
-                            })
-                          }
-                          className="text-xs"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <Button type="submit" size="sm" variant="default" className="text-xs">
-                    Save Engine Settings
-                  </Button>
-                  {saved && (
-                    <span className="text-xs font-medium text-emerald-500 animate-in fade-in-50">
-                      Settings saved successfully ✓
-                    </span>
-                  )}
-                </div>
-              </div>
-            </form>
-          </div>
+        {/* 5. MODELS & SPEECH HUB */}
+        {activeSection === 'speech' && (
+          <UnifiedModelsView
+            settings={settings}
+            onUpdateSettings={setSettings}
+            onSaveDirect={handleSaveDirect}
+            onNavigateTab={onNavigateTab}
+          />
         )}
 
         {/* 6. PRIVACY & VAULT SECTION */}
@@ -1998,42 +1442,52 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             )}
 
             <div className="space-y-4">
-              {/* Privacy Overview */}
-              <div className="p-4 rounded-lg bg-muted/40 border border-border space-y-2">
-                <div className="flex items-center gap-2 text-primary font-semibold text-xs">
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>100% Local-First Processing</span>
+              {/* Privacy Overview & Safe Export (2 Columns) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-lg bg-card border border-border space-y-2 flex flex-col justify-between">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 text-primary font-semibold text-xs">
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>100% Local-First Processing</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Vox operates locally on your machine. Voice transcriptions, raw audio recordings, markdown notes,
+                      and LanceDB vectors stay inside your local directory. No third-party tracking or telemetry is collected.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="w-fit text-[10px] font-mono text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                    Local Device Isolation
+                  </Badge>
                 </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Vox operates locally on your machine. Voice transcriptions, raw audio recordings, markdown notes,
-                  and LanceDB vectors stay inside your local directory. No third-party tracking or telemetry is collected.
-                </p>
-              </div>
 
-              {/* Safe Export Action */}
-              <div className="p-4 rounded-lg bg-card border border-border flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-foreground">Export All Vault Data</p>
-                  <p className="text-[11px] text-muted-foreground">Download full backup of notes, tasks, and LanceDB embeddings</p>
+                <div className="p-4 rounded-lg bg-card border border-border flex flex-col justify-between space-y-3">
+                  <div>
+                    <p className="text-xs font-bold text-foreground">Export All Vault Data</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Direct access to your stored markdown notes, audio transcripts, and LanceDB embeddings folder on disk.
+                    </p>
+                  </div>
+                  <div className="pt-2 flex justify-end">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="gap-2 text-xs h-8"
+                      onClick={async () => {
+                        const dir = vaultLocation?.path;
+                        if (dir) {
+                          try {
+                            await invoke('open_vault_in_explorer');
+                          } catch {
+                            alert(`Your vault is stored at: ${dir}`);
+                          }
+                        }
+                      }}
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Explore Vault Folder</span>
+                    </Button>
+                  </div>
                 </div>
-                <Button
-                  variant="default"
-                  size="sm"
-                  className="gap-2 text-xs"
-                  onClick={async () => {
-                    const dir = vaultLocation?.path;
-                    if (dir) {
-                      try {
-                        await invoke('open_vault_in_explorer');
-                      } catch {
-                        alert(`Your vault is stored at: ${dir}`);
-                      }
-                    }
-                  }}
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Explore Vault Folder</span>
-                </Button>
               </div>
 
               {/* Destructive Actions Section */}
@@ -2303,8 +1757,6 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         )}
 
         {activeSection === 'capture' && <CaptureSettingsView />}
-
-        {activeSection === 'speech' && <SpeechModelsView />}
 
         {activeSection === 'meetings' && <MeetingSettingsView />}
 

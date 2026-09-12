@@ -521,7 +521,7 @@ pub fn default_snippets() -> Vec<SnippetItem> {
 
 pub fn default_dictionary_words() -> Vec<String> {
     vec![
-        "Relay".to_string(),
+        "Vox".to_string(),
         "Whisper".to_string(),
         "Tauri".to_string(),
         "Rust".to_string(),

@@ -101,206 +101,221 @@ export const CaptureSettingsView: React.FC = () => {
         </p>
       )}
 
-      <section className="rounded-lg border border-border p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-xs font-semibold text-foreground">Browser capture</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Lets the Vox browser extension send captures to this computer. Vox listens only
-              on <code className="rounded bg-muted px-1">127.0.0.1</code> — never on your network —
-              and only accepts captures signed with the pairing token below.
-            </p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Browser Capture Toggle & Status */}
+        <section className="rounded-lg border border-border p-4 bg-card flex flex-col justify-between space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-xs font-semibold text-foreground">Browser capture</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Lets the Vox browser extension send captures to this computer. Vox listens only
+                on <code className="rounded bg-muted px-1">127.0.0.1</code> and only accepts captures signed with your pairing token.
+              </p>
+            </div>
+            <Switch
+              checked={status.enabled}
+              disabled={busy !== null}
+              aria-label="Browser capture"
+              onCheckedChange={(checked) =>
+                void run('toggle', () =>
+                  invoke<CaptureBridgeStatus>('set_capture_bridge_enabled', { enabled: checked }),
+                )
+              }
+            />
           </div>
-          <Switch
-            checked={status.enabled}
-            disabled={busy !== null}
-            aria-label="Browser capture"
-            onCheckedChange={(checked) =>
-              void run('toggle', () =>
-                invoke<CaptureBridgeStatus>('set_capture_bridge_enabled', { enabled: checked }),
-              )
-            }
-          />
-        </div>
 
-        <p className="mt-3 flex items-center gap-1.5 text-xs">
-          {status.running ? (
-            <>
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-              <span className="text-emerald-600 dark:text-emerald-400">
-                Listening on 127.0.0.1:{status.port}
-              </span>
-            </>
-          ) : (
-            <>
-              <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-muted-foreground">Not listening</span>
-            </>
-          )}
-        </p>
+          <div className="pt-2 border-t border-border/60">
+            <p className="flex items-center gap-1.5 text-xs font-medium">
+              {status.running ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                  <span className="text-emerald-600 dark:text-emerald-400 font-mono">
+                    Listening on 127.0.0.1:{status.port}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-muted-foreground">Not listening</span>
+                </>
+              )}
+            </p>
 
-        {status.running && status.port !== status.configured_port && (
-          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-            Port {status.configured_port} was already in use, so Vox is on {status.port}. Use{' '}
-            {status.port} when pairing.
-          </p>
-        )}
-      </section>
+            {status.running && status.port !== status.configured_port && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                Port {status.configured_port} was already in use, so Vox is on {status.port}. Use{' '}
+                {status.port} when pairing.
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* Analyse Each Capture */}
+        <section className="rounded-lg border border-border p-4 bg-card flex flex-col justify-between space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <Sparkles className="h-3.5 w-3.5 text-primary" /> Analyse each capture
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Summarise and tag a capture as soon as it arrives into your vault.
+                Turning this off leaves the raw capture intact while skipping automatic AI synthesis passes.
+              </p>
+            </div>
+            <Switch
+              checked={status.analyze_on_capture}
+              disabled={busy !== null}
+              aria-label="Analyse each capture"
+              onCheckedChange={(checked) =>
+                void run('analyse', () =>
+                  invoke<CaptureBridgeStatus>('set_capture_analyze_on_capture', { enabled: checked }),
+                )
+              }
+            />
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-primary/5 border border-primary/20 text-[11px] text-muted-foreground">
+            Processed via your active local Ollama or cloud provider model.
+          </div>
+        </section>
+      </div>
 
       {status.enabled && (
-        <section className="rounded-lg border border-border p-4">
+        <section className="rounded-lg border border-border p-4 bg-card space-y-3">
           <h3 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
             <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Pair a browser
           </h3>
-          <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
-            <li>
-              Install the Vox extension — <strong>Load unpacked</strong> from{' '}
-              <code className="rounded bg-muted px-1">native/browser-extension</code>.
-            </li>
-            <li>Open the extension&apos;s Options.</li>
-            <li>Paste the port and token below, then choose <strong>Save and test</strong>.</li>
-          </ol>
 
-          <div className="mt-3 space-y-2">
-            <label className="block text-[11px] font-medium text-muted-foreground" htmlFor="capture-port">
-              Port
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="capture-port"
-                type="number"
-                min={1024}
-                max={65535}
-                value={portDraft}
-                onChange={(event) => setPortDraft(event.target.value)}
-                className="w-28 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-              <button
-                type="button"
-                disabled={busy !== null || Number(portDraft) === status.configured_port}
-                onClick={() =>
-                  void run('port', () =>
-                    invoke<CaptureBridgeStatus>('set_capture_bridge_port', {
-                      port: Number(portDraft),
-                    }),
-                  )
-                }
-                className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-              >
-                Use this port
-              </button>
-              <button
-                type="button"
-                onClick={() => void copy(String(status.port), 'port')}
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Copy the port"
-              >
-                {copied === 'port' ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-500" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </button>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-1">
+            <div>
+              <p className="text-xs font-medium text-foreground mb-1.5">Pairing Steps</p>
+              <ol className="list-decimal space-y-1.5 pl-4 text-xs text-muted-foreground">
+                <li>
+                  Install the Vox extension — <strong>Load unpacked</strong> from{' '}
+                  <code className="rounded bg-muted px-1 font-mono">native/browser-extension</code>.
+                </li>
+                <li>Open the extension&apos;s Options page.</li>
+                <li>Paste the port and token on the right, then choose <strong>Save and test</strong>.</li>
+              </ol>
             </div>
 
-            <label className="block pt-2 text-[11px] font-medium text-muted-foreground" htmlFor="capture-token">
-              Pairing token
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="capture-token"
-                readOnly
-                value={status.pairing_token ?? ''}
-                className="flex-1 rounded-md border border-border bg-muted/40 px-2 py-1.5 font-mono text-xs text-foreground"
-              />
-              <button
-                type="button"
-                onClick={() => void copy(status.pairing_token ?? '', 'token')}
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Copy the pairing token"
-              >
-                {copied === 'token' ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-500" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </button>
-              <button
-                type="button"
-                disabled={busy !== null}
-                onClick={() =>
-                  void run('token', () =>
-                    invoke<CaptureBridgeStatus>('regenerate_capture_pairing_token'),
-                  )
-                }
-                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-              >
-                {busy === 'token' ? (
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                New token
-              </button>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-medium text-muted-foreground mb-1" htmlFor="capture-port">
+                  Bridge Port
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="capture-port"
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={portDraft}
+                    onChange={(event) => setPortDraft(event.target.value)}
+                    className="w-28 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy !== null || Number(portDraft) === status.configured_port}
+                    onClick={() =>
+                      void run('port', () =>
+                        invoke<CaptureBridgeStatus>('set_capture_bridge_port', {
+                          port: Number(portDraft),
+                        }),
+                      )
+                    }
+                    className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                  >
+                    Use this port
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void copy(String(status.port), 'port')}
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Copy the port"
+                  >
+                    {copied === 'port' ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-muted-foreground mb-1" htmlFor="capture-token">
+                  Pairing Token
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="capture-token"
+                    readOnly
+                    value={status.pairing_token ?? ''}
+                    className="flex-1 rounded-md border border-border bg-muted/40 px-2 py-1.5 font-mono text-xs text-foreground"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void copy(status.pairing_token ?? '', 'token')}
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Copy the pairing token"
+                  >
+                    {copied === 'token' ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run('token', () =>
+                        invoke<CaptureBridgeStatus>('regenerate_capture_pairing_token'),
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 shrink-0"
+                  >
+                    {busy === 'token' ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    New token
+                  </button>
+                </div>
+              </div>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              A new token unpairs every browser immediately — you will need to paste the new one in
-              again.
-            </p>
           </div>
         </section>
       )}
 
-      <section className="rounded-lg border border-border p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-              <Sparkles className="h-3.5 w-3.5 text-primary" /> Analyse each capture
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Summarise and tag a capture as soon as it arrives. Captures are saved either way —
-              turning this off costs you summaries, never the captured content.
-            </p>
-          </div>
-          <Switch
-            checked={status.analyze_on_capture}
-            disabled={busy !== null}
-            aria-label="Analyse each capture"
-            onCheckedChange={(checked) =>
-              void run('analyse', () =>
-                invoke<CaptureBridgeStatus>('set_capture_analyze_on_capture', { enabled: checked }),
-              )
-            }
-          />
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border p-4">
+      {/* Shortcuts Card */}
+      <section className="rounded-lg border border-border p-4 bg-card space-y-2">
         <h3 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-          <Keyboard className="h-3.5 w-3.5 text-primary" /> Shortcuts
+          <Keyboard className="h-3.5 w-3.5 text-primary" /> Web Capture Shortcuts
         </h3>
-        <dl className="mt-2 grid grid-cols-[10rem_1fr] gap-x-4 gap-y-1.5 text-xs">
-          <dt className="text-muted-foreground">In your browser</dt>
-          <dd className="text-foreground">
-            <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-              Ctrl+Shift+Y
-            </kbd>{' '}
-            captures the page you are on. Change it at{' '}
-            <code className="rounded bg-muted px-1">chrome://extensions/shortcuts</code>.
-          </dd>
-          <dt className="text-muted-foreground">In Vox</dt>
-          <dd className="text-foreground">
-            <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-              {status.capture_hotkey}
-            </kbd>{' '}
-            opens <strong>Captures › Captured Pages</strong>.
-          </dd>
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-1">
+          <div className="p-3 rounded-lg bg-muted/40 border border-border/80">
+            <dt className="text-muted-foreground font-medium mb-1">In your browser</dt>
+            <dd className="text-foreground">
+              <kbd className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] mr-1.5 shadow-2xs">
+                Ctrl+Shift+Y
+              </kbd>
+              captures the active tab. Configurable at{' '}
+              <code className="rounded bg-muted px-1 font-mono text-[11px]">chrome://extensions/shortcuts</code>.
+            </dd>
+          </div>
+          <div className="p-3 rounded-lg bg-muted/40 border border-border/80">
+            <dt className="text-muted-foreground font-medium mb-1">In Vox</dt>
+            <dd className="text-foreground">
+              <kbd className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] mr-1.5 shadow-2xs">
+                {status.capture_hotkey}
+              </kbd>
+              opens <strong>Captures › Captured Pages</strong>.
+            </dd>
+          </div>
         </dl>
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Reading a page has to be started from inside the browser: browsers grant an extension
-          access to a tab only in response to a gesture made there, which is what keeps Vox from
-          needing permission to every site you visit.
-        </p>
       </section>
     </div>
   );

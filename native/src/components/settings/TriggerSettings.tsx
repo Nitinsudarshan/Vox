@@ -145,43 +145,44 @@ export const TriggerSettings: React.FC = () => {
       </form>
 
       {/* Trigger Phrase Mappings List */}
-      <div className="space-y-2">
-        {isLoading ? (
-          <div className="space-y-2">
-            <Skeleton className="h-10 w-full rounded-lg" />
-            <Skeleton className="h-10 w-full rounded-lg" />
-          </div>
-        ) : triggers.length === 0 ? (
-          <div className="text-center py-6 px-4 rounded-lg border border-dashed border-border bg-muted/20 flex flex-col items-center justify-center">
-            <Layers className="w-6 h-6 text-muted-foreground/40 mb-1.5" />
-            <p className="text-xs font-medium text-muted-foreground">No trigger phrases configured yet</p>
-            <p className="text-[10px] text-muted-foreground/70 mt-0.5">Add spoken shortcuts using the form above</p>
-          </div>
-        ) : (
-          triggers.map((trig) => (
+      {isLoading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+          <Skeleton className="h-14 w-full rounded-lg" />
+          <Skeleton className="h-14 w-full rounded-lg" />
+          <Skeleton className="h-14 w-full rounded-lg" />
+        </div>
+      ) : triggers.length === 0 ? (
+        <div className="text-center py-6 px-4 rounded-lg border border-dashed border-border bg-muted/20 flex flex-col items-center justify-center">
+          <Layers className="w-6 h-6 text-muted-foreground/40 mb-1.5" />
+          <p className="text-xs font-medium text-muted-foreground">No trigger phrases configured yet</p>
+          <p className="text-[10px] text-muted-foreground/70 mt-0.5">Add spoken shortcuts using the form above</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+          {triggers.map((trig) => (
             <div
               key={trig.id}
-              className="p-2.5 bg-card hover:bg-accent/30 transition-all rounded-lg border border-border flex items-center justify-between gap-3 shadow-xs"
+              className="p-3 bg-card hover:bg-accent/30 transition-all rounded-lg border border-border flex items-center justify-between gap-3 shadow-xs"
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
                 <input
                   type="checkbox"
                   id={`trig-toggle-${trig.id}`}
                   checked={trig.enabled}
                   onChange={() => handleToggleTrigger(trig.id)}
                   aria-label={`Toggle trigger phrase ${trig.phrase}`}
-                  className="rounded border-border bg-background text-primary focus:ring-ring h-4 w-4 cursor-pointer"
+                  className="rounded border-border bg-background text-primary focus:ring-ring h-4 w-4 shrink-0 cursor-pointer"
                 />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <label htmlFor={`trig-toggle-${trig.id}`} className="font-semibold text-xs text-foreground cursor-pointer">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <label htmlFor={`trig-toggle-${trig.id}`} className="font-semibold text-xs text-foreground truncate cursor-pointer">
                       "{trig.phrase}"
                     </label>
-                    <Badge variant="secondary" className="font-mono text-[9px] px-1.5 py-0">
+                    <Badge variant="secondary" className="font-mono text-[9px] px-1 py-0">
                       {trig.action_type}
                     </Badge>
                   </div>
-                  <span className="text-[10px] text-muted-foreground">Tool: {trig.target_tool}</span>
+                  <p className="text-[10px] text-muted-foreground truncate">Tool: {trig.target_tool}</p>
                 </div>
               </div>
 
@@ -190,14 +191,14 @@ export const TriggerSettings: React.FC = () => {
                 variant="ghost"
                 onClick={() => handleDeleteTrigger(trig.id)}
                 aria-label={`Delete trigger phrase ${trig.phrase}`}
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

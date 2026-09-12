@@ -55,7 +55,7 @@ import type {
 
 export class CaptureEmptyError extends Error {
   constructor() {
-    super('Relay found nothing readable on this page.');
+    super('Vox found nothing readable on this page.');
     this.name = 'CaptureEmptyError';
   }
 }
@@ -91,7 +91,7 @@ export function runExtraction(doc: Document, url: URL): ExtractionResult {
       // The page still gets captured, one rung lower, and the artifact says
       // so — which is also the signal that the extractor needs updating.
       failures.push(
-        `Relay’s ${site.id} extractor failed on this page (${describe(error)}), so it was captured as a document instead.`,
+        `Vox’s ${site.id} extractor failed on this page (${describe(error)}), so it was captured as a document instead.`,
       );
     }
   }
@@ -103,7 +103,7 @@ export function runExtraction(doc: Document, url: URL): ExtractionResult {
       return generic;
     }
   } catch (error) {
-    failures.push(`Relay could not read this page’s structure (${describe(error)}).`);
+    failures.push(`Vox could not read this page’s structure (${describe(error)}).`);
   }
 
   const text = extractVisibleText(doc);
@@ -173,7 +173,7 @@ export async function runReveal(
   const merged = conversational ? merger.result() : null;
   const notes: string[] = [];
   if (harvestFailure) {
-    notes.push(`Relay could not read part of this page while reading it (${harvestFailure}).`);
+    notes.push(`Vox could not read part of this page while reading it (${harvestFailure}).`);
   }
 
   let result: ExtractionResult;
@@ -251,7 +251,7 @@ export function judgeCompleteness(
     return {
       coverage: 'failed',
       notes: [
-        'Relay hit an error while reading this page, so what was captured is a fragment of unknown size.',
+        'Vox hit an error while reading this page, so what was captured is a fragment of unknown size.',
       ],
     };
   }
@@ -292,12 +292,12 @@ export function judgeCompleteness(
   switch (traversal.termination) {
     case 'time_budget':
       notes.push(
-        `Relay read for ${Math.round(traversal.duration_ms / 1000)}s and stopped at its time limit, so earlier or later turns may be missing.`,
+        `Vox read for ${Math.round(traversal.duration_ms / 1000)}s and stopped at its time limit, so earlier or later turns may be missing.`,
       );
       return { coverage: 'partial', notes };
     case 'step_budget':
     case 'expansion_budget':
-      notes.push('Relay reached its reading limit for one page, so this capture is incomplete.');
+      notes.push('Vox reached its reading limit for one page, so this capture is incomplete.');
       return { coverage: 'partial', notes };
     case 'user_interrupted':
       notes.push('Reading stopped because the page was used while it was being captured.');
@@ -314,7 +314,7 @@ export function judgeCompleteness(
 
   if (traversal.expansions_failed > 0) {
     notes.push(
-      `${traversal.expansions_failed} section(s) did not open when Relay tried, so their content is not in this capture.`,
+      `${traversal.expansions_failed} section(s) did not open when Vox tried, so their content is not in this capture.`,
     );
     return { coverage: 'rendered_dom', notes };
   }

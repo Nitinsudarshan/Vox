@@ -50,6 +50,60 @@ fn set_app_user_model_id() {
     }
 }
 
+fn resolve_base_dir() -> PathBuf {
+    // 1. In debug/development, prioritize CARGO_MANIFEST_DIR/.vox
+    #[cfg(debug_assertions)]
+    {
+        let manifest_vox = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".vox");
+        if manifest_vox.exists() {
+            return manifest_vox;
+        }
+        let manifest_relay = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".relay");
+        if manifest_relay.exists() {
+            return manifest_relay;
+        }
+    }
+
+    // 2. Search CWD and its ancestors
+    if let Ok(mut dir) = std::env::current_dir() {
+        loop {
+            let candidates = [
+                dir.join("native").join("src-tauri").join(".vox"),
+                dir.join("src-tauri").join(".vox"),
+                dir.join(".vox"),
+                dir.join("native").join("src-tauri").join(".relay"),
+                dir.join("src-tauri").join(".relay"),
+                dir.join(".relay"),
+            ];
+
+            for candidate in &candidates {
+                if candidate.exists() {
+                    return candidate.clone();
+                }
+            }
+
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+
+    // 3. Fallback to process cwd or manifest dir
+    #[cfg(debug_assertions)]
+    {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".vox")
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        if cwd.join(".relay").exists() && !cwd.join(".vox").exists() {
+            cwd.join(".relay")
+        } else {
+            cwd.join(".vox")
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -61,10 +115,11 @@ pub fn run() {
     // loaded at all — and that answer must survive anything else failing.
     #[cfg(feature = "onnx-spike")]
     developer::onnx_spike::run_and_record();
-    // Load environment variables from .env — search CWD and ancestor directories
-    // so the repo-root .env is found even when Tauri runs from native/src-tauri/.
-    if dotenvy::dotenv().is_err() {
-        // Walk up parent directories looking for .env
+    // In development, pick up the repo root's `.env` when cargo ran from
+    // `native/src-tauri/` — otherwise `CARGO_MANIFEST_DIR`-relative assets
+    // find their config while runtime environment variables go missing.
+    #[cfg(debug_assertions)]
+    {
         if let Ok(mut dir) = std::env::current_dir() {
             loop {
                 let candidate = dir.join(".env");
@@ -79,12 +134,7 @@ pub fn run() {
         }
     }
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let base_dir = if cwd.join(".vox").exists() || !cwd.join(".relay").exists() {
-        cwd.join(".vox")
-    } else {
-        cwd.join(".relay")
-    };
+    let base_dir = resolve_base_dir();
 
     let default_vault_dir = base_dir.join("vault");
     let config_dir = base_dir.join("config");
@@ -212,11 +262,11 @@ pub fn run() {
             // configured hidden so "start minimized" does not flash the
             // control panel on screen, which means *something* has to show it.
             // A tray builder that errors below must not be what decides
-            // whether Relay has a window.
+            // whether Vox has a window.
             startup::apply_at_launch(handle, &startup_config);
 
             let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let show_i = tauri::menu::MenuItem::with_id(app, "show", "Show Relay", true, None::<&str>)?;
+            let show_i = tauri::menu::MenuItem::with_id(app, "show", "Show Vox", true, None::<&str>)?;
             let record_i = tauri::menu::MenuItem::with_id(app, "record", "Start Recording", true, None::<&str>)?;
             
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &record_i, &quit_i])?;
@@ -299,6 +349,7 @@ pub fn run() {
             commands::cancel_speech_model_download,
             commands::delete_speech_model,
             commands::set_meeting_speech_model,
+            commands::set_dictation_speech_model,
             commands::copy_to_clipboard,
             commands::get_kanban_cards,
             commands::get_triggers,

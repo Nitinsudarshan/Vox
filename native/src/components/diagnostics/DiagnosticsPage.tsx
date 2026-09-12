@@ -67,7 +67,7 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
   const [loadingLlmModels, setLoadingLlmModels] = useState(false);
 
   // LLM prompt test state
-  const [testPrompt, setTestPrompt] = useState('Hello! Reply with "Relay AI ready" in under 5 words.');
+  const [testPrompt, setTestPrompt] = useState('Hello! Reply with "Vox AI ready" in under 5 words.');
   const [selectedTestModel, setSelectedTestModel] = useState<string>('');
   const [runningLlmTest, setRunningLlmTest] = useState(false);
   const [llmTestResult, setLlmTestResult] = useState<OllamaPromptTestResult | null>(null);
@@ -928,12 +928,12 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
           {/* Paths & Runtime Environment */}
           <div className="p-4 rounded-lg border border-border bg-card/60 space-y-3">
             <div className="pb-2 border-b border-border/60">
-              <span className="text-xs font-bold text-foreground">Relay Runtime & Filesystem Paths</span>
+              <span className="text-xs font-bold text-foreground">Vox Runtime & Filesystem Paths</span>
             </div>
 
             <div className="space-y-2 text-xs font-mono">
               <div className="p-2.5 rounded bg-muted/30 border border-border flex items-center justify-between">
-                <span className="text-muted-foreground">Relay App Version:</span>
+                <span className="text-muted-foreground">Vox App Version:</span>
                 <span className="font-bold text-foreground">{appVersion}</span>
               </div>
               <div className="p-2.5 rounded bg-muted/30 border border-border flex items-center justify-between">
@@ -945,7 +945,7 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
               <div className="p-2.5 rounded bg-muted/30 border border-border flex items-center justify-between">
                 <span className="text-muted-foreground">STT Models Directory:</span>
                 <span className="font-bold text-foreground truncate max-w-md" title={sttOverview?.models_dir || ''}>
-                  {sttOverview?.models_dir || '%APPDATA%\\Relay\\models'}
+                  {sttOverview?.models_dir || '%APPDATA%\\Vox\\models'}
                 </span>
               </div>
               <div className="p-2.5 rounded bg-muted/30 border border-border flex items-center justify-between">

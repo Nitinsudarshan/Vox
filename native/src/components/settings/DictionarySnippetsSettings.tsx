@@ -11,6 +11,8 @@ import {
   Check,
   Zap,
   Copy,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { AppSettings, SnippetItem } from '../../types';
 import { Button } from '@/components/ui/button';
@@ -57,7 +59,12 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
   const [newSnippetText, setNewSnippetText] = useState('');
   const [copiedSnippetId, setCopiedSnippetId] = useState<string | null>(null);
 
-  const words = settings.dictionary || DEFAULT_SYSTEM_WORDS;
+  const [showWords, setShowWords] = useState(false);
+
+  const rawWords = (settings.dictionary || DEFAULT_SYSTEM_WORDS).filter(
+    (w) => w.toLowerCase() !== 'relay',
+  );
+  const words = rawWords.length > 0 ? rawWords : DEFAULT_SYSTEM_WORDS;
   const snippets = settings.snippets || [];
 
   // --- DICTIONARY HANDLERS ---
@@ -366,7 +373,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
             </div>
           </div>
 
-          {/* Words Chips Grid */}
+          {/* Words Chips Grid - Collapsible Toggleable Frame */}
           {words.length === 0 ? (
             <div className="text-center py-12 px-4 rounded-lg border border-dashed border-border bg-muted/10 flex flex-col items-center justify-center space-y-3">
               <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
@@ -380,37 +387,61 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-lg bg-card border border-border space-y-3 shadow-xs">
-              <div className="flex items-center justify-between text-xs text-muted-foreground border-b border-border/60 pb-2">
-                <span>Recognized Vocabulary ({filteredWords.length} words)</span>
-                <span className="text-[10px]">Injected directly into STT initial prompt</span>
-              </div>
-              <div className="flex flex-wrap gap-2 pt-1 max-h-[380px] overflow-y-auto">
-                {filteredWords.map((word) => {
-                  const isDefault = DEFAULT_SYSTEM_WORDS.includes(word);
-                  return (
-                    <div
-                      key={word}
-                      className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-muted/60 border border-border text-xs text-foreground hover:border-primary/50 transition-colors shadow-2xs"
-                    >
-                      <span className="font-medium">{word}</span>
-                      {isDefault && (
-                        <span className="text-[9px] text-muted-foreground/70 font-mono">
-                          (default)
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteDictionaryWord(word)}
-                        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity ml-1"
-                        title={`Remove ${word}`}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="rounded-lg bg-card border border-border shadow-xs overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowWords((prev) => !prev)}
+                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-muted/40 transition-colors cursor-pointer"
+                aria-expanded={showWords}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-semibold text-foreground">
+                    Recognized Vocabulary ({filteredWords.length} words)
+                  </span>
+                  <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                    · Injected into STT initial prompt
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+                  <span>{showWords ? 'Hide words' : 'Show words'}</span>
+                  {showWords ? (
+                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                  )}
+                </div>
+              </button>
+
+              {showWords && (
+                <div className="p-4 pt-1 border-t border-border/50 space-y-2">
+                  <div className="flex flex-wrap gap-2 pt-2 max-h-[380px] overflow-y-auto">
+                    {filteredWords.map((word) => {
+                      const isDefault = DEFAULT_SYSTEM_WORDS.includes(word);
+                      return (
+                        <div
+                          key={word}
+                          className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-muted/60 border border-border text-xs text-foreground hover:border-primary/50 transition-colors shadow-2xs"
+                        >
+                          <span className="font-medium">{word}</span>
+                          {isDefault && (
+                            <span className="text-[9px] text-muted-foreground/70 font-mono">
+                              (default)
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDictionaryWord(word)}
+                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity ml-1"
+                            title={`Remove ${word}`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -530,43 +561,43 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
           </div>
 
           {/* Snippets List */}
-          <div className="space-y-3">
-            {snippets.length === 0 ? (
-              <div className="text-center py-12 px-4 rounded-lg border border-dashed border-border bg-muted/10 flex flex-col items-center justify-center space-y-2">
-                <Sparkles className="w-6 h-6 text-muted-foreground/50 mb-1" />
-                <p className="text-xs font-semibold text-foreground">No snippets configured yet</p>
-                <p className="text-[11px] text-muted-foreground">Add your first voice expansion snippet above</p>
-              </div>
-            ) : (
-              snippets.map((snip) => (
+          {snippets.length === 0 ? (
+            <div className="text-center py-12 px-4 rounded-lg border border-dashed border-border bg-muted/10 flex flex-col items-center justify-center space-y-2">
+              <Sparkles className="w-6 h-6 text-muted-foreground/50 mb-1" />
+              <p className="text-xs font-semibold text-foreground">No snippets configured yet</p>
+              <p className="text-[11px] text-muted-foreground">Add your first voice expansion snippet above</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {snippets.map((snip) => (
                 <div
                   key={snip.id}
-                  className={`p-3.5 rounded-lg border transition-all ${
+                  className={`p-3.5 rounded-lg border transition-all flex flex-col justify-between gap-3 ${
                     snip.enabled
                       ? 'bg-card border-border hover:border-primary/40 shadow-xs'
                       : 'bg-muted/20 border-border/50 opacity-60'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1.5 flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge
-                          variant="secondary"
-                          className="font-semibold text-xs px-2.5 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
-                        >
-                          "{snip.trigger}"
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">→</span>
-                        {snip.label && snip.label !== snip.trigger && (
-                          <span className="text-xs font-medium text-foreground">{snip.label}</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground font-mono bg-muted/40 p-2 rounded-md whitespace-pre-wrap line-clamp-3">
-                        {snip.snippet_text}
-                      </p>
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge
+                        variant="secondary"
+                        className="font-semibold text-xs px-2.5 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                      >
+                        "{snip.trigger}"
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">→</span>
+                      {snip.label && snip.label !== snip.trigger && (
+                        <span className="text-xs font-medium text-foreground truncate">{snip.label}</span>
+                      )}
                     </div>
+                    <p className="text-xs text-muted-foreground font-mono bg-muted/40 p-2 rounded-md whitespace-pre-wrap line-clamp-3">
+                      {snip.snippet_text}
+                    </p>
+                  </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                    <div className="flex items-center gap-1">
                       <Button
                         type="button"
                         variant="ghost"
@@ -601,16 +632,16 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </Button>
-                      <Switch
-                        checked={snip.enabled}
-                        onCheckedChange={(checked) => handleToggleSnippet(snip.id, checked)}
-                      />
                     </div>
+                    <Switch
+                      checked={snip.enabled}
+                      onCheckedChange={(checked) => handleToggleSnippet(snip.id, checked)}
+                    />
                   </div>
                 </div>
-              ))
-            )}
-          </div>
+              ))}
+            </div>
+          )}
 
           {/* Modal: New Snippet */}
           {newSnippetModalOpen && (

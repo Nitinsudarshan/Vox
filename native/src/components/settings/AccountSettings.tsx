@@ -150,72 +150,78 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
   const handleCheckUpdates = async () => {
     try {
       setCheckingUpdate(true);
-      const info = await invoke<UpdateInfo>('check_for_app_updates');
+      const info = await invoke<UpdateInfo>('check_for_updates');
       setUpdateInfo(info);
     } catch (err) {
-      console.error('Failed to check for updates:', err);
+      console.error('Update check failed:', err);
     } finally {
       setCheckingUpdate(false);
     }
   };
 
-  const handleToggleDiagnostics = async (checked: boolean) => {
-    try {
-      const updated = await invoke<AppSettings>('set_diagnostics_consent', { enabled: checked });
-      onUpdateSettings(() => updated);
-    } catch (err) {
-      console.error('Failed to update diagnostics consent:', err);
-    }
-  };
-
   const copyInstallationId = () => {
-    if (installation?.installation_id) {
-      navigator.clipboard.writeText(installation.installation_id);
-      setCopiedId(true);
-      setTimeout(() => setCopiedId(false), 2000);
+    if (!installation?.installation_id) return;
+    navigator.clipboard.writeText(installation.installation_id);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 2000);
+  };
+
+  const copyDiagnosticsSummary = async () => {
+    try {
+      const summary = await invoke<string>('get_diagnostic_summary');
+      await navigator.clipboard.writeText(summary);
+      setCopiedDiagnostics(true);
+      setTimeout(() => setCopiedDiagnostics(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy diagnostics:', err);
     }
   };
 
-  const copyDiagnosticsSummary = () => {
-    const summary = {
-      app_version: installation?.app_version || '0.9.0',
-      platform: installation?.platform || 'windows',
-      os_version: installation?.os_version || 'x86_64',
-      installation_id: installation?.installation_id || 'unknown',
-      account_mode: profile?.account_mode || 'local',
-      authenticated: account?.authenticated ?? false,
-      auth_provider: profile?.auth_provider || null,
-      diagnostics_enabled: settings.diagnostics?.allow_anonymous_diagnostics ?? false,
-      timestamp: new Date().toISOString(),
-    };
+  const handleToggleDiagnostics = async (checked: boolean) => {
+    onUpdateSettings((prev) => ({
+      ...prev,
+      diagnostics: {
+        ...prev.diagnostics,
+        allow_anonymous_diagnostics: checked,
+      },
+    }));
 
-    navigator.clipboard.writeText(JSON.stringify(summary, null, 2));
-    setCopiedDiagnostics(true);
-    setTimeout(() => setCopiedDiagnostics(false), 2000);
+    try {
+      const current = await invoke<AppSettings>('get_settings');
+      const updated: AppSettings = {
+        ...current,
+        diagnostics: {
+          ...current.diagnostics,
+          allow_anonymous_diagnostics: checked,
+        },
+      };
+      await invoke('save_settings', { settings: updated });
+    } catch (err) {
+      console.error('Failed to persist diagnostics setting:', err);
+    }
   };
 
   const maskedId = installation?.installation_id
-    ? installation.installation_id.length > 8
-      ? `••••••••-••••-${installation.installation_id.slice(-4)}`
+    ? installation.installation_id.length > 12
+      ? `${installation.installation_id.substring(0, 8)}...${installation.installation_id.substring(installation.installation_id.length - 4)}`
       : installation.installation_id
     : '••••••••••••';
 
   const isDiagnosticsAllowed = settings.diagnostics?.allow_anonymous_diagnostics ?? false;
 
   return (
-    <div className="space-y-8 animate-in fade-in-50 duration-200">
+    <div className="space-y-6 pt-6 border-t border-border/60 animate-in fade-in duration-200">
       {/* Header & Invariant Statement */}
-      <div className="border-b border-border/40 pb-5">
-        <div className="flex items-center gap-3 mb-1.5">
-          <h2 className="text-xl font-bold tracking-tight text-foreground">Your Profile & Identity</h2>
-          <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary bg-primary/5 uppercase">
-            {account?.authenticated ? 'Google Connected' : 'Local Mode'}
-          </Badge>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
+            ACCOUNT & IDENTITY
+          </p>
+          <h2 className="text-lg font-bold text-foreground">Profile, Cloud Connection & Diagnostics</h2>
         </div>
-        <p className="text-xs text-muted-foreground leading-relaxed max-w-2xl">
-          Personalize Vox, manage your account relationship, and monitor version updates.
-          <strong className="text-foreground ml-1">Your local markdown notes, scribbles, audio, and vectors remain strictly on this device.</strong>
-        </p>
+        <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary bg-primary/5 uppercase">
+          {account?.authenticated ? 'Google Connected' : 'Local Mode'}
+        </Badge>
       </div>
 
       {errorMsg && (
@@ -225,6 +231,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             <p>{errorMsg}</p>
           </div>
           <button
+            type="button"
             onClick={() => setErrorMsg(null)}
             className="p-1 hover:bg-destructive/20 rounded text-destructive cursor-pointer"
             aria-label="Dismiss error"
@@ -234,301 +241,300 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         </div>
       )}
 
-      {/* 1. PERSONALIZATION: DISPLAY NAME */}
-      <div className="p-5 rounded-lg border border-border/80 bg-card/60 backdrop-blur-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+      {/* Responsive 3-Column Card Grid (Matching General Settings Style) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {/* Card 1: Personalization (Display Name) */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
               <User className="w-4 h-4 text-primary" />
-              <span>Personalization</span>
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              What Vox calls you. This is stored locally and is separate from your account identity.
-            </p>
-          </div>
-          {savedNameSuccess && (
-            <Badge variant="secondary" className="text-[10px] gap-1 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-              <Check className="w-3 h-3" />
-              <span>Saved</span>
-            </Badge>
-          )}
-        </div>
-
-        <form onSubmit={handleSaveDisplayName} className="flex gap-2 max-w-md">
-          <Input
-            value={displayNameInput}
-            onChange={(e) => setDisplayNameInput(e.target.value)}
-            placeholder="Enter your name (e.g. Nitin)"
-            className="h-9 text-xs bg-muted/40"
-          />
-          <Button
-            type="submit"
-            size="sm"
-            className="h-9 text-xs gap-1.5 shrink-0"
-            disabled={savingName || !displayNameInput.trim() || displayNameInput.trim() === profile?.display_name}
-          >
-            {savingName ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            <span>Save Name</span>
-          </Button>
-        </form>
-      </div>
-
-      {/* 2. AUTHENTICATION & ACCOUNT CARD */}
-      <div className="p-5 rounded-lg border border-border/80 bg-card/60 backdrop-blur-xs space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            {account?.authenticated && account.profile_image ? (
-              <img
-                src={account.profile_image}
-                alt="Profile"
-                referrerPolicy="no-referrer"
-                className="w-14 h-14 rounded-full border-2 border-primary/30 object-cover shadow-xs"
-                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-              />
-            ) : (
-              <div className="w-14 h-14 rounded-full bg-primary/10 border border-primary/20 text-primary flex items-center justify-center text-lg font-bold shadow-xs">
-                {profile?.display_name && profile.display_name !== 'Local User'
-                  ? profile.display_name.charAt(0).toUpperCase()
-                  : <User className="w-7 h-7" />}
+              <div>
+                <p className="text-xs font-semibold text-foreground">Personalization</p>
+                <p className="text-[11px] text-muted-foreground">What Vox calls you locally</p>
               </div>
-            )}
+            </div>
 
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-semibold text-foreground">
-                  {account?.authenticated ? account.display_name || account.email : 'Local User'}
-                </h3>
-                {account?.authenticated ? (
-                  <Badge variant="secondary" className="text-[10px] gap-1 py-0 px-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                    <CheckCircle2 className="w-3 h-3" />
-                    <span>Google Connected</span>
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-[10px] py-0 px-2 font-mono text-muted-foreground">
-                    No Account Connected
+            <form onSubmit={handleSaveDisplayName} className="space-y-2">
+              <Input
+                value={displayNameInput}
+                onChange={(e) => setDisplayNameInput(e.target.value)}
+                placeholder="Enter your name (e.g. Nitin)"
+                className="h-8 text-xs bg-muted/40"
+              />
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-muted-foreground">Stored only on this device.</p>
+                {savedNameSuccess && (
+                  <Badge variant="secondary" className="text-[10px] gap-1 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+                    <Check className="w-3 h-3" />
+                    <span>Saved</span>
                   </Badge>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground font-mono">
-                {account?.authenticated ? account.email : 'Local — no account connected. Your data stays on this device.'}
-              </p>
-            </div>
+            </form>
           </div>
 
-          <div>
+          <div className="pt-3 border-t border-border/60">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full text-xs h-8 gap-1.5"
+              onClick={handleSaveDisplayName}
+              disabled={savingName || !displayNameInput.trim() || displayNameInput.trim() === profile?.display_name}
+            >
+              {savingName ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              <span>Save Name</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Card 2: Account Connection */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-primary" />
+              <div>
+                <p className="text-xs font-semibold text-foreground">Account Status</p>
+                <p className="text-[11px] text-muted-foreground">Sync identity & cloud features</p>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-muted/40 border border-border/80 flex items-center gap-3">
+              {account?.authenticated && account.profile_image ? (
+                <img
+                  src={account.profile_image}
+                  alt="Profile"
+                  referrerPolicy="no-referrer"
+                  className="w-8 h-8 rounded-full border border-primary/30 object-cover shrink-0"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0">
+                  {profile?.display_name && profile.display_name !== 'Local User'
+                    ? profile.display_name.charAt(0).toUpperCase()
+                    : <User className="w-4 h-4" />}
+                </div>
+              )}
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs font-medium text-foreground truncate">
+                  {account?.authenticated ? account.display_name || account.email : 'Local User'}
+                </p>
+                <p className="text-[10px] font-mono text-muted-foreground truncate">
+                  {account?.authenticated ? account.email : '100% offline local mode'}
+                </p>
+              </div>
+            </div>
+
+            {showSignOutConfirm && (
+              <div className="p-2.5 rounded-lg border border-destructive/40 bg-destructive/5 space-y-2">
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Disconnect account? Local data remains untouched on this device.
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <Button size="sm" variant="destructive" className="text-xs h-7 px-2.5" onClick={handleSignOut}>
+                    Confirm
+                  </Button>
+                  <Button size="sm" variant="ghost" className="text-xs h-7 px-2.5" onClick={() => setShowSignOutConfirm(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-border/60">
             {account?.authenticated ? (
               <Button
+                type="button"
                 variant="outline"
                 size="sm"
-                className="text-xs text-muted-foreground hover:text-foreground border-border/80 gap-1.5"
+                className="w-full text-xs h-8 text-destructive hover:text-destructive border-destructive/30 gap-1.5"
                 onClick={() => setShowSignOutConfirm(true)}
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>Sign Out</span>
+                <span>Disconnect Account</span>
               </Button>
             ) : (
               <Button
+                type="button"
                 size="sm"
-                className="text-xs font-semibold gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs"
+                className="w-full text-xs h-8 font-semibold gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs"
                 onClick={handleSignIn}
                 disabled={signingIn}
               >
                 {signingIn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : (
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-                    <path
-                      fill="currentColor"
-                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                    />
-                    <path
-                      fill="currentColor"
-                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                    />
-                    <path
-                      fill="currentColor"
-                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                    />
-                    <path
-                      fill="currentColor"
-                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                    />
+                    <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                    <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                   </svg>
                 )}
-                <span>{signingIn ? 'Connecting...' : 'Connect with Google'}</span>
+                <span>{signingIn ? 'Connecting…' : 'Sign in with Google'}</span>
               </Button>
             )}
           </div>
         </div>
 
-        {/* Sign Out Confirmation Modal */}
-        {showSignOutConfirm && (
-          <div className="p-4 rounded-lg border border-destructive/40 bg-destructive/5 space-y-3 animate-in fade-in-50">
-            <div className="space-y-1">
-              <h4 className="text-xs font-bold text-destructive flex items-center gap-1.5">
-                <AlertCircle className="w-4 h-4" />
-                <span>Disconnect Google Account?</span>
-              </h4>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Your local Scribbles and Voice Notes will remain 100% untouched on this device.
-                You will return to Local Mode.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="destructive" className="text-xs h-8" onClick={handleSignOut}>
-                Confirm Disconnect
-              </Button>
-              <Button size="sm" variant="ghost" className="text-xs h-8" onClick={() => setShowSignOutConfirm(false)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 3. USAGE MODE */}
-      <div className="p-5 rounded-lg border border-border/80 bg-gradient-to-br from-card/80 to-primary/5 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="space-y-1">
+        {/* Card 3: Operating Mode & Hybrid */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
             <div className="flex items-center gap-2">
               <HardDrive className="w-4 h-4 text-primary" />
-              <h3 className="text-sm font-semibold text-foreground">Current Operating Mode: Local</h3>
+              <div>
+                <p className="text-xs font-semibold text-foreground">Operating Mode</p>
+                <p className="text-[11px] text-muted-foreground">Local-first data governance</p>
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Your markdown files, vector embeddings, voice audio, and knowledge graph live exclusively on this computer.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs gap-1.5 border-primary/40 text-primary hover:bg-primary/10 shadow-xs shrink-0"
-            onClick={() => setShowHybridModal(true)}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Explore Hybrid</span>
-          </Button>
-        </div>
-      </div>
 
-      {/* 4. UPDATES & VERSION AWARENESS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* App Version & Update Card */}
-        <div className="p-5 rounded-lg border border-border/80 bg-card/60 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Laptop className="w-4 h-4 text-primary" />
-              <span className="text-xs font-semibold text-foreground">Vox Application</span>
+            <div className="p-2.5 rounded-lg bg-muted/40 border border-border/80 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono text-muted-foreground">Storage Model</span>
+                <Badge variant="outline" className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                  Local Only
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Notes, vectors, and voice recordings reside exclusively on this computer.
+              </p>
             </div>
-            <Badge variant="outline" className="text-[10px] font-mono">
-              v{installation?.app_version || '0.1.0'}
-            </Badge>
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            Platform: <span className="font-mono text-foreground capitalize">{installation?.platform || 'Windows'}</span> ({installation?.os_version || 'x86_64'})
-          </p>
-
-          <div className="pt-2 border-t border-border/40 flex items-center justify-between">
+          <div className="pt-3 border-t border-border/60">
             <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full text-xs h-8 gap-1.5"
+              onClick={() => setShowHybridModal(true)}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-primary" />
+              <span>Explore Hybrid Mode</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Card 4: Application Version & Updates */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Laptop className="w-4 h-4 text-primary" />
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Vox Application</p>
+                  <p className="text-[11px] text-muted-foreground">Version & update channel</p>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-[10px] font-mono">
+                v{installation?.app_version || '0.1.0'}
+              </Badge>
+            </div>
+
+            <div className="text-[11px] text-muted-foreground space-y-1">
+              <p>
+                Platform: <span className="font-mono text-foreground capitalize">{installation?.platform || 'Windows'}</span> ({installation?.os_version || 'x86_64'})
+              </p>
+              {updateInfo && (
+                <p className="text-[10px]">
+                  {updateInfo.is_offline ? (
+                    <span className="text-amber-500">Offline mode</span>
+                  ) : updateInfo.update_available ? (
+                    <span className="text-emerald-500 font-semibold">v{updateInfo.latest_version} available</span>
+                  ) : (
+                    <span className="text-emerald-500 flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Up to date
+                    </span>
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-border/60">
+            <Button
+              type="button"
               variant="outline"
               size="sm"
-              className="text-xs gap-1.5 h-8"
+              className="w-full text-xs h-8 gap-1.5"
               onClick={handleCheckUpdates}
               disabled={checkingUpdate}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
-              <span>{checkingUpdate ? 'Checking...' : 'Check for Updates'}</span>
+              <span>{checkingUpdate ? 'Checking…' : 'Check for Updates'}</span>
             </Button>
-
-            {updateInfo && (
-              <span className="text-xs text-muted-foreground">
-                {updateInfo.is_offline ? (
-                  <span className="text-amber-500">Offline mode</span>
-                ) : updateInfo.update_available ? (
-                  <span className="text-emerald-500 font-semibold">v{updateInfo.latest_version} available</span>
-                ) : (
-                  <span className="text-emerald-500 flex items-center gap-1">
-                    <Check className="w-3 h-3" /> Up to date
-                  </span>
-                )}
-              </span>
-            )}
           </div>
         </div>
 
-        {/* Installation Identity Card */}
-        <div className="p-5 rounded-lg border border-border/80 bg-card/60 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-500" />
-              <span className="text-xs font-semibold text-foreground">Installation Identity</span>
+        {/* Card 5: Installation Identity */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Installation Identity</p>
+                  <p className="text-[11px] text-muted-foreground">Unique device identifier</p>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-[10px] font-mono text-muted-foreground">
+                Stable
+              </Badge>
             </div>
-            <Badge variant="outline" className="text-[10px] font-mono text-muted-foreground">
-              Stable
-            </Badge>
-          </div>
 
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between bg-muted/40 p-2 rounded-lg border border-border/40">
-              <span className="text-xs font-mono text-muted-foreground">{maskedId}</span>
+            <div className="flex items-center justify-between bg-muted/40 p-2 rounded-lg border border-border/60">
+              <span className="text-xs font-mono text-muted-foreground truncate mr-2">{maskedId}</span>
               <Button
+                type="button"
                 variant="ghost"
                 size="sm"
-                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground shrink-0"
                 onClick={copyInstallationId}
-                title="Copy Full Installation ID"
+                title="Copy Installation ID"
               >
                 {copiedId ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              Survives restarts and updates. Used solely for diagnostic routing and update compatibility.
+            <p className="text-[10px] text-muted-foreground leading-tight">
+              Survives restarts and updates. Used for update verification and diagnostic telemetry.
             </p>
           </div>
         </div>
-      </div>
 
-      {/* 5. DIAGNOSTICS & SUPPORT */}
-      <div className="p-5 rounded-lg border border-border/80 bg-card/60 space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
+        {/* Card 6: Diagnostics & Bug Reporting */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Info className="w-4 h-4 text-primary" />
-              <h3 className="text-sm font-semibold text-foreground">Diagnostics & Support</h3>
+              <div>
+                <p className="text-xs font-semibold text-foreground">Diagnostics & Telemetry</p>
+                <p className="text-[11px] text-muted-foreground">Crash reports & bug assistance</p>
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-              Export system metadata for bug reporting. Invariant: Secrets, tokens, passwords, and private keys are NEVER included.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs gap-1.5 h-8 shrink-0"
-            onClick={copyDiagnosticsSummary}
-          >
-            {copiedDiagnostics ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-            <span>{copiedDiagnostics ? 'Copied Summary' : 'Copy Diagnostic Info'}</span>
-          </Button>
-        </div>
-      </div>
 
-      {/* 6. PRIVACY & TELEMETRY CONSENT */}
-      <div className="p-5 rounded-lg border border-border/80 bg-card/60 space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-500" />
-              <h3 className="text-sm font-semibold text-foreground">Help Improve Vox</h3>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <div>
+                <p className="text-xs font-medium text-foreground">Anonymous crash reports</p>
+                <p className="text-[10px] text-muted-foreground">Help fix bugs automatically</p>
+              </div>
+              <Switch
+                checked={isDiagnosticsAllowed}
+                onCheckedChange={handleToggleDiagnostics}
+              />
             </div>
-            <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-              Share anonymous diagnostic telemetry (Vox version, app crashes, performance metadata) to help fix bugs.
-              <strong className="text-foreground block mt-1">
-                Your notes, scribbles, audio recordings, and transcripts are NEVER transmitted.
-              </strong>
-            </p>
           </div>
-          <Switch
-            checked={isDiagnosticsAllowed}
-            onCheckedChange={handleToggleDiagnostics}
-          />
+
+          <div className="pt-3 border-t border-border/60">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full text-xs h-8 gap-1.5"
+              onClick={copyDiagnosticsSummary}
+            >
+              {copiedDiagnostics ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+              <span>{copiedDiagnostics ? 'Copied Diagnostics' : 'Copy Diagnostic Info'}</span>
+            </Button>
+          </div>
         </div>
       </div>
 

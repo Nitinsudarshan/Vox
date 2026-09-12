@@ -741,7 +741,7 @@ export function assessCoverage(
 
   if (evidence.traversalPerformed && evidence.traversalReachedEnd === false) {
     notes.push(
-      'Relay stopped reading before it reached the end of this page, so there is more of it than was captured.',
+      'Vox stopped reading before it reached the end of this page, so there is more of it than was captured.',
     );
     return { coverage: 'partial', notes };
   }
@@ -755,7 +755,7 @@ export function assessCoverage(
 
   if (looksVirtualized(doc) || availability.virtualized > 0) {
     notes.push(
-      'This page renders its content in a virtualized list, so only the parts Relay could reach while reading were captured.',
+      'This page renders its content in a virtualized list, so only the parts Vox could reach while reading were captured.',
     );
     return { coverage: 'rendered_dom', notes };
   }
@@ -771,7 +771,7 @@ export function assessCoverage(
     // Relay knows this site and did not recognise this page. Whatever the text
     // ratio says, the honest verdict is that the page was read generically.
     notes.push(
-      'Relay knows this site but did not recognise this page’s layout, so it was read as a plain document and may be incomplete.',
+      'Vox knows this site but did not recognise this page’s layout, so it was read as a plain document and may be incomplete.',
     );
     return { coverage: 'rendered_dom', notes };
   }
@@ -781,7 +781,7 @@ export function assessCoverage(
   }
 
   notes.push(
-    `About ${Math.round(ratio * 100)}% of the page's text was recognised as content; the rest was navigation, controls, or a layout Relay could not read.`,
+    `About ${Math.round(ratio * 100)}% of the page's text was recognised as content; the rest was navigation, controls, or a layout Vox could not read.`,
   );
   return { coverage: 'rendered_dom', notes };
 }

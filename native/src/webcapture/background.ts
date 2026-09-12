@@ -51,7 +51,7 @@ async function flash(tabId: number | undefined, text: string, color: string, tit
 async function clearBadgeLater(tabId: number | undefined) {
   setTimeout(() => {
     void chrome.action.setBadgeText({ text: '', tabId });
-    void chrome.action.setTitle({ title: 'Capture this page in Relay', tabId });
+    void chrome.action.setTitle({ title: 'Capture this page in Vox', tabId });
   }, 4000);
 }
 
@@ -120,14 +120,14 @@ export async function captureTab(tab: chrome.tabs.Tab | undefined): Promise<void
   if (tabId === undefined) return;
 
   if (tab?.url && BLOCKED_SCHEMES.test(tab.url)) {
-    await flash(tabId, '—', '#6b7280', 'Relay cannot capture browser pages.');
+    await flash(tabId, '—', '#6b7280', 'Vox cannot capture browser pages.');
     await clearBadgeLater(tabId);
     return;
   }
 
   const settings = await readSettings();
   if (!settings) {
-    await flash(tabId, '!', '#f59e0b', 'Pair this extension with Relay first (click to open options).');
+    await flash(tabId, '!', '#f59e0b', 'Pair this extension with Vox first (click to open options).');
     await clearBadgeLater(tabId);
     return;
   }
@@ -164,7 +164,7 @@ export async function captureTab(tab: chrome.tabs.Tab | undefined): Promise<void
       return;
     }
 
-    await flash(tabId, '↑', '#3b82f6', 'Saving to Relay…');
+    await flash(tabId, '↑', '#3b82f6', 'Saving to Vox…');
     const outcome = await postToRelay(result.payload, settings);
     await flash(
       tabId,
@@ -180,7 +180,7 @@ export async function captureTab(tab: chrome.tabs.Tab | undefined): Promise<void
       tabId,
       '✕',
       '#ef4444',
-      error instanceof Error ? error.message : 'Relay could not read this page.',
+      error instanceof Error ? error.message : 'Vox could not read this page.',
     );
     await clearBadgeLater(tabId);
   }

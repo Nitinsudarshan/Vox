@@ -63,7 +63,7 @@ export const AccountExplanationModal: React.FC<AccountExplanationModalProps> = (
             className="w-full h-10 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
             onClick={onClose}
           >
-            Continue to Relay
+            Continue to Vox
           </Button>
 
           <Button

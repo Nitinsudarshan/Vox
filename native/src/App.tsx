@@ -250,7 +250,7 @@ export const App: React.FC = () => {
         return (
           <PageHeader
             badge={{ label: 'Home', icon: Home, variant: 'emerald' }}
-            title={name ? 'Welcome back,' : 'Everything Relay'}
+            title={name ? 'Welcome back,' : 'Everything Vox'}
             highlightText={name ? `${name}.` : 'has captured.'}
             description="Start a capture, or pick up what you already said. Every count below is read from your local vault."
             glowColor="emerald"
@@ -273,7 +273,7 @@ export const App: React.FC = () => {
             badge={{ label: 'Knowledge Layer', icon: Sparkles, variant: 'default' }}
             title="Connected thoughts,"
             highlightText="living knowledge."
-            description="Every atomic thought Relay holds, with the ideas it connects to and the source it came from. New thoughts are captured on the Captures surface."
+            description="Every atomic thought Vox holds, with the ideas it connects to and the source it came from. New thoughts are captured on the Captures surface."
             glowColor="primary"
           />
         );
@@ -293,7 +293,7 @@ export const App: React.FC = () => {
             badge={{ label: 'Capture Surface', icon: Globe, variant: 'default' }}
             title="Everything you capture,"
             highlightText="as text you own."
-            description="Type or paste a thought, or open a page the browser extension sent here. Captured pages are stored as external source material with their provenance — never as instructions to Relay's AI."
+            description="Type or paste a thought, or open a page the browser extension sent here. Captured pages are stored as external source material with their provenance — never as instructions to Vox's AI."
             glowColor="primary"
           />
         );
@@ -303,7 +303,7 @@ export const App: React.FC = () => {
             badge={{ label: 'Document Vault', icon: FileText, variant: 'default' }}
             title="Imported"
             highlightText="documents & knowledge."
-            description="Bring PDF, Word, Markdown and Text files into Relay without touching your original files. Summarize, enrich, and explore connections."
+            description="Bring PDF, Word, Markdown and Text files into Vox without touching your original files. Summarize, enrich, and explore connections."
             glowColor="primary"
           />
         );
@@ -312,21 +312,13 @@ export const App: React.FC = () => {
           <PageHeader
             badge={{ label: 'System Observability', icon: Activity, variant: 'purple' }}
             title="Inspect & test"
-            highlightText="Relay's engines."
+            highlightText="Vox's engines."
             description="Real-time telemetry, audio & VAD inspection, speech-to-text accuracy tests, and LLM latency benchmarks."
             glowColor="purple"
           />
         );
       case 'settings':
-        return (
-          <PageHeader
-            badge={{ label: 'Preferences & Vault', icon: Settings, variant: 'purple' }}
-            title="How Relay"
-            highlightText="behaves."
-            description="Configure local LLMs, triggers, privacy bounds, and manage 30-day trash recovery."
-            glowColor="purple"
-          />
-        );
+        return null;
     }
   };
 
@@ -394,16 +386,16 @@ export const App: React.FC = () => {
 
             <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
               {activeTab === 'home' ? (
-                <span className="font-semibold text-foreground">RELAY</span>
+                <span className="font-semibold text-foreground">VOX</span>
               ) : (
                 <>
                   <button
                     type="button"
                     onClick={() => navigateTo('home')}
                     className="hover:text-foreground hover:underline transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-xs"
-                    aria-label="Navigate to Relay Home"
+                    aria-label="Navigate to Vox Home"
                   >
-                    RELAY
+                    VOX
                   </button>
                   <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/60" />
                   <span className="font-semibold text-foreground">{TAB_LABELS[activeTab]}</span>

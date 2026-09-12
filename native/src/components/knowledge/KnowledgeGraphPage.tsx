@@ -144,7 +144,7 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
         <EmptyState
           icon={Network}
           title="Nothing to connect yet"
-          description="The graph is built from Scribbles, their topics and the entities Relay resolves out of them. Capture a thought, promote a Voice Note or import a document and it will appear here."
+          description="The graph is built from Scribbles, their topics and the entities Vox resolves out of them. Capture a thought, promote a Voice Note or import a document and it will appear here."
           minHeight="min-h-[260px]"
         />
       ) : (

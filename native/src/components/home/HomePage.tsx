@@ -71,13 +71,34 @@ export const HomePage: React.FC<HomePageProps> = ({
     // hide the notes that did load.
     const [voiceNotes, scribbles, vaultFiles, captures, telemetry, location, bridgeStatus] =
       await Promise.all([
-        invoke<VaultNote[]>('get_voice_notes').catch(() => []),
-        invoke<Scribble[]>('get_scribbles').catch(() => []),
-        invoke<VaultFile[]>('get_vault_files').catch(() => []),
-        invoke<VaultFile[]>('get_captures').catch(() => []),
-        invoke<KnowledgeTelemetrySnapshot>('get_knowledge_telemetry').catch(() => null),
-        invoke<VaultLocationInfo>('get_vault_location').catch(() => null),
-        invoke<CaptureBridgeStatus>('get_capture_bridge_status').catch(() => null),
+        invoke<VaultNote[]>('get_voice_notes').catch((err) => {
+          console.warn('Failed to load voice notes for Home:', err);
+          return [];
+        }),
+        invoke<Scribble[]>('get_scribbles').catch((err) => {
+          console.warn('Failed to load scribbles for Home:', err);
+          return [];
+        }),
+        invoke<VaultFile[]>('get_vault_files').catch((err) => {
+          console.warn('Failed to load vault files for Home:', err);
+          return [];
+        }),
+        invoke<VaultFile[]>('get_captures').catch((err) => {
+          console.warn('Failed to load captures for Home:', err);
+          return [];
+        }),
+        invoke<KnowledgeTelemetrySnapshot>('get_knowledge_telemetry').catch((err) => {
+          console.warn('Failed to load telemetry for Home:', err);
+          return null;
+        }),
+        invoke<VaultLocationInfo>('get_vault_location').catch((err) => {
+          console.warn('Failed to load vault location for Home:', err);
+          return null;
+        }),
+        invoke<CaptureBridgeStatus>('get_capture_bridge_status').catch((err) => {
+          console.warn('Failed to load bridge status for Home:', err);
+          return null;
+        }),
       ]);
 
     setSnapshot({
@@ -98,13 +119,15 @@ export const HomePage: React.FC<HomePageProps> = ({
     load();
   }, [load]);
 
-  // Anything the backend saves while Home is open changes a number on it.
+  // Anything the backend saves or reconfigures while Home is open changes a number on it.
   useEffect(() => {
     const subscriptions = [
       listen('scribble-saved', () => load()),
       listen('scribble-enriched', () => load()),
       listen('voice-note-saved', () => load()),
       listen('capture-processed', () => load()),
+      listen('settings-changed', () => load()),
+      listen('vault-changed', () => load()),
     ];
 
     return () => {

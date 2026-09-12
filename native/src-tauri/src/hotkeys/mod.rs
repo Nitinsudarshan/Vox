@@ -726,7 +726,7 @@ fn stop_dictation_session(
                         );
                         send_os_dictation_toast(
                             &app,
-                            "Relay Dictation",
+                            "Vox Dictation",
                             "Tab wait timed out — transcription copied to clipboard (Ctrl+V)",
                         );
                         emit_capture_status_event(
@@ -748,7 +748,7 @@ fn stop_dictation_session(
                         );
                         send_os_dictation_toast(
                             &app,
-                            "Relay Dictation",
+                            "Vox Dictation",
                             "Tab changed — transcription copied to clipboard (Ctrl+V)",
                         );
                         emit_capture_status_event(
@@ -767,7 +767,7 @@ fn stop_dictation_session(
                         );
                         send_os_dictation_toast(
                             &app,
-                            "Relay Dictation",
+                            "Vox Dictation",
                             "App changed — transcription copied to clipboard (Ctrl+V)",
                         );
                         emit_capture_status_event(

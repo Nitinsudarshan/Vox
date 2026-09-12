@@ -1512,6 +1512,7 @@ pub async fn choose_vault_folder(app: AppHandle) -> Result<Option<String>, Comma
 /// Never moves, migrates, or deletes whatever is at the old location.
 #[tauri::command]
 pub async fn set_vault_location(
+    app: AppHandle,
     path: String,
     state: State<'_, AppState>,
 ) -> Result<VaultLocationInfo, CommandError> {
@@ -1529,9 +1530,13 @@ pub async fn set_vault_location(
     settings
         .save(&state.settings_path())
         .map_err(|e| CommandError::new("CONFIG_SAVE_FAILED", &e.to_string()))?;
+    let updated_settings = settings.clone();
     drop(settings);
 
     state.vault.set_vault_dir(new_dir);
+
+    let _ = app.emit("settings-changed", &updated_settings);
+    let _ = app.emit("vault-changed", &path);
 
     Ok(VaultLocationInfo {
         path,
@@ -1650,7 +1655,7 @@ pub async fn test_llm_prompt(
     let host = host.unwrap_or_else(|| {
         state.settings.lock_or_recover().provider.ollama_host.clone()
     });
-    let prompt = prompt.unwrap_or_else(|| "Hello! Reply with 'Relay AI ready' in under 5 words.".to_string());
+    let prompt = prompt.unwrap_or_else(|| "Hello! Reply with 'Vox AI ready' in under 5 words.".to_string());
     Ok(crate::providers::test_ollama_prompt(&host, &model, &prompt).await)
 }
 
@@ -1924,6 +1929,39 @@ pub async fn set_meeting_speech_model(
     persist_settings(&app, &state, settings)
 }
 
+/// Chooses the model dictation uses. `None` means default.
+#[tauri::command]
+pub async fn set_dictation_speech_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Option<String>,
+) -> Result<(), CommandError> {
+    let id = id.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+
+    let path_str = if let Some(ref id) = id {
+        let models_dir = state.config_dir.join("models");
+        let known = crate::capture::models::by_id(id)
+            .map(|m| m.path_in(&models_dir))
+            .unwrap_or_else(|| models_dir.join(id));
+        if !crate::capture::models::is_installed(&known) {
+            return Err(CommandError::new(
+                "SPEECH_MODEL_NOT_INSTALLED",
+                "that model is not installed yet",
+            ));
+        }
+        Some(known.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        guard.stt.whisper_model_path = path_str;
+        guard.clone()
+    };
+    persist_settings(&app, &state, settings)
+}
+
 #[tauri::command]
 pub async fn copy_to_clipboard(text: String) -> Result<(), CommandError> {
     crate::hotkeys::injection::copy_to_clipboard(&text)
@@ -1946,7 +1984,18 @@ pub async fn save_settings(
     // it — or one from a frontend that never read it — cannot switch capture
     // off and throw away the pairing token as a side effect.
     let stored_capture = state.settings.lock_or_recover().capture.clone();
-    let settings = settings.preserving_capture(&stored_capture);
+    let mut settings = settings.preserving_capture(&stored_capture);
+
+    // If incoming settings has no vault directory set, preserve the stored one
+    let stored_vault = state.settings.lock_or_recover().vault.clone();
+    if settings.vault.directory.is_none() && stored_vault.directory.is_some() {
+        settings.vault.directory = stored_vault.directory;
+    }
+
+    // Keep in-memory vault aligned with whatever directory is configured
+    if let Some(ref dir) = settings.vault.directory {
+        state.vault.set_vault_dir(PathBuf::from(dir));
+    }
 
     settings
         .save(&state.settings_path())

@@ -37,7 +37,7 @@ export async function captureCurrentDocument(): Promise<ContentCaptureResult> {
     }
     return {
       ok: false,
-      error: error instanceof Error ? error.message : 'Relay could not read this page.',
+      error: error instanceof Error ? error.message : 'Vox could not read this page.',
     };
   }
 }
