@@ -357,6 +357,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   const [clearVaultAck, setClearVaultAck] = useState(false);
   const [clearVaultInput, setClearVaultInput] = useState('');
   const [clearingVault, setClearingVault] = useState(false);
+  const [destructiveOpen, setDestructiveOpen] = useState(false);
 
   const loadAccountState = async () => {
     try {
@@ -1719,85 +1720,122 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 </div>
               </div>
 
-              {/* Destructive Actions Section */}
-              <div className="p-4 rounded-lg border border-destructive/40 bg-destructive/5 space-y-4">
-                <div className="flex items-center gap-2 text-destructive font-bold text-xs">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Irreversible Data Reset & Account Actions</span>
-                </div>
-
-                {/* 1. Delete Vox Cloud Account */}
-                <div className="py-2.5 border-t border-destructive/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs font-semibold text-foreground">Delete Vox Cloud Account</p>
-                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-destructive/30 text-destructive font-mono">
-                        {account?.authenticated ? 'Cloud Linked' : 'Local Only'}
-                      </Badge>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground max-w-md">
-                      Deletes your cloud account record and clears OS Keyring tokens.
-                      <strong className="text-foreground ml-1">Account ≠ Vault: Your local markdown notes, recordings, and scribbles remain 100% on this PC.</strong>
-                    </p>
+              {/* Destructive Actions Section (Collapsible Accordion, Half and Half) */}
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 overflow-hidden transition-all">
+                <button
+                  type="button"
+                  onClick={() => setDestructiveOpen(!destructiveOpen)}
+                  className="w-full flex items-center justify-between p-3.5 text-left cursor-pointer hover:bg-destructive/10 transition-colors select-none"
+                  aria-expanded={destructiveOpen}
+                >
+                  <div className="flex items-center gap-2 text-destructive font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>Irreversible Data Reset & Account Actions</span>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-destructive/60 text-destructive hover:bg-destructive/10 gap-1.5 text-xs shrink-0"
-                    onClick={() => {
-                      setDeleteAccountModalOpen(true);
-                      setDeleteAccountAck(false);
-                      setDeleteAccountInput('');
-                      setDeleteAccountError(null);
-                    }}
-                    disabled={!account?.authenticated}
-                  >
-                    <User className="w-3.5 h-3.5" />
-                    <span>Delete Cloud Account</span>
-                  </Button>
-                </div>
-
-                {/* 2. Clear Local Vault & Index */}
-                <div className="py-2.5 border-t border-destructive/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <p className="text-xs font-semibold text-foreground">Clear Local Vault & Index</p>
-                    <p className="text-[11px] text-muted-foreground max-w-md">
-                      Permanently wipes stored markdown files, voice notes, scribbles, and the LanceDB vector database from local disk.
-                    </p>
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{destructiveOpen ? 'Hide actions' : 'Show actions'}</span>
+                    {destructiveOpen ? (
+                      <ChevronUp className="w-4 h-4 text-destructive shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 shrink-0" />
+                    )}
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-destructive/60 text-destructive hover:bg-destructive/10 gap-1.5 text-xs shrink-0"
-                    onClick={() => {
-                      setClearVaultModalOpen(true);
-                      setClearVaultAck(false);
-                      setClearVaultInput('');
-                    }}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Clear Local Vault</span>
-                  </Button>
-                </div>
+                </button>
 
-                {/* 3. Disconnect Sync */}
-                {account?.authenticated && (
-                  <div className="py-2.5 border-t border-destructive/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <p className="text-xs font-semibold text-foreground">Disconnect Hybrid Cloud Sync</p>
-                      <p className="text-[11px] text-muted-foreground max-w-md">
-                        Signs out of your Vox identity and returns the application to 100% offline local-only operating mode.
-                      </p>
+                {destructiveOpen && (
+                  <div className="p-4 pt-0 space-y-3.5 border-t border-destructive/20 animate-in fade-in-50 duration-150">
+                    <p className="text-[11px] text-muted-foreground pt-3">
+                      Use caution. These actions permanently erase configurations, accounts, or stored local vault data.
+                    </p>
+
+                    {/* Half and Half Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                      {/* Left Half: Delete Vox Cloud Account */}
+                      <div className="p-3.5 rounded-lg border border-destructive/30 bg-card/60 flex flex-col justify-between space-y-3">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-foreground">Delete Vox Cloud Account</p>
+                            <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-destructive/30 text-destructive font-mono">
+                              {account?.authenticated ? 'Cloud Linked' : 'Local Only'}
+                            </Badge>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            Deletes your cloud account record and clears OS Keyring tokens.
+                            <strong className="block mt-1 text-foreground font-medium">
+                              Account ≠ Vault: Your local markdown notes, recordings, and scribbles remain 100% on this PC.
+                            </strong>
+                          </p>
+                        </div>
+                        <div className="pt-2 border-t border-border/40 flex justify-end">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full sm:w-auto border-destructive/60 text-destructive hover:bg-destructive/10 gap-1.5 text-xs"
+                            onClick={() => {
+                              setDeleteAccountModalOpen(true);
+                              setDeleteAccountAck(false);
+                              setDeleteAccountInput('');
+                              setDeleteAccountError(null);
+                            }}
+                            disabled={!account?.authenticated}
+                          >
+                            <User className="w-3.5 h-3.5" />
+                            <span>Delete Cloud Account</span>
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Right Half: Clear Local Vault & Index */}
+                      <div className="p-3.5 rounded-lg border border-destructive/30 bg-card/60 flex flex-col justify-between space-y-3">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-foreground">Clear Local Vault & Index</p>
+                            <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-destructive/30 text-destructive font-mono">
+                              Irreversible
+                            </Badge>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            Permanently wipes stored markdown files, voice notes, scribbles, and the LanceDB vector database from local disk.
+                          </p>
+                        </div>
+                        <div className="pt-2 border-t border-border/40 flex justify-end">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full sm:w-auto border-destructive/60 text-destructive hover:bg-destructive/10 gap-1.5 text-xs"
+                            onClick={() => {
+                              setClearVaultModalOpen(true);
+                              setClearVaultAck(false);
+                              setClearVaultInput('');
+                            }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Clear Local Vault</span>
+                          </Button>
+                        </div>
+                      </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-border text-muted-foreground hover:text-foreground gap-1.5 text-xs shrink-0"
-                      onClick={handleDisconnectSync}
-                    >
-                      <Cloud className="w-3.5 h-3.5" />
-                      <span>Disconnect Sync</span>
-                    </Button>
+
+                    {/* Disconnect Sync (if authenticated) */}
+                    {account?.authenticated && (
+                      <div className="p-3 rounded-lg border border-border/60 bg-card/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <p className="text-xs font-semibold text-foreground">Disconnect Hybrid Cloud Sync</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Signs out of your Vox identity and returns the application to 100% offline local-only operating mode.
+                          </p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-border text-muted-foreground hover:text-foreground gap-1.5 text-xs shrink-0"
+                          onClick={handleDisconnectSync}
+                        >
+                          <Cloud className="w-3.5 h-3.5" />
+                          <span>Disconnect Sync</span>
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
