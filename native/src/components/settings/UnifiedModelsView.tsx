@@ -104,6 +104,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
   const [testResponse, setTestResponse] = useState<string | null>(null);
   const [testLatency, setTestLatency] = useState<number | null>(null);
   const [testingLlm, setTestingLlm] = useState(false);
+  const [ollamaAccordionOpen, setOllamaAccordionOpen] = useState(true);
 
   // --- TTS State ---
   const [ttsRate, setTtsRate] = useState(1.0);
@@ -929,92 +930,114 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                   </div>
                 </div>
 
-                {/* Available Models Picker */}
-                <div className="space-y-2 pt-1">
-                  <span className="text-[11px] font-medium text-foreground">
-                    Available Models from Ollama ({ollamaModels.length})
-                  </span>
+                {/* Available Models Accordion (Openable, Half and Half Grid) */}
+                <div className="rounded-lg border border-border overflow-hidden bg-card/60">
+                  <button
+                    type="button"
+                    onClick={() => setOllamaAccordionOpen(!ollamaAccordionOpen)}
+                    className="w-full flex items-center justify-between p-3 bg-muted/30 hover:bg-muted/50 transition-colors cursor-pointer text-left select-none"
+                    aria-expanded={ollamaAccordionOpen}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Server className="w-4 h-4 text-primary shrink-0" />
+                      <span className="text-xs font-semibold text-foreground">
+                        Available Models from Ollama ({ollamaModels.length})
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>{ollamaAccordionOpen ? 'Hide models' : 'Browse & manage models'}</span>
+                      {ollamaAccordionOpen ? (
+                        <ChevronUp className="w-4 h-4 text-foreground shrink-0" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 shrink-0" />
+                      )}
+                    </div>
+                  </button>
 
-                  {loadingOllama ? (
-                    <div className="p-3 text-center text-xs text-muted-foreground border border-dashed rounded-lg">
-                      Scanning models from Ollama…
-                    </div>
-                  ) : ollamaModels.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                      {ollamaModels.map((m) => {
-                        const isSelected = settings.provider.ollama_model === m.name;
-                        return (
-                          <button
-                            key={m.name}
-                            type="button"
-                            onClick={() =>
-                              onUpdateSettings((prev) => ({
-                                ...prev,
-                                provider: { ...prev.provider, ollama_model: m.name },
-                              }))
-                            }
-                            className={`p-2 rounded-md border text-left transition-all flex items-start justify-between cursor-pointer ${
-                              isSelected
-                                ? 'border-primary bg-primary/10 text-foreground shadow-xs'
-                                : 'border-border bg-muted/20 text-muted-foreground hover:border-border/80 hover:text-foreground'
-                            }`}
+                  {ollamaAccordionOpen && (
+                    <div className="p-3.5 border-t border-border space-y-3.5 bg-muted/10 animate-in fade-in-50 duration-150">
+                      {loadingOllama ? (
+                        <div className="p-3 text-center text-xs text-muted-foreground border border-dashed rounded-lg">
+                          Scanning models from Ollama…
+                        </div>
+                      ) : ollamaModels.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {ollamaModels.map((m) => {
+                            const isSelected = settings.provider.ollama_model === m.name;
+                            return (
+                              <button
+                                key={m.name}
+                                type="button"
+                                onClick={() =>
+                                  onUpdateSettings((prev) => ({
+                                    ...prev,
+                                    provider: { ...prev.provider, ollama_model: m.name },
+                                  }))
+                                }
+                                className={`p-2 rounded-md border text-left transition-all flex items-start justify-between cursor-pointer ${
+                                  isSelected
+                                    ? 'border-primary bg-primary/10 text-foreground shadow-xs'
+                                    : 'border-border bg-card text-muted-foreground hover:border-border/80 hover:text-foreground'
+                                }`}
+                              >
+                                <div className="space-y-0.5 min-w-0 pr-1.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[11.5px] font-semibold font-mono truncate">{m.name}</span>
+                                    {isSelected && (
+                                      <Check className="w-3 h-3 text-primary shrink-0" />
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    {m.parameter_size && (
+                                      <Badge variant="outline" className="text-[8.5px] px-1 py-0 font-mono h-3.5 leading-none">
+                                        {m.parameter_size}
+                                      </Badge>
+                                    )}
+                                    {m.quantization_level && (
+                                      <Badge variant="outline" className="text-[8.5px] px-1 py-0 font-mono h-3.5 leading-none">
+                                        {m.quantization_level}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                <span className="text-[9.5px] font-mono text-muted-foreground shrink-0">
+                                  {m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB` : ''}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-lg border border-border bg-card text-xs text-muted-foreground space-y-1">
+                          <p className="font-semibold text-foreground">No installed models found in Ollama.</p>
+                          <p className="text-[11px]">
+                            Run <code className="px-1.5 py-0.5 rounded bg-muted border border-border font-mono text-foreground">ollama pull llama3.2</code> in your terminal, or pull one below.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Pull Model Form */}
+                      <div className="p-3 rounded-lg bg-card border border-border space-y-2">
+                        <p className="text-xs font-medium text-foreground">Pull / Download New Model</p>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="e.g. llama3.2:latest, gemma2:9b, mistral"
+                            value={pullModelName}
+                            onChange={(e) => setPullModelName(e.target.value)}
+                            className="h-8 text-xs font-mono"
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() => void handlePullModel()}
+                            disabled={pulling || !pullModelName.trim()}
+                            className="h-8 text-xs gap-1.5 shrink-0"
                           >
-                            <div className="space-y-0.5 min-w-0 pr-1.5">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[11.5px] font-semibold font-mono truncate">{m.name}</span>
-                                {isSelected && (
-                                  <Check className="w-3 h-3 text-primary shrink-0" />
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1 flex-wrap">
-                                {m.parameter_size && (
-                                  <Badge variant="outline" className="text-[8.5px] px-1 py-0 font-mono h-3.5 leading-none">
-                                    {m.parameter_size}
-                                  </Badge>
-                                )}
-                                {m.quantization_level && (
-                                  <Badge variant="outline" className="text-[8.5px] px-1 py-0 font-mono h-3.5 leading-none">
-                                    {m.quantization_level}
-                                  </Badge>
-                                )}
-                              </div>
-                            </div>
-                            <span className="text-[9.5px] font-mono text-muted-foreground shrink-0">
-                              {m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB` : ''}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-lg border border-border bg-muted/20 text-xs text-muted-foreground space-y-1">
-                      <p className="font-semibold text-foreground">No installed models found in Ollama.</p>
-                      <p className="text-[11px]">
-                        Run <code className="px-1.5 py-0.5 rounded bg-muted border border-border font-mono text-foreground">ollama pull llama3.2</code> in your terminal, or pull one below.
-                      </p>
+                            {pulling ? 'Pulling…' : 'Pull Model'}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   )}
-                </div>
-
-                {/* Pull Model Form */}
-                <div className="p-3 rounded-lg bg-muted/20 border border-border space-y-2">
-                  <p className="text-xs font-medium text-foreground">Pull / Download New Model</p>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="e.g. llama3.2:latest, gemma2:9b, mistral"
-                      value={pullModelName}
-                      onChange={(e) => setPullModelName(e.target.value)}
-                      className="h-8 text-xs font-mono"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={() => void handlePullModel()}
-                      disabled={pulling || !pullModelName.trim()}
-                      className="h-8 text-xs gap-1.5 shrink-0"
-                    >
-                      {pulling ? 'Pulling…' : 'Pull Model'}
-                    </Button>
-                  </div>
                 </div>
               </Card>
             ) : (
