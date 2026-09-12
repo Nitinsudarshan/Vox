@@ -548,31 +548,52 @@ fn stop_dictation_session(
             decoding_config.initial_prompt = Some(prompt);
         }
 
-        let stt = state.stt.clone();
-        let samples = captured.samples.clone();
-        let mp_clone = model_path.clone();
-        let lang_clone = language_config.clone();
-        let dec_clone = decoding_config.clone();
+        let parakeet_dir = models_dir.join("parakeet");
+        let use_parakeet = stt_settings.dictation_engine.as_deref() == Some("parakeet")
+            && crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir);
 
         let t_whisper_start = std::time::Instant::now();
 
-        let (text_res, diag, err) = tauri::async_runtime::spawn_blocking(move || {
-            match stt.transcribe_with_config(
-                mp_clone.as_deref(),
-                &samples,
-                &lang_clone,
-                &dec_clone,
-            ) {
-                Ok((t, d)) => (t, Some(d), None),
-                Err(e) => (String::new(), None, Some(e.to_string())),
-            }
-        })
-        .await
-        .unwrap_or_else(|e| (String::new(), None, Some(e.to_string())));
+        let (text_res, diag, err) = if use_parakeet {
+            let stt = state.stt.clone();
+            let samples = captured.samples.clone();
+            let p_dir = parakeet_dir.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match stt.transcribe_parakeet(&p_dir, &samples) {
+                    Ok((t, d)) => (t, Some(d), None),
+                    Err(e) => (String::new(), None, Some(e.to_string())),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| (String::new(), None, Some(e.to_string())))
+        } else {
+            let stt = state.stt.clone();
+            let samples = captured.samples.clone();
+            let mp_clone = model_path.clone();
+            let lang_clone = language_config.clone();
+            let dec_clone = decoding_config.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match stt.transcribe_with_config(
+                    mp_clone.as_deref(),
+                    &samples,
+                    &lang_clone,
+                    &dec_clone,
+                ) {
+                    Ok((t, d)) => (t, Some(d), None),
+                    Err(e) => (String::new(), None, Some(e.to_string())),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| (String::new(), None, Some(e.to_string())))
+        };
 
         let t_whisper_complete = std::time::Instant::now();
 
-        let model_str = model_path.as_deref().unwrap_or(crate::capture::stt::DEFAULT_MODEL_FILENAME);
+        let model_str = if use_parakeet {
+            "parakeet-tdt-0.6b-v3"
+        } else {
+            model_path.as_deref().unwrap_or(crate::capture::stt::DEFAULT_MODEL_FILENAME)
+        };
         let snapshot = crate::capture::build_diagnostic_snapshot(
             &captured.mode,
             Some(captured.audio_path.clone()),

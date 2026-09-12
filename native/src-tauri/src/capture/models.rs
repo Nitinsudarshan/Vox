@@ -652,6 +652,150 @@ where
     Ok(target)
 }
 
+pub const PARAKEET_MODEL_ID: &str = "parakeet-tdt";
+pub const PARAKEET_BASE_URL: &str =
+    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+pub const PARAKEET_TOTAL_BYTES: u64 = 670_479_942;
+pub const PARAKEET_FILES: [(&str, u64); 3] = [
+    ("vocab.txt", 93_939),
+    ("decoder_joint-model.int8.onnx", 18_202_004),
+    ("encoder-model.int8.onnx", 652_183_999),
+];
+
+/// Downloads the 3 files of the NVIDIA Parakeet TDT model into `models_dir/parakeet`.
+pub async fn download_parakeet<F>(
+    models_dir: &Path,
+    on_progress: F,
+) -> Result<PathBuf, DownloadError>
+where
+    F: Fn(DownloadProgress) + Send + 'static,
+{
+    use std::io::Write;
+
+    let parakeet_dir = models_dir.join("parakeet");
+    std::fs::create_dir_all(&parakeet_dir).map_err(|e| DownloadError::Io {
+        path: parakeet_dir.display().to_string(),
+        message: e.to_string(),
+    })?;
+
+    if crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir) {
+        on_progress(DownloadProgress::Ready {
+            id: PARAKEET_MODEL_ID.to_string(),
+            path: parakeet_dir.to_string_lossy().to_string(),
+        });
+        return Ok(parakeet_dir);
+    }
+
+    let cancel_flag = {
+        let mut running = in_flight().lock_or_recover();
+        if running.contains_key(PARAKEET_MODEL_ID) {
+            return Err(DownloadError::AlreadyRunning(PARAKEET_MODEL_ID.to_string()));
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        running.insert(PARAKEET_MODEL_ID.to_string(), Arc::clone(&flag));
+        flag
+    };
+    let _guard = InFlightGuard(PARAKEET_MODEL_ID.to_string());
+
+    let mut total_downloaded: u64 = 0;
+    // Account for previously completed files
+    for (filename, expected_size) in PARAKEET_FILES {
+        let file_path = parakeet_dir.join(filename);
+        if let Ok(meta) = std::fs::metadata(&file_path) {
+            if meta.len() >= expected_size {
+                total_downloaded += meta.len();
+            }
+        }
+    }
+
+    let report_every = 2 * 1024 * 1024;
+    let mut next_report = total_downloaded + report_every;
+
+    for (filename, expected_size) in PARAKEET_FILES {
+        let file_path = parakeet_dir.join(filename);
+        if let Ok(meta) = std::fs::metadata(&file_path) {
+            if meta.len() >= expected_size {
+                continue;
+            }
+        }
+
+        let url = format!("{PARAKEET_BASE_URL}/{filename}");
+        let mut response = reqwest::get(&url)
+            .await
+            .map_err(|e| DownloadError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(DownloadError::HttpStatus(response.status().as_u16()));
+        }
+
+        let part_path = parakeet_dir.join(format!("{filename}.part"));
+        let mut file = std::fs::File::create(&part_path).map_err(|e| DownloadError::Io {
+            path: part_path.display().to_string(),
+            message: e.to_string(),
+        })?;
+
+        loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                drop(file);
+                let _ = std::fs::remove_file(&part_path);
+                return Err(DownloadError::Cancelled);
+            }
+
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(e) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(DownloadError::Network(e.to_string()));
+                }
+            };
+
+            file.write_all(&chunk).map_err(|e| DownloadError::Io {
+                path: part_path.display().to_string(),
+                message: e.to_string(),
+            })?;
+            total_downloaded += chunk.len() as u64;
+
+            if total_downloaded >= next_report {
+                next_report = total_downloaded + report_every;
+                on_progress(DownloadProgress::Downloading {
+                    id: PARAKEET_MODEL_ID.to_string(),
+                    downloaded_bytes: total_downloaded,
+                    total_bytes: Some(PARAKEET_TOTAL_BYTES),
+                });
+            }
+        }
+
+        file.flush().map_err(|e| DownloadError::Io {
+            path: part_path.display().to_string(),
+            message: e.to_string(),
+        })?;
+        drop(file);
+
+        std::fs::rename(&part_path, &file_path).map_err(|e| DownloadError::Io {
+            path: file_path.display().to_string(),
+            message: e.to_string(),
+        })?;
+    }
+
+    on_progress(DownloadProgress::Verifying {
+        id: PARAKEET_MODEL_ID.to_string(),
+    });
+
+    if !crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir) {
+        return Err(DownloadError::NotAModel);
+    }
+
+    on_progress(DownloadProgress::Ready {
+        id: PARAKEET_MODEL_ID.to_string(),
+        path: parakeet_dir.to_string_lossy().to_string(),
+    });
+
+    tracing::info!("parakeet model installed at {}", parakeet_dir.display());
+    Ok(parakeet_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

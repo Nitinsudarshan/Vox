@@ -113,6 +113,24 @@ impl ModelFiles {
             })
             .collect()
     }
+
+    /// Checks whether an installed Parakeet model (int8 or full) exists in the directory.
+    pub fn is_installed_in(dir: &Path) -> bool {
+        Self::in_dir(dir, true).complete() || Self::in_dir(dir, false).complete()
+    }
+
+    /// Returns the complete files found in `dir`, preferring the `.int8` quantized model.
+    pub fn find_in(dir: &Path) -> Option<Self> {
+        let quantized = Self::in_dir(dir, true);
+        if quantized.complete() {
+            return Some(quantized);
+        }
+        let full = Self::in_dir(dir, false);
+        if full.complete() {
+            return Some(full);
+        }
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

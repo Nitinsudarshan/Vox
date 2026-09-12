@@ -134,6 +134,9 @@ pub struct SttSettings {
     /// usable model under a different name.
     #[serde(default, alias = "meetingModelId")]
     pub meeting_model_id: Option<String>,
+    /// Which engine dictation uses: "whisper" (default) or "parakeet".
+    #[serde(default, alias = "dictationEngine")]
+    pub dictation_engine: Option<String>,
 }
 
 impl SttSettings {

@@ -1,7 +1,6 @@
 use crate::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "whisper-local")]
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -1080,11 +1079,13 @@ pub struct SttSessionDiagnostics {
     pub transcript_char_count: usize,
 }
 
-/// Local, zero-cost speech-to-text via whisper.cpp (through whisper-rs).
+/// Local, zero-cost speech-to-text via whisper.cpp (through whisper-rs) or NVIDIA Parakeet TDT.
 #[derive(Clone)]
 pub struct SttEngine {
     #[cfg(feature = "whisper-local")]
     loaded: Arc<Mutex<Option<(String, WhisperContext)>>>,
+    #[cfg(feature = "parakeet")]
+    parakeet_loaded: Arc<Mutex<Option<crate::capture::parakeet::ParakeetEngine>>>,
 }
 
 impl Default for SttEngine {
@@ -1098,6 +1099,80 @@ impl SttEngine {
         Self {
             #[cfg(feature = "whisper-local")]
             loaded: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "parakeet")]
+            parakeet_loaded: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Unloads any cached Parakeet engine session.
+    pub fn unload_parakeet(&self) {
+        #[cfg(feature = "parakeet")]
+        {
+            *self.parakeet_loaded.lock_or_recover() = None;
+        }
+    }
+
+    /// Transcribe using the NVIDIA Parakeet TDT engine with sub-100ms latency.
+    pub fn transcribe_parakeet(
+        &self,
+        parakeet_dir: &Path,
+        samples_16k_mono: &[f32],
+    ) -> Result<(String, SttSessionDiagnostics), SttError> {
+        #[cfg(not(feature = "parakeet"))]
+        {
+            let _ = (parakeet_dir, samples_16k_mono);
+            Err(SttError::TranscriptionFailed(
+                "Parakeet engine is not enabled in this build".to_string(),
+            ))
+        }
+
+        #[cfg(feature = "parakeet")]
+        {
+            let t_start = std::time::Instant::now();
+            let files = crate::capture::parakeet::ModelFiles::find_in(parakeet_dir).ok_or_else(|| {
+                SttError::TranscriptionFailed(
+                    "Parakeet model files are incomplete or missing from models directory".to_string(),
+                )
+            })?;
+
+            let mut guard = self.parakeet_loaded.lock_or_recover();
+            if guard.is_none() {
+                let engine = crate::capture::parakeet::ParakeetEngine::load(&files).map_err(|e| {
+                    SttError::TranscriptionFailed(format!("Failed to load Parakeet engine: {e}"))
+                })?;
+                *guard = Some(engine);
+            }
+
+            let engine = guard.as_mut().expect("parakeet engine loaded");
+            let result = engine.transcribe(samples_16k_mono).map_err(|e| {
+                SttError::TranscriptionFailed(format!("Parakeet transcription failed: {e}"))
+            })?;
+
+            let elapsed = t_start.elapsed().as_millis();
+            let duration_s = samples_16k_mono.len() as f32 / 16_000.0;
+            let rtf = if duration_s > 0.0 {
+                (elapsed as f32 / 1000.0) / duration_s
+            } else {
+                0.0
+            };
+
+            let diag = SttSessionDiagnostics {
+                model_path: "parakeet-tdt-0.6b-v3".to_string(),
+                audio_duration_seconds: duration_s,
+                whisper_language: Some("en".to_string()),
+                decoding_strategy: "tdt_greedy".to_string(),
+                temperature: 0.0,
+                temperature_inc: 0.0,
+                best_of: 1,
+                used_initial_prompt: false,
+                transcription_latency_ms: elapsed,
+                real_time_factor: rtf,
+                segment_count: result.tokens.len(),
+                is_empty: result.text.trim().is_empty(),
+                transcript_char_count: result.text.chars().count(),
+            };
+
+            Ok((result.text, diag))
         }
     }
 

@@ -550,25 +550,46 @@ async fn process_captured_audio(
         decoding_config.initial_prompt = Some(prompt);
     }
 
-    let mp_clone = model_path.clone();
-    let lang_clone = language_config.clone();
-    let dec_clone = decoding_config.clone();
+    let parakeet_dir = models_dir.join("parakeet");
+    let use_parakeet = settings.stt.dictation_engine.as_deref() == Some("parakeet")
+        && crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir);
 
-    let (transcript, diag, err) = tokio::task::spawn_blocking(move || {
-        match stt.transcribe_with_config(
-            mp_clone.as_deref(),
-            &samples,
-            &lang_clone,
-            &dec_clone,
-        ) {
-            Ok((t, d)) => (t, Some(d), None),
-            Err(e) => (String::new(), None, Some(e.to_string())),
-        }
-    })
-    .await
-    .map_err(|e| CommandError::new("STT_TASK_FAILED", &e.to_string()))?;
+    let (transcript, diag, err) = if use_parakeet {
+        let stt = state.stt.clone();
+        let samples = captured.samples.clone();
+        let p_dir = parakeet_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            match stt.transcribe_parakeet(&p_dir, &samples) {
+                Ok((t, d)) => (t, Some(d), None),
+                Err(e) => (String::new(), None, Some(e.to_string())),
+            }
+        })
+        .await
+        .map_err(|e| CommandError::new("STT_TASK_FAILED", &e.to_string()))?
+    } else {
+        let mp_clone = model_path.clone();
+        let lang_clone = language_config.clone();
+        let dec_clone = decoding_config.clone();
+        tokio::task::spawn_blocking(move || {
+            match stt.transcribe_with_config(
+                mp_clone.as_deref(),
+                &samples,
+                &lang_clone,
+                &dec_clone,
+            ) {
+                Ok((t, d)) => (t, Some(d), None),
+                Err(e) => (String::new(), None, Some(e.to_string())),
+            }
+        })
+        .await
+        .map_err(|e| CommandError::new("STT_TASK_FAILED", &e.to_string()))?
+    };
 
-    let model_str = model_path.as_deref().unwrap_or(crate::capture::stt::DEFAULT_MODEL_FILENAME);
+    let model_str = if use_parakeet {
+        "parakeet-tdt-0.6b-v3"
+    } else {
+        model_path.as_deref().unwrap_or(crate::capture::stt::DEFAULT_MODEL_FILENAME)
+    };
     let snapshot = crate::capture::build_diagnostic_snapshot(
         &captured.mode,
         Some(captured.audio_path.clone()),
@@ -1957,6 +1978,118 @@ pub async fn set_dictation_speech_model(
     let settings = {
         let mut guard = state.settings.lock_or_recover();
         guard.stt.whisper_model_path = path_str;
+        // When setting a Whisper model for dictation, ensure dictation engine is whisper
+        if guard.stt.dictation_engine.as_deref() == Some("parakeet") {
+            guard.stt.dictation_engine = Some("whisper".to_string());
+        }
+        guard.clone()
+    };
+    persist_settings(&app, &state, settings)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParakeetStatus {
+    pub supported: bool,
+    pub installed: bool,
+    pub active_for_dictation: bool,
+    pub missing_files: Vec<String>,
+    pub models_dir: String,
+    pub approx_total_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn get_parakeet_status(state: State<'_, AppState>) -> Result<ParakeetStatus, CommandError> {
+    let models_dir = state.config_dir.join("models");
+    let parakeet_dir = models_dir.join("parakeet");
+    let files = crate::capture::parakeet::ModelFiles::in_dir(&parakeet_dir, true);
+    let installed = crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir);
+    let stt = state.settings.lock_or_recover().stt.clone();
+    let active_for_dictation = stt.dictation_engine.as_deref() == Some("parakeet");
+
+    Ok(ParakeetStatus {
+        supported: cfg!(feature = "parakeet"),
+        installed,
+        active_for_dictation,
+        missing_files: if installed { Vec::new() } else { files.missing() },
+        models_dir: parakeet_dir.to_string_lossy().to_string(),
+        approx_total_bytes: crate::capture::models::PARAKEET_TOTAL_BYTES,
+    })
+}
+
+#[tauri::command]
+pub async fn download_parakeet_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    use crate::capture::models;
+
+    let models_dir = state.config_dir.join("models");
+    let emitter = app.clone();
+    let path = models::download_parakeet(&models_dir, move |progress| {
+        let _ = emitter.emit(SPEECH_MODEL_DOWNLOAD_EVENT, &progress);
+    })
+    .await
+    .map_err(|e| CommandError::new("PARAKEET_DOWNLOAD_FAILED", &e.to_string()))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn delete_parakeet_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    let models_dir = state.config_dir.join("models");
+    let parakeet_dir = models_dir.join("parakeet");
+
+    state.stt.unload_parakeet();
+
+    let mut deleted = false;
+    for (filename, _) in crate::capture::models::PARAKEET_FILES {
+        let path = parakeet_dir.join(filename);
+        if path.is_file() {
+            let _ = std::fs::remove_file(&path);
+            deleted = true;
+        }
+        let part = parakeet_dir.join(format!("{filename}.part"));
+        if part.is_file() {
+            let _ = std::fs::remove_file(&part);
+        }
+    }
+
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        if guard.stt.dictation_engine.as_deref() == Some("parakeet") {
+            guard.stt.dictation_engine = Some("whisper".to_string());
+        }
+        guard.clone()
+    };
+    persist_settings(&app, &state, settings)?;
+
+    Ok(deleted)
+}
+
+#[tauri::command]
+pub async fn set_dictation_engine(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    engine: String,
+) -> Result<(), CommandError> {
+    let engine = engine.trim().to_lowercase();
+    if engine == "parakeet" {
+        let models_dir = state.config_dir.join("models");
+        let parakeet_dir = models_dir.join("parakeet");
+        if !crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir) {
+            return Err(CommandError::new(
+                "PARAKEET_NOT_INSTALLED",
+                "NVIDIA Parakeet TDT model is not installed yet",
+            ));
+        }
+    }
+
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        guard.stt.dictation_engine = Some(engine);
         guard.clone()
     };
     persist_settings(&app, &state, settings)
@@ -2337,8 +2470,9 @@ pub async fn run_stt_evaluation(
         .filter(|p| !p.trim().is_empty())
         .or_else(|| settings.stt.whisper_model_path.clone());
 
+    let wav_path_for_read = wav_path.clone();
     let (samples, sample_rate) = tokio::task::spawn_blocking(move || -> Result<(Vec<f32>, u32), String> {
-        let mut reader = hound::WavReader::open(&wav_path)
+        let mut reader = hound::WavReader::open(&wav_path_for_read)
             .map_err(|e| format!("Failed to open WAV: {}", e))?;
         let spec = reader.spec();
         let raw_samples: Vec<f32> = match spec.sample_format {
@@ -2354,6 +2488,102 @@ pub async fn run_stt_evaluation(
     .await
     .map_err(|e| CommandError::new("IO_ERROR", &e.to_string()))?
     .map_err(|e| CommandError::new("WAV_ERROR", &e))?;
+
+    if variant.to_lowercase() == "parakeet" {
+        let models_dir = state.config_dir.join("models");
+        let parakeet_dir = models_dir.join("parakeet");
+        if !crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir) {
+            return Err(CommandError::new(
+                "NOT_INSTALLED",
+                "Parakeet TDT model files are not installed. Download them in Settings -> Models first.",
+            ));
+        }
+        let original_dur = samples.len() as f32 / sample_rate.max(1) as f32;
+        let mono_16k = crate::capture::resample_to_16k_mono(&samples, sample_rate);
+        let audio_stats = crate::capture::AudioStats::compute(&mono_16k, 16000, 1);
+        let vad = crate::capture::VadConfig::default();
+        let (vad_samples, vad_result) = vad.process(&mono_16k, 16000);
+
+        let clean_label = std::path::Path::new(&wav_path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "eval_audio.wav".to_string());
+
+        if !vad_result.speech_detected || vad_samples.is_empty() {
+            let res = crate::capture::EvaluationResult {
+                test_id: "manual_eval".to_string(),
+                audio_file: clean_label,
+                configuration: "NVIDIA Parakeet TDT 0.6B".to_string(),
+                language_setting: "en-US (punctuation+casing)".to_string(),
+                resolved_whisper_language: None,
+                original_duration_seconds: original_dur,
+                processed_duration_seconds: audio_stats.duration_seconds,
+                inference_duration_ms: 0,
+                real_time_factor: 0.0,
+                transcript: String::new(),
+                audio_rms: audio_stats.rms,
+                audio_peak: audio_stats.peak_amplitude,
+                near_zero_percent: audio_stats.near_zero_percent,
+                speech_detected: vad_result.speech_detected,
+                vad_trimmed_duration: vad_result.trimmed_duration,
+                model_filename: "parakeet-tdt-0.6b-v3".to_string(),
+                sampling_strategy: "Fast TDT (Greedy)".to_string(),
+                best_of: 1,
+                beam_size: None,
+                temperature: 0.0,
+                temperature_increment: 0.0,
+                initial_prompt_used: false,
+                no_speech_threshold: 0.0,
+                entropy_threshold: 0.0,
+                logprob_threshold: 0.0,
+                accuracy: reference_text.as_deref().map(|r| crate::capture::calculate_accuracy(r, "")),
+                fallback_triggered: false,
+                error: None,
+            };
+            return Ok(res);
+        }
+
+        let parakeet_dir_clone = parakeet_dir.clone();
+        let stt_clone = stt.clone();
+        let (text, diag) = tokio::task::spawn_blocking(move || {
+            stt_clone.transcribe_parakeet(&parakeet_dir_clone, &vad_samples)
+        })
+        .await
+        .map_err(|e| CommandError::new("EVAL_ERROR", &e.to_string()))?
+        .map_err(|e| CommandError::new("EVAL_ERROR", &e.to_string()))?;
+
+        let res = crate::capture::EvaluationResult {
+            test_id: "manual_eval".to_string(),
+            audio_file: clean_label,
+            configuration: "NVIDIA Parakeet TDT 0.6B".to_string(),
+            language_setting: "en-US (punctuation+casing)".to_string(),
+            resolved_whisper_language: None,
+            original_duration_seconds: original_dur,
+            processed_duration_seconds: audio_stats.duration_seconds,
+            inference_duration_ms: diag.transcription_latency_ms,
+            real_time_factor: diag.real_time_factor,
+            transcript: text.clone(),
+            audio_rms: audio_stats.rms,
+            audio_peak: audio_stats.peak_amplitude,
+            near_zero_percent: audio_stats.near_zero_percent,
+            speech_detected: vad_result.speech_detected,
+            vad_trimmed_duration: vad_result.trimmed_duration,
+            model_filename: "parakeet-tdt-0.6b-v3".to_string(),
+            sampling_strategy: "Fast TDT (Greedy)".to_string(),
+            best_of: 1,
+            beam_size: None,
+            temperature: 0.0,
+            temperature_increment: 0.0,
+            initial_prompt_used: false,
+            no_speech_threshold: 0.0,
+            entropy_threshold: 0.0,
+            logprob_threshold: 0.0,
+            accuracy: reference_text.as_deref().map(|r| crate::capture::calculate_accuracy(r, &text)),
+            fallback_triggered: false,
+            error: None,
+        };
+        return Ok(res);
+    }
 
     let eval_variant = match variant.to_lowercase().as_str() {
         "relay_prompt" | "prompt" => crate::capture::EvalConfigVariant::RelayPrompt,
