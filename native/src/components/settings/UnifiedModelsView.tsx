@@ -632,7 +632,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                 No speech models match the selected filter.
               </Card>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-4 gap-2.5">
                 {filteredSpeechModels.map((model) => {
                   const isDownloading = Boolean(downloads[model.id]);
                   const downloadProgress = downloads[model.id];
@@ -647,20 +647,20 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                     <div
                       key={model.id}
                       data-testid={`speech-model-card-${model.id}`}
-                      className={`p-3 rounded-lg border transition-all ${
+                      className={`p-2.5 rounded-lg border transition-all ${
                         isDictationActive || isMeetingActive
                           ? 'border-primary/50 bg-primary/5 shadow-2xs'
                           : 'border-border bg-card hover:border-border/80'
                       }`}
                     >
                       {/* Top row: Name & Badges */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
+                      <div className="flex items-start justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
                           <span className="font-semibold text-xs text-foreground truncate">
                             {model.name}
                           </span>
 
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
                             {model.multilingual ? 'Multi' : '.en'}
                           </Badge>
 
@@ -672,7 +672,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                                 className="text-muted-foreground hover:text-foreground cursor-pointer"
                                 aria-label={`Details for ${model.name}`}
                               >
-                                <Info className="w-3.5 h-3.5" />
+                                <Info className="w-3 h-3" />
                               </button>
                             </TooltipTrigger>
                             <TooltipContent side="top" className="max-w-xs text-xs">
@@ -689,12 +689,12 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
 
                         <div className="flex items-center gap-1 shrink-0">
                           {isRecommendedDictation && (
-                            <Badge variant="emerald" className="text-[9px] px-1.5 py-0">
+                            <Badge variant="emerald" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
                               Rec: Dictation
                             </Badge>
                           )}
                           {isRecommendedMeeting && (
-                            <Badge variant="purple" className="text-[9px] px-1.5 py-0">
+                            <Badge variant="purple" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
                               Rec: Meetings
                             </Badge>
                           )}
@@ -702,7 +702,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                       </div>
 
                       {/* Specs snippet */}
-                      <div className="flex items-center gap-3 text-[11px] text-muted-foreground mt-1.5">
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-1">
                         <span>{model.parameters_millions}M params</span>
                         <span>·</span>
                         <span>{formatBytes(model.size_bytes)}</span>
@@ -712,8 +712,8 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
 
                       {/* Download Progress Bar */}
                       {isDownloading && downloadProgress?.kind === 'downloading' && (
-                        <div className="mt-2 space-y-1">
-                          <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                        <div className="mt-1.5 space-y-0.5">
+                          <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
                             <div
                               className="h-full bg-primary transition-all duration-300"
                               style={{
@@ -721,7 +721,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                               }}
                             />
                           </div>
-                          <div className="flex justify-between text-[10px] text-muted-foreground">
+                          <div className="flex justify-between text-[9.5px] text-muted-foreground">
                             <span>Downloading… {formatBytes(downloadProgress.downloaded)}</span>
                             <button
                               type="button"
@@ -735,19 +735,19 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                       )}
 
                       {/* Action buttons */}
-                      <div className="flex items-center justify-between gap-2 mt-2.5 pt-2 border-t border-border/40">
+                      <div className="flex items-center justify-between gap-1.5 mt-2 pt-1.5 border-t border-border/40">
                         {model.installed ? (
                           <>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1">
                               <Button
                                 size="sm"
                                 variant={isDictationActive ? 'default' : 'outline'}
                                 disabled={busy}
                                 onClick={() => void handleSetDictation(model.id)}
-                                className="h-6 text-[11px] px-2 gap-1"
+                                className="h-5.5 text-[10.5px] px-1.5 gap-1"
                                 title="Use this model for voice dictation"
                               >
-                                {isDictationActive && <Check className="w-3 h-3" />}
+                                {isDictationActive && <Check className="w-2.5 h-2.5" />}
                                 Dictation
                               </Button>
                               <Button
@@ -755,10 +755,10 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                                 variant={isMeetingActive ? 'default' : 'outline'}
                                 disabled={busy}
                                 onClick={() => void handleSetMeeting(model.id)}
-                                className="h-6 text-[11px] px-2 gap-1"
+                                className="h-5.5 text-[10.5px] px-1.5 gap-1"
                                 title="Use this model for meeting transcription"
                               >
-                                {isMeetingActive && <Check className="w-3 h-3" />}
+                                {isMeetingActive && <Check className="w-2.5 h-2.5" />}
                                 Meetings
                               </Button>
                             </div>
@@ -767,10 +767,10 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                               type="button"
                               onClick={() => void handleRemoveSpeech(model)}
                               disabled={busy}
-                              className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors cursor-pointer"
+                              className="text-muted-foreground hover:text-destructive p-0.5 rounded transition-colors cursor-pointer"
                               title="Delete model from disk"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-3 h-3" />
                             </button>
                           </>
                         ) : (
@@ -780,7 +780,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                               variant="outline"
                               disabled={isDownloading || busy}
                               onClick={() => void handleDownloadSpeech(model.id)}
-                              className="h-6 text-[11px] gap-1.5"
+                              className="h-5.5 text-[10.5px] px-2 gap-1.5"
                             >
                               <Download className="w-3 h-3" />
                               Download ({formatBytes(model.size_bytes)})
@@ -940,7 +940,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                       Scanning models from Ollama…
                     </div>
                   ) : ollamaModels.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
                       {ollamaModels.map((m) => {
                         const isSelected = settings.provider.ollama_model === m.name;
                         return (
@@ -953,33 +953,33 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                                 provider: { ...prev.provider, ollama_model: m.name },
                               }))
                             }
-                            className={`p-2.5 rounded-lg border text-left transition-all flex items-start justify-between cursor-pointer ${
+                            className={`p-2 rounded-md border text-left transition-all flex items-start justify-between cursor-pointer ${
                               isSelected
                                 ? 'border-primary bg-primary/10 text-foreground shadow-xs'
                                 : 'border-border bg-muted/20 text-muted-foreground hover:border-border/80 hover:text-foreground'
                             }`}
                           >
-                            <div className="space-y-1 min-w-0 pr-2">
+                            <div className="space-y-0.5 min-w-0 pr-1.5">
                               <div className="flex items-center gap-1.5">
-                                <span className="text-xs font-semibold font-mono truncate">{m.name}</span>
+                                <span className="text-[11.5px] font-semibold font-mono truncate">{m.name}</span>
                                 {isSelected && (
-                                  <Check className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  <Check className="w-3 h-3 text-primary shrink-0" />
                                 )}
                               </div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
+                              <div className="flex items-center gap-1 flex-wrap">
                                 {m.parameter_size && (
-                                  <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
+                                  <Badge variant="outline" className="text-[8.5px] px-1 py-0 font-mono h-3.5 leading-none">
                                     {m.parameter_size}
                                   </Badge>
                                 )}
                                 {m.quantization_level && (
-                                  <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
+                                  <Badge variant="outline" className="text-[8.5px] px-1 py-0 font-mono h-3.5 leading-none">
                                     {m.quantization_level}
                                   </Badge>
                                 )}
                               </div>
                             </div>
-                            <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                            <span className="text-[9.5px] font-mono text-muted-foreground shrink-0">
                               {m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB` : ''}
                             </span>
                           </button>

@@ -3,8 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   RelayAccount,
   RelayProfile,
-  InstallationInfo,
-  UpdateInfo,
   AppSettings,
 } from '../../types';
 import {
@@ -13,20 +11,16 @@ import {
   HardDrive,
   CheckCircle2,
   RefreshCw,
-  Copy,
   Check,
   LogOut,
   Sparkles,
   AlertCircle,
-  Laptop,
   Save,
-  Info,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
 
 interface AccountSettingsProps {
   settings: AppSettings;
@@ -41,36 +35,29 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 }) => {
   const [account, setAccount] = useState<RelayAccount | null>(null);
   const [profile, setProfile] = useState<RelayProfile | null>(null);
-  const [installation, setInstallation] = useState<InstallationInfo | null>(null);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [savedNameSuccess, setSavedNameSuccess] = useState(false);
   const [loading, setLoading] = useState(true);
   const [signingIn, setSigningIn] = useState(false);
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
-  const [copiedId, setCopiedId] = useState(false);
-  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
   const [showHybridModal, setShowHybridModal] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [acc, prof, inst] = await Promise.all([
+      const [acc, prof] = await Promise.all([
         invoke<RelayAccount>('get_account_state'),
         invoke<RelayProfile>('get_relay_profile'),
-        invoke<InstallationInfo>('get_installation_info'),
       ]);
       setAccount(acc);
       setProfile(prof);
-      setInstallation(inst);
       if (prof?.display_name) {
         setDisplayNameInput(prof.display_name);
       }
     } catch (err) {
-      console.error('Failed to load account/installation state:', err);
+      console.error('Failed to load account state:', err);
     } finally {
       setLoading(false);
     }
@@ -147,68 +134,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     }
   };
 
-  const handleCheckUpdates = async () => {
-    try {
-      setCheckingUpdate(true);
-      const info = await invoke<UpdateInfo>('check_for_updates');
-      setUpdateInfo(info);
-    } catch (err) {
-      console.error('Update check failed:', err);
-    } finally {
-      setCheckingUpdate(false);
-    }
-  };
-
-  const copyInstallationId = () => {
-    if (!installation?.installation_id) return;
-    navigator.clipboard.writeText(installation.installation_id);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
-  };
-
-  const copyDiagnosticsSummary = async () => {
-    try {
-      const summary = await invoke<string>('get_diagnostic_summary');
-      await navigator.clipboard.writeText(summary);
-      setCopiedDiagnostics(true);
-      setTimeout(() => setCopiedDiagnostics(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy diagnostics:', err);
-    }
-  };
-
-  const handleToggleDiagnostics = async (checked: boolean) => {
-    onUpdateSettings((prev) => ({
-      ...prev,
-      diagnostics: {
-        ...prev.diagnostics,
-        allow_anonymous_diagnostics: checked,
-      },
-    }));
-
-    try {
-      const current = await invoke<AppSettings>('get_settings');
-      const updated: AppSettings = {
-        ...current,
-        diagnostics: {
-          ...current.diagnostics,
-          allow_anonymous_diagnostics: checked,
-        },
-      };
-      await invoke('save_settings', { settings: updated });
-    } catch (err) {
-      console.error('Failed to persist diagnostics setting:', err);
-    }
-  };
-
-  const maskedId = installation?.installation_id
-    ? installation.installation_id.length > 12
-      ? `${installation.installation_id.substring(0, 8)}...${installation.installation_id.substring(installation.installation_id.length - 4)}`
-      : installation.installation_id
-    : '••••••••••••';
-
-  const isDiagnosticsAllowed = settings.diagnostics?.allow_anonymous_diagnostics ?? false;
-
   return (
     <div className="space-y-6 pt-6 border-t border-border/60 animate-in fade-in duration-200">
       {/* Header & Invariant Statement */}
@@ -217,7 +142,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
           <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
             ACCOUNT & IDENTITY
           </p>
-          <h2 className="text-lg font-bold text-foreground">Profile, Cloud Connection & Diagnostics</h2>
+          <h2 className="text-lg font-bold text-foreground">Profile & Cloud Connection</h2>
         </div>
         <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary bg-primary/5 uppercase">
           {account?.authenticated ? 'Google Connected' : 'Local Mode'}
@@ -241,7 +166,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         </div>
       )}
 
-      {/* Responsive 3-Column Card Grid (Matching General Settings Style) */}
+      {/* Responsive 3-Column Card Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {/* Card 1: Personalization (Display Name) */}
         <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
@@ -410,129 +335,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             >
               <Sparkles className="w-3.5 h-3.5 text-primary" />
               <span>Explore Hybrid Mode</span>
-            </Button>
-          </div>
-        </div>
-
-        {/* Card 4: Application Version & Updates */}
-        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Laptop className="w-4 h-4 text-primary" />
-                <div>
-                  <p className="text-xs font-semibold text-foreground">Vox Application</p>
-                  <p className="text-[11px] text-muted-foreground">Version & update channel</p>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-[10px] font-mono">
-                v{installation?.app_version || '0.1.0'}
-              </Badge>
-            </div>
-
-            <div className="text-[11px] text-muted-foreground space-y-1">
-              <p>
-                Platform: <span className="font-mono text-foreground capitalize">{installation?.platform || 'Windows'}</span> ({installation?.os_version || 'x86_64'})
-              </p>
-              {updateInfo && (
-                <p className="text-[10px]">
-                  {updateInfo.is_offline ? (
-                    <span className="text-amber-500">Offline mode</span>
-                  ) : updateInfo.update_available ? (
-                    <span className="text-emerald-500 font-semibold">v{updateInfo.latest_version} available</span>
-                  ) : (
-                    <span className="text-emerald-500 flex items-center gap-1">
-                      <Check className="w-3 h-3" /> Up to date
-                    </span>
-                  )}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-border/60">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full text-xs h-8 gap-1.5"
-              onClick={handleCheckUpdates}
-              disabled={checkingUpdate}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
-              <span>{checkingUpdate ? 'Checking…' : 'Check for Updates'}</span>
-            </Button>
-          </div>
-        </div>
-
-        {/* Card 5: Installation Identity */}
-        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-500" />
-                <div>
-                  <p className="text-xs font-semibold text-foreground">Installation Identity</p>
-                  <p className="text-[11px] text-muted-foreground">Unique device identifier</p>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-[10px] font-mono text-muted-foreground">
-                Stable
-              </Badge>
-            </div>
-
-            <div className="flex items-center justify-between bg-muted/40 p-2 rounded-lg border border-border/60">
-              <span className="text-xs font-mono text-muted-foreground truncate mr-2">{maskedId}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground shrink-0"
-                onClick={copyInstallationId}
-                title="Copy Installation ID"
-              >
-                {copiedId ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-              </Button>
-            </div>
-            <p className="text-[10px] text-muted-foreground leading-tight">
-              Survives restarts and updates. Used for update verification and diagnostic telemetry.
-            </p>
-          </div>
-        </div>
-
-        {/* Card 6: Diagnostics & Bug Reporting */}
-        <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-primary" />
-              <div>
-                <p className="text-xs font-semibold text-foreground">Diagnostics & Telemetry</p>
-                <p className="text-[11px] text-muted-foreground">Crash reports & bug assistance</p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <div>
-                <p className="text-xs font-medium text-foreground">Anonymous crash reports</p>
-                <p className="text-[10px] text-muted-foreground">Help fix bugs automatically</p>
-              </div>
-              <Switch
-                checked={isDiagnosticsAllowed}
-                onCheckedChange={handleToggleDiagnostics}
-              />
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-border/60">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="w-full text-xs h-8 gap-1.5"
-              onClick={copyDiagnosticsSummary}
-            >
-              {copiedDiagnostics ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-              <span>{copiedDiagnostics ? 'Copied Diagnostics' : 'Copy Diagnostic Info'}</span>
             </Button>
           </div>
         </div>

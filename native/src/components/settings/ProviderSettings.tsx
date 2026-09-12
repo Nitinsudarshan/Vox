@@ -10,6 +10,8 @@ import {
   AudioDeviceInfo,
   OllamaModelDetails,
   SttModelsOverview,
+  InstallationInfo,
+  UpdateInfo,
 } from '../../types';
 import {
   Cpu,
@@ -42,6 +44,9 @@ import {
   Activity,
   ChevronDown,
   ChevronUp,
+  Info,
+  Laptop,
+  Copy,
   type LucideIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -70,6 +75,7 @@ export type SettingsSection =
   | 'meetings'
   | 'languages'
   | 'advanced'
+  | 'about'
   | 'privacy'
   | 'trash'
   | 'developer';
@@ -99,7 +105,7 @@ const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'capture', label: 'Web Capture', icon: Globe },
   { id: 'meetings', label: 'Meetings', icon: Users },
   { id: 'languages', label: 'Languages & Script', icon: Languages },
-  { id: 'privacy', label: 'Privacy & Vault', icon: ShieldCheck },
+  { id: 'about', label: 'About Vox', icon: Info },
   { id: 'trash', label: 'Trash & Deleted', icon: Trash2, accent: 'text-amber-500' },
   { id: 'developer', label: 'Developer', icon: Terminal, accent: 'text-amber-500' },
 ];
@@ -193,6 +199,7 @@ const normalizeSection = (sec?: string): SettingsSection => {
   if (!sec) return 'general';
   if (sec === 'advanced') return 'speech';
   if (sec === 'account') return 'general';
+  if (sec === 'privacy') return 'about';
   return sec as SettingsSection;
 };
 
@@ -394,6 +401,84 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     }
   };
 
+  // Installation Identity, Updates & Diagnostics for About Vox
+  const [installation, setInstallation] = useState<InstallationInfo | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
+
+  const loadInstallationInfo = async () => {
+    try {
+      const inst = await invoke<InstallationInfo>('get_installation_info');
+      setInstallation(inst);
+    } catch (err) {
+      console.error('Failed to query installation info', err);
+    }
+  };
+
+  const handleCheckUpdates = async () => {
+    try {
+      setCheckingUpdate(true);
+      const info = await invoke<UpdateInfo>('check_for_updates');
+      setUpdateInfo(info);
+    } catch (err) {
+      console.error('Update check failed:', err);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const copyInstallationId = () => {
+    if (!installation?.installation_id) return;
+    navigator.clipboard.writeText(installation.installation_id);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 2000);
+  };
+
+  const copyDiagnosticsSummary = async () => {
+    try {
+      const summary = await invoke<string>('get_diagnostic_summary');
+      await navigator.clipboard.writeText(summary);
+      setCopiedDiagnostics(true);
+      setTimeout(() => setCopiedDiagnostics(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy diagnostics:', err);
+    }
+  };
+
+  const handleToggleDiagnostics = async (checked: boolean) => {
+    setSettings((prev) => ({
+      ...prev,
+      diagnostics: {
+        ...prev.diagnostics,
+        allow_anonymous_diagnostics: checked,
+      },
+    }));
+
+    try {
+      const current = await invoke<AppSettings>('get_settings');
+      const updated: AppSettings = {
+        ...current,
+        diagnostics: {
+          ...current.diagnostics,
+          allow_anonymous_diagnostics: checked,
+        },
+      };
+      await invoke('save_settings', { settings: updated });
+    } catch (err) {
+      console.error('Failed to persist diagnostics setting:', err);
+    }
+  };
+
+  const maskedId = installation?.installation_id
+    ? installation.installation_id.length > 12
+      ? `${installation.installation_id.substring(0, 8)}...${installation.installation_id.substring(installation.installation_id.length - 4)}`
+      : installation.installation_id
+    : '••••••••••••';
+
+  const isDiagnosticsAllowed = settings.diagnostics?.allow_anonymous_diagnostics ?? false;
+
   const loadVaultLocation = async () => {
     try {
       setVaultLocation(await invoke<VaultLocationInfo>('get_vault_location'));
@@ -449,9 +534,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             ...DEFAULT_LANGUAGE_SETTINGS,
             ...(loaded.language || {}),
             spoken_languages:
-              loaded.language?.spoken_languages && loaded.language.spoken_languages.length > 0
-                ? loaded.language.spoken_languages
-                : (loaded.language as any)?.spokenLanguages || DEFAULT_LANGUAGE_SETTINGS.spoken_languages,
+              loaded.language?.spoken_languages ||
+              (loaded.language as any)?.spokenLanguages ||
+              DEFAULT_LANGUAGE_SETTINGS.spoken_languages,
             primary_dictation_language:
               loaded.language?.primary_dictation_language ||
               (loaded.language as any)?.primaryDictationLanguage ||
@@ -499,8 +584,10 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       checkSttModel();
       fetchSttModels();
     }
-    if (!loading && activeSection === 'privacy') {
+    if (!loading && (activeSection === 'about' || activeSection === 'privacy')) {
       loadAccountState();
+      loadVaultLocation();
+      loadInstallationInfo();
     }
   }, [loading, activeSection, settings.provider.active_provider]);
 
@@ -1417,14 +1504,150 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           />
         )}
 
-        {/* 6. PRIVACY & VAULT SECTION */}
-        {activeSection === 'privacy' && (
+        {/* 6. ABOUT VOX (MERGED WITH PRIVACY & VAULT) */}
+        {(activeSection === 'about' || activeSection === 'privacy') && (
           <div className="space-y-6 animate-in fade-in-50">
-            <div>
-              <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
-                DATA CONTROL & PRIVACY BOUNDARIES
-              </p>
-              <h2 className="text-lg font-bold text-foreground">Data Ownership & Vault Isolation</h2>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
+                  ABOUT VOX
+                </p>
+                <h2 className="text-lg font-bold text-foreground">Application, System Identity & Vault Privacy</h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px] font-mono">
+                  v{installation?.app_version || '0.1.0'}
+                </Badge>
+                <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary bg-primary/5 uppercase">
+                  {account?.authenticated ? 'Google Connected' : 'Local Mode'}
+                </Badge>
+              </div>
+            </div>
+
+            {/* System Identity & Application Information (3-Column Grid) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {/* Card 1: Application Version & Updates */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Laptop className="w-4 h-4 text-primary" />
+                      <div>
+                        <p className="text-xs font-semibold text-foreground">Vox Application</p>
+                        <p className="text-[11px] text-muted-foreground">Version & update channel</p>
+                      </div>
+                    </div>
+                    <Badge variant="outline" className="text-[10px] font-mono">
+                      v{installation?.app_version || '0.1.0'}
+                    </Badge>
+                  </div>
+
+                  <div className="text-[11px] text-muted-foreground space-y-1">
+                    <p>
+                      Platform: <span className="font-mono text-foreground capitalize">{installation?.platform || 'Windows'}</span> ({installation?.os_version || 'x86_64'})
+                    </p>
+                    {updateInfo && (
+                      <p className="text-[10px]">
+                        {updateInfo.is_offline ? (
+                          <span className="text-amber-500">Offline mode</span>
+                        ) : updateInfo.update_available ? (
+                          <span className="text-emerald-500 font-semibold">v{updateInfo.latest_version} available</span>
+                        ) : (
+                          <span className="text-emerald-500 flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Up to date
+                          </span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-border/60">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full text-xs h-8 gap-1.5"
+                    onClick={handleCheckUpdates}
+                    disabled={checkingUpdate}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
+                    <span>{checkingUpdate ? 'Checking…' : 'Check for Updates'}</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* Card 2: Installation Identity */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                      <div>
+                        <p className="text-xs font-semibold text-foreground">Installation Identity</p>
+                        <p className="text-[11px] text-muted-foreground">Unique device identifier</p>
+                      </div>
+                    </div>
+                    <Badge variant="outline" className="text-[10px] font-mono text-muted-foreground">
+                      Stable
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center justify-between bg-muted/40 p-2 rounded-lg border border-border/60">
+                    <span className="text-xs font-mono text-muted-foreground truncate mr-2">{maskedId}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground shrink-0"
+                      onClick={copyInstallationId}
+                      title="Copy Installation ID"
+                    >
+                      {copiedId ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground leading-tight">
+                    Survives restarts and updates. Used for update verification and diagnostic telemetry.
+                  </p>
+                </div>
+              </div>
+
+              {/* Card 3: Diagnostics & Bug Reporting */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Info className="w-4 h-4 text-primary" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Diagnostics & Telemetry</p>
+                      <p className="text-[11px] text-muted-foreground">Crash reports & bug assistance</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <div>
+                      <p className="text-xs font-medium text-foreground">Anonymous crash reports</p>
+                      <p className="text-[10px] text-muted-foreground">Help fix bugs automatically</p>
+                    </div>
+                    <Switch
+                      checked={isDiagnosticsAllowed}
+                      onCheckedChange={handleToggleDiagnostics}
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-border/60">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-xs h-8 gap-1.5"
+                    onClick={copyDiagnosticsSummary}
+                  >
+                    {copiedDiagnostics ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedDiagnostics ? 'Copied Diagnostics' : 'Copy Diagnostic Info'}</span>
+                  </Button>
+                </div>
+              </div>
             </div>
 
             {deleteAccountSuccess && (
@@ -1441,7 +1664,13 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               </div>
             )}
 
-            <div className="space-y-4">
+            <div className="space-y-4 pt-2">
+              <div className="border-t border-border/60 pt-4">
+                <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
+                  DATA CONTROL & PRIVACY BOUNDARIES
+                </p>
+                <h3 className="text-sm font-bold text-foreground">Data Ownership & Vault Isolation</h3>
+              </div>
               {/* Privacy Overview & Safe Export (2 Columns) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-lg bg-card border border-border space-y-2 flex flex-col justify-between">
