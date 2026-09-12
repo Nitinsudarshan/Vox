@@ -641,10 +641,10 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   }
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row gap-6 min-h-0 overflow-hidden">
+    <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0 overflow-hidden w-full">
       {/* Settings Sub-Nav Sidebar */}
-      <aside className="w-full md:w-56 flex flex-col shrink-0 gap-1 bg-card p-3 rounded-lg border border-border">
-        <div className="px-3 py-2 mb-1">
+      <aside className="w-full md:w-52 flex flex-col shrink-0 gap-1 bg-card p-2.5 rounded-lg border border-border">
+        <div className="px-2.5 py-1.5 mb-1">
           <span className="font-mono text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
             SETTINGS
           </span>
@@ -659,7 +659,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               type="button"
               onClick={() => setActiveSection(item.id)}
               aria-current={active ? 'page' : undefined}
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left ${
+              className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left ${
                 active
                   ? 'bg-accent text-accent-foreground font-semibold shadow-xs'
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -673,9 +673,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       </aside>
 
       {/* Main Settings Content Area */}
-      <main className="flex-1 bg-card rounded-lg border border-border p-6 overflow-y-auto min-h-0">
+      <main className="flex-1 bg-card rounded-lg border border-border p-4 md:p-5 overflow-y-auto min-h-0 w-full">
         {saved && (
-          <div className="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs flex items-center justify-between">
+          <div className="mb-3 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs flex items-center justify-between">
             <span className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-emerald-500" />
               Settings updated successfully
@@ -690,23 +690,23 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
         {/* 1. GENERAL & ACCOUNT SECTION */}
         {activeSection === 'general' && (
-          <form onSubmit={handleSave} className="space-y-6">
+          <form onSubmit={handleSave} className="space-y-4 w-full">
             <div>
-              <p className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">
+              <p className="font-mono text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-0.5">
                 GENERAL CONFIGURATION
               </p>
-              <h2 className="text-lg font-bold text-foreground">Desktop App & Startup Defaults</h2>
+              <h2 className="text-base font-bold text-foreground">Desktop App & Startup Defaults</h2>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {/* Card 1: Hotkeys & Pill Position */}
-              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
-                <div className="space-y-3">
+              <div className="p-3 rounded-lg border border-border bg-card space-y-3 flex flex-col justify-between">
+                <div className="space-y-2.5">
                   <div className="flex items-center gap-2">
-                    <Keyboard className="w-4 h-4 text-primary" />
+                    <Keyboard className="w-3.5 h-3.5 text-primary" />
                     <div>
                       <p className="text-xs font-semibold text-foreground">Show/Hide Hotkey</p>
-                      <p className="text-[11px] text-muted-foreground">Toggle Vox window anywhere</p>
+                      <p className="text-[10px] text-muted-foreground">Toggle Vox window anywhere</p>
                     </div>
                   </div>
                   <div>
@@ -715,15 +715,15 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       value={settings.hotkeys.show_hide_hotkey}
                       onCapture={(accelerator) => applyHotkey('show_hide_hotkey', accelerator)}
                     />
-                    <p className="text-[10px] text-muted-foreground mt-1.5">
+                    <p className="text-[9px] text-muted-foreground mt-1">
                       Click box, press desired key combination.
                     </p>
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-border/60">
+                <div className="pt-2 border-t border-border/60">
                   <p className="text-xs font-semibold text-foreground mb-0.5">Pill Screen Position</p>
-                  <p className="text-[11px] text-muted-foreground mb-2">
+                  <p className="text-[10px] text-muted-foreground mb-1.5">
                     Where the floating dictation pill anchors
                   </p>
                   <div className="flex bg-muted p-1 rounded-lg border border-border w-full">
@@ -760,85 +760,87 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               </div>
 
               {/* Card 2: Startup Behavior */}
-              <div className="p-4 rounded-lg border border-border bg-card space-y-4">
-                <div className="flex items-center gap-2">
-                  <Power className="w-4 h-4 text-primary" />
-                  <div>
-                    <p className="text-xs font-semibold text-foreground">Startup Behavior</p>
-                    <p className="text-[11px] text-muted-foreground">Control launch and window states</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3.5 pt-1">
-                  <div className="flex items-center justify-between gap-3">
+              <div className="p-3 rounded-lg border border-border bg-card space-y-3 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <Power className="w-3.5 h-3.5 text-primary" />
                     <div>
-                      <p className="text-xs font-medium text-foreground">Launch at login</p>
-                      <p className="text-[11px] text-muted-foreground">Start Vox in the background at log in</p>
+                      <p className="text-xs font-semibold text-foreground">Startup Behavior</p>
+                      <p className="text-[10px] text-muted-foreground">Control launch and window states</p>
                     </div>
-                    <Switch
-                      checked={settings.startup?.launch_at_login ?? false}
-                      onCheckedChange={async (checked) => {
-                        const updated: AppSettings = {
-                          ...settings,
-                          startup: {
-                            ...settings.startup,
-                            launch_at_login: checked,
-                            start_minimized: settings.startup?.start_minimized ?? false,
-                          },
-                        };
-                        setSettings(updated);
-                        try {
-                          await invoke('save_settings', { settings: updated });
-                        } catch (err) {
-                          console.error('Failed to update launch at login', err);
-                        }
-                      }}
-                    />
                   </div>
 
-                  <div className="h-px bg-border/60" />
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium text-foreground">Start minimized</p>
-                      <p className="text-[11px] text-muted-foreground">Launch without showing control panel</p>
+                  <div className="space-y-2.5 pt-0.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium text-foreground">Launch at login</p>
+                        <p className="text-[10px] text-muted-foreground">Start Vox in background at log in</p>
+                      </div>
+                      <Switch
+                        checked={settings.startup?.launch_at_login ?? false}
+                        onCheckedChange={async (checked) => {
+                          const updated: AppSettings = {
+                            ...settings,
+                            startup: {
+                              ...settings.startup,
+                              launch_at_login: checked,
+                              start_minimized: settings.startup?.start_minimized ?? false,
+                            },
+                          };
+                          setSettings(updated);
+                          try {
+                            await invoke('save_settings', { settings: updated });
+                          } catch (err) {
+                            console.error('Failed to update launch at login', err);
+                          }
+                        }}
+                      />
                     </div>
-                    <Switch
-                      checked={settings.startup?.start_minimized ?? false}
-                      onCheckedChange={async (checked) => {
-                        const updated: AppSettings = {
-                          ...settings,
-                          startup: {
-                            ...settings.startup,
-                            launch_at_login: settings.startup?.launch_at_login ?? false,
-                            start_minimized: checked,
-                          },
-                        };
-                        setSettings(updated);
-                        try {
-                          await invoke('save_settings', { settings: updated });
-                        } catch (err) {
-                          console.error('Failed to update start minimized', err);
-                        }
-                      }}
-                    />
+
+                    <div className="h-px bg-border/60" />
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium text-foreground">Start minimized</p>
+                        <p className="text-[10px] text-muted-foreground">Launch without showing control panel</p>
+                      </div>
+                      <Switch
+                        checked={settings.startup?.start_minimized ?? false}
+                        onCheckedChange={async (checked) => {
+                          const updated: AppSettings = {
+                            ...settings,
+                            startup: {
+                              ...settings.startup,
+                              launch_at_login: settings.startup?.launch_at_login ?? false,
+                              start_minimized: checked,
+                            },
+                          };
+                          setSettings(updated);
+                          try {
+                            await invoke('save_settings', { settings: updated });
+                          } catch (err) {
+                            console.error('Failed to update start minimized', err);
+                          }
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
 
               {/* Card 3: Vault Directory Location */}
-              <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
+              <div className="p-3 rounded-lg border border-border bg-card space-y-3 flex flex-col justify-between">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
-                    <HardDrive className="w-4 h-4 text-primary" />
+                    <HardDrive className="w-3.5 h-3.5 text-primary" />
                     <div>
                       <p className="text-xs font-semibold text-foreground">Vault Storage</p>
-                      <p className="text-[11px] text-muted-foreground">Local markdown notes & vectors</p>
+                      <p className="text-[10px] text-muted-foreground">Local markdown notes & vectors</p>
                     </div>
                   </div>
 
-                  <div className="p-2.5 rounded-lg bg-muted/40 border border-border/80">
-                    <p className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider mb-1">
+                  <div className="p-2 rounded-lg bg-muted/40 border border-border/80">
+                    <p className="text-[9px] text-muted-foreground uppercase font-mono tracking-wider mb-0.5">
                       Active Directory
                     </p>
                     <p className="text-xs font-mono text-foreground break-all leading-tight">
@@ -847,9 +849,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                   </div>
 
                   {vaultLocation && !vaultLocation.configured && (
-                    <p className="text-[10px] text-muted-foreground">Using the default OS app location</p>
+                    <p className="text-[9px] text-muted-foreground">Using default OS app location</p>
                   )}
-                  {vaultError && <p className="text-[10px] text-destructive">{vaultError}</p>}
+                  {vaultError && <p className="text-[9px] text-destructive">{vaultError}</p>}
                 </div>
 
                 <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-2">
