@@ -37,6 +37,7 @@ import {
   VaultLocationInfo,
 } from '@/types';
 import { SttDiagnosticsView } from '../settings/SttDiagnosticsView';
+import { getParakeetStatus, ParakeetStatus } from '@/lib/speechModels';
 
 interface DiagnosticsPageProps {
   onNavigateTab?: (tab: MainTabType) => void;
@@ -74,6 +75,7 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
 
   // STT status & models
   const [sttOverview, setSttOverview] = useState<SttModelsOverview | null>(null);
+  const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [loadingSttModels, setLoadingSttModels] = useState(false);
   const [testingSttModel, setTestingSttModel] = useState<string | null>(null);
   const [sttTestResult, setSttTestResult] = useState<SttModelTestResult | null>(null);
@@ -132,8 +134,12 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
   const fetchSttModels = async () => {
     setLoadingSttModels(true);
     try {
-      const ov = await invoke<SttModelsOverview>('get_available_stt_models');
-      setSttOverview(ov);
+      const [ov, pk] = await Promise.allSettled([
+        invoke<SttModelsOverview>('get_available_stt_models'),
+        getParakeetStatus(),
+      ]);
+      if (ov.status === 'fulfilled') setSttOverview(ov.value);
+      if (pk.status === 'fulfilled') setParakeetStatus(pk.value);
     } catch (err) {
       console.error('Failed to fetch STT models in diagnostics:', err);
     } finally {
@@ -255,12 +261,12 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
   };
 
   return (
-    <div className="space-y-6 pb-12 max-w-6xl mx-auto">
+    <div className="space-y-4 pb-6 w-full">
       {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="font-mono text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="font-mono text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
               SYSTEM INSPECTION & TELEMETRY
             </span>
             <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary">
@@ -303,11 +309,11 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
       </div>
 
       {/* 1. SYSTEM STATUS OVERVIEW MATRIX */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
         {/* LLM Backend */}
-        <div className="p-3.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1.5">
+        <div className="p-2.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
               <Cpu className="w-3.5 h-3.5 text-primary" />
               LLM Backend
             </span>
@@ -330,9 +336,9 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
         </div>
 
         {/* LLM Model */}
-        <div className="p-3.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1.5">
+        <div className="p-2.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5 text-amber-500" />
               Active LLM Model
             </span>
@@ -355,95 +361,120 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
         </div>
 
         {/* STT Engine */}
-        <div className="p-3.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1.5">
+        <div className="p-2.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5 text-indigo-400" />
               STT Engine
             </span>
             <Badge variant="emerald" className="text-[9px] px-1.5 py-0">Active ✓</Badge>
           </div>
           <div>
-            <p className="text-xs font-bold text-foreground">Whisper CPU</p>
-            <p className="text-[10px] text-muted-foreground font-mono">16 kHz Mono · whisper.cpp</p>
+            <p className="text-xs font-bold text-foreground">
+              {settings?.stt?.dictation_engine === 'parakeet' ? 'NVIDIA Parakeet TDT' : 'Whisper CPU'}
+            </p>
+            <p className="text-[10px] text-muted-foreground font-mono">
+              {settings?.stt?.dictation_engine === 'parakeet'
+                ? '16 kHz Mono · ONNX Runtime'
+                : '16 kHz Mono · whisper.cpp'}
+            </p>
           </div>
         </div>
 
         {/* STT Model */}
-        <div className="p-3.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1.5">
+        <div className="p-2.5 rounded-lg border border-border bg-card/60 flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
               <FileAudio className="w-3.5 h-3.5 text-emerald-400" />
               Active STT Model
             </span>
-            {sttOverview?.models.find((m) => m.path === sttOverview.active_model_path)?.status === 'ready' ? (
+            {settings?.stt?.dictation_engine === 'parakeet' ? (
+              parakeetStatus?.installed ? (
+                <Badge variant="emerald" className="text-[9px] px-1.5 py-0">Ready ✓</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/40 text-amber-500">Missing ⚠</Badge>
+              )
+            ) : sttOverview?.models.find((m) => m.path === sttOverview.active_model_path)?.status === 'ready' ? (
               <Badge variant="emerald" className="text-[9px] px-1.5 py-0">Ready ✓</Badge>
             ) : (
               <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/40 text-amber-500">Missing ⚠</Badge>
             )}
           </div>
           <div>
-            <p className="text-xs font-bold text-foreground truncate" title={sttOverview?.active_model_name}>
-              {sttOverview?.active_model_name || 'Whisper Small'}
+            <p
+              className="text-xs font-bold text-foreground truncate"
+              title={
+                settings?.stt?.dictation_engine === 'parakeet'
+                  ? 'Parakeet TDT 0.6B (v3 INT8)'
+                  : sttOverview?.active_model_name
+              }
+            >
+              {settings?.stt?.dictation_engine === 'parakeet'
+                ? 'Parakeet TDT 0.6B (v3 INT8)'
+                : sttOverview?.active_model_name || 'Whisper Small'}
             </p>
             <p className="text-[10px] text-muted-foreground font-mono truncate">
-              {sttOverview?.active_profile === 'fast' ? 'Fast Profile (~0.8s)' : 'Accurate Profile (~2.4s)'}
+              {settings?.stt?.dictation_engine === 'parakeet'
+                ? 'Ultra-Fast Profile (~0.15s RTF · CTC/RNN-T)'
+                : sttOverview?.active_profile === 'fast'
+                ? 'Fast Profile (~0.8s)'
+                : 'Accurate Profile (~2.4s)'}
             </p>
           </div>
         </div>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-border gap-2">
+      <div className="flex border-b border-border gap-1 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveTab('stt')}
-          className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+          className={`pb-2 px-2.5 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
             activeTab === 'stt'
               ? 'border-primary text-primary'
               : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
-          <FileAudio className="w-4 h-4" />
+          <FileAudio className="w-3.5 h-3.5" />
           Speech-to-Text Diagnostics
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('llm')}
-          className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+          className={`pb-2 px-2.5 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
             activeTab === 'llm'
               ? 'border-primary text-primary'
               : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
-          <Cpu className="w-4 h-4" />
+          <Cpu className="w-3.5 h-3.5" />
           LLM Diagnostics & Latency
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('system')}
-          className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+          className={`pb-2 px-2.5 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
             activeTab === 'system'
               ? 'border-primary text-primary'
               : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
-          <HardDrive className="w-4 h-4" />
+          <HardDrive className="w-3.5 h-3.5" />
           System & Audio Runtime
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('knowledge')}
-          className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+          className={`pb-2 px-2.5 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
             activeTab === 'knowledge'
               ? 'border-primary text-primary'
               : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
-          <Brain className="w-4 h-4" />
+          <Brain className="w-3.5 h-3.5" />
           Knowledge Architecture
         </button>
       </div>
@@ -560,6 +591,58 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* NVIDIA Parakeet TDT 0.6B */}
+              <div
+                className={`p-3 rounded-lg border text-xs space-y-2 transition-all ${
+                  settings?.stt?.dictation_engine === 'parakeet'
+                    ? 'border-primary/50 bg-primary/5'
+                    : 'border-border bg-muted/20'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-foreground">NVIDIA Parakeet TDT 0.6B</span>
+                    {settings?.stt?.dictation_engine === 'parakeet' && (
+                      <Badge variant="emerald" className="text-[9px] px-1.5 py-0">
+                        Active Dictation
+                      </Badge>
+                    )}
+                    <Badge variant="outline" className="text-[9px] font-mono border-indigo-500/30 text-indigo-400 bg-indigo-500/10">
+                      ONNX INT8
+                    </Badge>
+                  </div>
+                  <Badge
+                    variant={parakeetStatus?.installed ? 'emerald' : 'outline'}
+                    className="text-[9px] font-mono"
+                  >
+                    {parakeetStatus?.installed ? '✓ Ready' : '⚠ Missing'}
+                  </Badge>
+                </div>
+
+                <div className="text-[11px] text-muted-foreground font-mono space-y-0.5">
+                  <p className="truncate">
+                    Files: encoder-model (652 MB), decoder_joint (18 MB), vocab.txt (94 KB)
+                  </p>
+                  <p className="truncate text-[10px] opacity-75">
+                    Dir: {parakeetStatus?.models_dir || '%APPDATA%\\Vox\\models\\parakeet'} (
+                    {parakeetStatus?.approx_total_bytes ? formatBytes(parakeetStatus.approx_total_bytes) : '~670 MB'} total)
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[10px] text-muted-foreground">
+                    Profile: Ultra-Fast CTC/RNN-T
+                  </span>
+                  {parakeetStatus && (
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {parakeetStatus.missing_files.length === 0
+                        ? 'all 3 ONNX files present'
+                        : `${parakeetStatus.missing_files.length} missing`}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               {sttOverview?.models.map((mod) => {
                 const isActive = mod.path === sttOverview.active_model_path;
                 const isTesting = testingSttModel === mod.path;

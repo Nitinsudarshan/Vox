@@ -50,7 +50,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
 
   const [testWavPath, setTestWavPath] = useState('');
   const [testVariant, setTestVariant] = useState<
-    'baseline' | 'vox_prompt' | 'relay_prompt' | 'best_of_3' | 'beam_2' | 'temperature_fallback'
+    'baseline' | 'vox_prompt' | 'relay_prompt' | 'best_of_3' | 'beam_2' | 'temperature_fallback' | 'parakeet'
   >('baseline');
   const [testReference, setTestReference] = useState('');
   const [runningEval, setRunningEval] = useState(false);
@@ -194,30 +194,57 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
       </div>
 
       {/* Production Model Invariant Status */}
-      <div className="p-4 rounded-lg border border-primary/20 bg-primary/5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
-            <Cpu className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm">Whisper Small (GGML)</span>
-              <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary bg-primary/10">
-                Production Default (244M)
-              </Badge>
-              <Badge variant="outline" className="text-[10px] font-mono border-emerald-500/30 text-emerald-500 bg-emerald-500/10">
-                16 kHz Mono
-              </Badge>
+      {settings.stt.dictation_engine === 'parakeet' ? (
+        <div className="p-4 rounded-lg border border-indigo-500/30 bg-indigo-500/5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+              <Zap className="w-5 h-5" />
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate max-w-md">
-              {settings.stt.whisper_model_path || '%APPDATA%\\Vox\\models\\ggml-small.bin'}
-            </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm">NVIDIA Parakeet TDT 0.6B</span>
+                <Badge variant="outline" className="text-[10px] font-mono border-indigo-500/30 text-indigo-400 bg-indigo-500/10">
+                  Active Dictation Engine
+                </Badge>
+                <Badge variant="outline" className="text-[10px] font-mono border-emerald-500/30 text-emerald-500 bg-emerald-500/10">
+                  16 kHz Mono
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate max-w-md">
+                %APPDATA%\Vox\models\parakeet\ (INT8 ONNX)
+              </p>
+            </div>
+          </div>
+          <div className="text-right text-xs">
+            <span className="text-muted-foreground">ONNX Runtime CPU · Ultra-Fast (~0.15s RTF)</span>
           </div>
         </div>
-        <div className="text-right text-xs">
-          <span className="text-muted-foreground">Local CPU Backend · Zero Cost</span>
+      ) : (
+        <div className="p-4 rounded-lg border border-primary/20 bg-primary/5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
+              <Cpu className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm">Whisper Small (GGML)</span>
+                <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary bg-primary/10">
+                  Production Default (244M)
+                </Badge>
+                <Badge variant="outline" className="text-[10px] font-mono border-emerald-500/30 text-emerald-500 bg-emerald-500/10">
+                  16 kHz Mono
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate max-w-md">
+                {settings.stt.whisper_model_path || '%APPDATA%\\Vox\\models\\ggml-small.bin'}
+              </p>
+            </div>
+          </div>
+          <div className="text-right text-xs">
+            <span className="text-muted-foreground">Local CPU Backend · Zero Cost</span>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* LAST TRANSCRIPTION INSPECTOR */}
       <div className="space-y-4">
@@ -342,9 +369,17 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
                   <span className="font-semibold">[{snapshot.spoken_languages.join(', ')}]</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Resolved Whisper Lang:</span>
+                  <span className="text-muted-foreground">
+                    {snapshot.model_filename.toLowerCase().includes('parakeet')
+                      ? 'Engine / Model:'
+                      : 'Resolved Whisper Lang:'}
+                  </span>
                   <span className="font-bold text-primary">
-                    {snapshot.resolved_whisper_language ? `"${snapshot.resolved_whisper_language}"` : 'Auto-Detect (Multilingual)'}
+                    {snapshot.model_filename.toLowerCase().includes('parakeet')
+                      ? 'NVIDIA Parakeet TDT'
+                      : snapshot.resolved_whisper_language
+                      ? `"${snapshot.resolved_whisper_language}"`
+                      : 'Auto-Detect (Multilingual)'}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -527,6 +562,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
               <option value="best_of_3">Best of 3 (Greedy, best_of=3)</option>
               <option value="beam_2">Beam Search (beam_size=2)</option>
               <option value="temperature_fallback">Temperature Fallback (Staged Retry)</option>
+              <option value="parakeet">NVIDIA Parakeet TDT 0.6B (Fast CTC/RNN-T)</option>
             </select>
           </div>
         </div>

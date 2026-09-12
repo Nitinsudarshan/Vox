@@ -335,6 +335,15 @@ describe('DiagnosticsPage — Technical Observability Hub', () => {
           return '0.29.0';
         case 'get_vault_location':
           return { path: 'C:\\Vox\\vault' };
+        case 'get_parakeet_status':
+          return {
+            supported: true,
+            installed: true,
+            active_for_dictation: false,
+            missing_files: [],
+            models_dir: 'C:\\Vox\\models\\parakeet',
+            approx_total_bytes: 670479942,
+          };
         default:
           return null;
       }
@@ -353,6 +362,58 @@ describe('DiagnosticsPage — Technical Observability Hub', () => {
     expect(screen.getByText('Active LLM Model')).toBeDefined();
     expect(screen.getByText('STT Engine')).toBeDefined();
     expect(screen.getByText('Active STT Model')).toBeDefined();
+    // Verifies Parakeet model card is present in STT model files verification
+    expect(screen.getByText('NVIDIA Parakeet TDT 0.6B')).toBeDefined();
+  });
+
+  it('reflects NVIDIA Parakeet TDT when configured as the active dictation engine', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case 'get_settings':
+          return {
+            ...DEFAULT_TEST_SETTINGS,
+            stt: {
+              ...DEFAULT_TEST_SETTINGS.stt,
+              dictation_engine: 'parakeet',
+            },
+          };
+        case 'ensure_local_llm_ready':
+          return { state: 'running' };
+        case 'get_available_llm_models':
+          return MOCK_OLLAMA_MODELS;
+        case 'get_available_stt_models':
+          return MOCK_STT_OVERVIEW;
+        case 'get_last_stt_diagnostics':
+          return null;
+        case 'get_stt_corpus':
+          return [];
+        case 'get_audio_devices':
+          return [{ name: 'Default Microphone', is_default: true }];
+        case 'get_app_version':
+          return '0.29.0';
+        case 'get_vault_location':
+          return { path: 'C:\\Vox\\vault' };
+        case 'get_parakeet_status':
+          return {
+            supported: true,
+            installed: true,
+            active_for_dictation: true,
+            missing_files: [],
+            models_dir: 'C:\\Vox\\models\\parakeet',
+            approx_total_bytes: 670479942,
+          };
+        default:
+          return null;
+      }
+    });
+
+    render(<DiagnosticsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('NVIDIA Parakeet TDT')).toBeDefined();
+      expect(screen.getByText('Parakeet TDT 0.6B (v3 INT8)')).toBeDefined();
+      expect(screen.getByText('16 kHz Mono · ONNX Runtime')).toBeDefined();
+    });
   });
 
   it('switches tabs to LLM diagnostics and displays installed models table', async () => {
