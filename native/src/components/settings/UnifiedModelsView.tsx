@@ -44,6 +44,11 @@ import {
   formatBytes,
   downloadFraction,
   TIER_LABEL,
+  getParakeetStatus,
+  downloadParakeetModel,
+  deleteParakeetModel,
+  setDictationEngine,
+  type ParakeetStatus,
 } from '@/lib/speechModels';
 import type {
   SpeechModel,
@@ -114,9 +119,17 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // Refresh STT models
+  const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
+  const [parakeetBusy, setParakeetBusy] = useState(false);
+
   const refreshStt = useCallback(async () => {
     try {
-      setCatalogue(await listSpeechModels());
+      const [cat, pStatus] = await Promise.all([
+        listSpeechModels(),
+        getParakeetStatus().catch(() => null),
+      ]);
+      setCatalogue(cat);
+      setParakeetStatus(pStatus);
       setSttError(null);
     } catch (err) {
       setSttError(err instanceof Error ? err.message : String(err));
@@ -268,6 +281,50 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       setSttError(err instanceof Error ? err.message : String(err));
     } finally {
       setSttBusyId(null);
+    }
+  };
+
+  const handleDownloadParakeet = async () => {
+    setDownloads((prev) => ({
+      ...prev,
+      'parakeet-tdt': { kind: 'downloading', fraction: null, downloaded: 0 },
+    }));
+    try {
+      await downloadParakeetModel();
+    } catch (err) {
+      setDownloads((prev) => ({
+        ...prev,
+        'parakeet-tdt': {
+          kind: 'failed',
+          message: err instanceof Error ? err.message : String(err),
+        },
+      }));
+    }
+    await refreshStt();
+  };
+
+  const handleToggleParakeetDictation = async () => {
+    setParakeetBusy(true);
+    try {
+      const newEngine = parakeetStatus?.active_for_dictation ? 'whisper' : 'parakeet';
+      await setDictationEngine(newEngine);
+      await refreshStt();
+    } catch (err) {
+      setSttError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setParakeetBusy(false);
+    }
+  };
+
+  const handleDeleteParakeet = async () => {
+    setParakeetBusy(true);
+    try {
+      await deleteParakeetModel();
+      await refreshStt();
+    } catch (err) {
+      setSttError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setParakeetBusy(false);
     }
   };
 
@@ -525,32 +582,111 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
             )}
 
             {/* NVIDIA Parakeet TDT Engine Card */}
-            <Card className="p-4 bg-primary/5 border-primary/20">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-primary shrink-0" />
-                    <h3 className="text-sm font-semibold text-foreground">
-                      NVIDIA Parakeet TDT Engine
-                    </h3>
-                    <Badge variant="outline" className="text-[10px] text-primary border-primary/40">
-                      ONNX Runtime
-                    </Badge>
-                    <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400">
-                      Sub-100ms Latency
-                    </Badge>
+            {(() => {
+              const isParakeetDownloading = Boolean(downloads['parakeet-tdt']);
+              const parakeetProgress = downloads['parakeet-tdt'];
+              const isInstalled = Boolean(parakeetStatus?.installed);
+              const isActive = Boolean(parakeetStatus?.active_for_dictation);
+
+              return (
+                <Card
+                  className={`p-3.5 border transition-all ${
+                    isActive
+                      ? 'border-primary/50 bg-primary/5 shadow-2xs'
+                      : 'border-border bg-card hover:border-border/80'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Zap className="w-4 h-4 text-primary shrink-0" />
+                        <h3 className="text-sm font-semibold text-foreground">
+                          NVIDIA Parakeet TDT Engine
+                        </h3>
+                        <Badge variant="outline" className="text-[10px] text-primary border-primary/40">
+                          ONNX Runtime
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                          Sub-100ms Latency
+                        </Badge>
+                        {isInstalled && (
+                          <Badge variant="emerald" className="text-[9px] px-1.5 py-0 h-4 leading-tight">
+                            Installed
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        FastConformer-CTC transducer ASR quantized to int8. Skips blank audio frames for ultra-low latency push-to-talk dictation.
+                      </p>
+                    </div>
+
+                    <div className="shrink-0 flex items-center gap-2">
+                      {isInstalled ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant={isActive ? 'default' : 'outline'}
+                            disabled={parakeetBusy}
+                            onClick={() => void handleToggleParakeetDictation()}
+                            className="h-6 text-xs px-2.5 gap-1.5"
+                            title="Use NVIDIA Parakeet for push-to-talk voice dictation"
+                          >
+                            {isActive && <Check className="w-3 h-3" />}
+                            {isActive ? 'Dictation Active' : 'Use for Dictation'}
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteParakeet()}
+                            disabled={parakeetBusy}
+                            className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors cursor-pointer"
+                            title="Delete Parakeet model from disk"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isParakeetDownloading || parakeetBusy}
+                          onClick={() => void handleDownloadParakeet()}
+                          className="h-6 text-xs px-2.5 gap-1.5 hover:border-primary hover:text-primary hover:bg-primary/10"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>{isParakeetDownloading ? 'Downloading…' : 'Download Engine (~670 MB)'}</span>
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    FastConformer-CTC transducer ASR quantized to int8. Skips blank audio frames for ultra-low latency push-to-talk dictation.
-                  </p>
-                </div>
-                <div className="shrink-0 flex items-center gap-2">
-                  <Badge variant="outline" className="text-xs font-mono">
-                    Ready in Windows Engine
-                  </Badge>
-                </div>
-              </div>
-            </Card>
+
+                  {/* Download Progress Bar */}
+                  {isParakeetDownloading && parakeetProgress?.kind === 'downloading' && (
+                    <div className="mt-3 pt-2.5 border-t border-border/40 space-y-1">
+                      <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary transition-all duration-300"
+                          style={{
+                            width: `${Math.round((parakeetProgress.fraction ?? 0) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-[10px] text-muted-foreground">
+                        <span>
+                          Downloading Parakeet ONNX models… {formatBytes(parakeetProgress.downloaded)} / ~670 MB
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void cancelSpeechModelDownload('parakeet-tdt')}
+                          className="text-destructive hover:underline cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              );
+            })()}
 
             {/* Filter & Compact Display Controls */}
             <div className="flex flex-wrap items-center justify-between gap-2.5 p-2 rounded-lg bg-muted/20 border border-border">
@@ -648,104 +784,109 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                     <div
                       key={model.id}
                       data-testid={`speech-model-card-${model.id}`}
-                      className={`p-2.5 rounded-lg border transition-all ${
+                      className={`p-2 rounded-lg border transition-all flex flex-col justify-between min-h-[76px] ${
                         isDictationActive || isMeetingActive
                           ? 'border-primary/50 bg-primary/5 shadow-2xs'
                           : 'border-border bg-card hover:border-border/80'
                       }`}
                     >
-                      {/* Top row: Name & Badges */}
-                      <div className="flex items-start justify-between gap-1.5">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="font-semibold text-xs text-foreground truncate">
-                            {model.name}
-                          </span>
+                      {/* Top section: Name, Badges & Specs */}
+                      <div>
+                        {/* Top row: Name & Badges */}
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-semibold text-xs text-foreground truncate">
+                              {model.name}
+                            </span>
 
-                          <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                            {model.multilingual ? 'Multi' : '.en'}
-                          </Badge>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0">
+                              {model.multilingual ? 'Multi' : '.en'}
+                            </Badge>
 
-                          {/* Info Tooltip for Details */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
+                            {/* Info Tooltip for Details */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
+                                  aria-label={`Details for ${model.name}`}
+                                >
+                                  <Info className="w-3 h-3" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                <p className="font-medium text-foreground">{model.name}</p>
+                                <p className="text-muted-foreground mt-0.5">{model.blurb}</p>
+                                <div className="mt-1.5 pt-1.5 border-t border-border/50 text-[10px] space-y-0.5">
+                                  <div>Parameters: {model.parameters_millions}M</div>
+                                  <div>Tier: {TIER_LABEL[model.tier]}</div>
+                                  <div>Disk: {formatBytes(model.size_bytes)}</div>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            {isRecommendedDictation && (
+                              <Badge variant="emerald" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
+                                Rec: Dictation
+                              </Badge>
+                            )}
+                            {isRecommendedMeeting && (
+                              <Badge variant="purple" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
+                                Rec: Meetings
+                              </Badge>
+                            )}
+                            {model.installed && !isRecommendedDictation && !isRecommendedMeeting && (
+                              <Badge variant="outline" className="text-[8.5px] px-1 py-0 h-4 leading-tight text-emerald-500 border-emerald-500/30">
+                                Installed
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Specs snippet */}
+                        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5">
+                          <span>{model.parameters_millions}M params</span>
+                          <span>·</span>
+                          <span>{formatBytes(model.size_bytes)}</span>
+                          <span>·</span>
+                          <span className="capitalize">{model.tier}</span>
+                        </div>
+                      </div>
+
+                      {/* Standardized Bottom Row: Controls / Actions */}
+                      <div className="pt-1.5 mt-1.5 border-t border-border/40">
+                        {isDownloading && downloadProgress?.kind === 'downloading' ? (
+                          <div className="space-y-0.5">
+                            <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-primary transition-all duration-300"
+                                style={{
+                                  width: `${Math.round((downloadProgress.fraction ?? 0) * 100)}%`,
+                                }}
+                              />
+                            </div>
+                            <div className="flex justify-between items-center text-[9.5px] text-muted-foreground">
+                              <span>Downloading… {formatBytes(downloadProgress.downloaded)}</span>
                               <button
                                 type="button"
-                                className="text-muted-foreground hover:text-foreground cursor-pointer"
-                                aria-label={`Details for ${model.name}`}
+                                onClick={() => void cancelSpeechModelDownload(model.id)}
+                                className="text-destructive hover:underline cursor-pointer"
                               >
-                                <Info className="w-3 h-3" />
+                                Cancel
                               </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs text-xs">
-                              <p className="font-medium text-foreground">{model.name}</p>
-                              <p className="text-muted-foreground mt-0.5">{model.blurb}</p>
-                              <div className="mt-1.5 pt-1.5 border-t border-border/50 text-[10px] space-y-0.5">
-                                <div>Parameters: {model.parameters_millions}M</div>
-                                <div>Tier: {TIER_LABEL[model.tier]}</div>
-                                <div>Disk: {formatBytes(model.size_bytes)}</div>
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          {isRecommendedDictation && (
-                            <Badge variant="emerald" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
-                              Rec: Dictation
-                            </Badge>
-                          )}
-                          {isRecommendedMeeting && (
-                            <Badge variant="purple" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
-                              Rec: Meetings
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Specs snippet */}
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-1">
-                        <span>{model.parameters_millions}M params</span>
-                        <span>·</span>
-                        <span>{formatBytes(model.size_bytes)}</span>
-                        <span>·</span>
-                        <span className="capitalize">{model.tier}</span>
-                      </div>
-
-                      {/* Download Progress Bar */}
-                      {isDownloading && downloadProgress?.kind === 'downloading' && (
-                        <div className="mt-1.5 space-y-0.5">
-                          <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-primary transition-all duration-300"
-                              style={{
-                                width: `${Math.round((downloadProgress.fraction ?? 0) * 100)}%`,
-                              }}
-                            />
+                            </div>
                           </div>
-                          <div className="flex justify-between text-[9.5px] text-muted-foreground">
-                            <span>Downloading… {formatBytes(downloadProgress.downloaded)}</span>
-                            <button
-                              type="button"
-                              onClick={() => void cancelSpeechModelDownload(model.id)}
-                              className="text-destructive hover:underline cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Action buttons */}
-                      <div className="flex items-center justify-between gap-1.5 mt-2 pt-1.5 border-t border-border/40">
-                        {model.installed ? (
-                          <>
+                        ) : model.installed ? (
+                          <div className="flex items-center justify-between gap-1">
                             <div className="flex items-center gap-1">
                               <Button
                                 size="sm"
                                 variant={isDictationActive ? 'default' : 'outline'}
                                 disabled={busy}
                                 onClick={() => void handleSetDictation(model.id)}
-                                className="h-5.5 text-[10.5px] px-1.5 gap-1"
+                                className="h-5 text-[10px] px-1.5 gap-1"
                                 title="Use this model for voice dictation"
                               >
                                 {isDictationActive && <Check className="w-2.5 h-2.5" />}
@@ -756,7 +897,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                                 variant={isMeetingActive ? 'default' : 'outline'}
                                 disabled={busy}
                                 onClick={() => void handleSetMeeting(model.id)}
-                                className="h-5.5 text-[10.5px] px-1.5 gap-1"
+                                className="h-5 text-[10px] px-1.5 gap-1"
                                 title="Use this model for meeting transcription"
                               >
                                 {isMeetingActive && <Check className="w-2.5 h-2.5" />}
@@ -773,18 +914,22 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
-                          </>
+                          </div>
                         ) : (
-                          <div className="w-full flex justify-end">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[10px] text-muted-foreground/60 select-none">
+                              Available
+                            </span>
                             <Button
                               size="sm"
                               variant="outline"
                               disabled={isDownloading || busy}
                               onClick={() => void handleDownloadSpeech(model.id)}
-                              className="h-5.5 text-[10.5px] px-2 gap-1.5"
+                              className="h-5 text-[10px] px-2 gap-1 hover:border-primary hover:text-primary hover:bg-primary/10"
+                              aria-label={`Download ${model.name}`}
                             >
                               <Download className="w-3 h-3" />
-                              Download ({formatBytes(model.size_bytes)})
+                              <span>Download</span>
                             </Button>
                           </div>
                         )}

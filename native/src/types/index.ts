@@ -426,6 +426,9 @@ export interface SttSettings {
   cleanupStyle?: '' | 'faithful' | 'clean' | 'professional' | 'concise';
   enableInitialPrompt?: boolean;
   customInitialPrompt?: string | null;
+  /** Active dictation STT engine: 'whisper' (default) or 'parakeet' (NVIDIA Parakeet TDT). */
+  dictation_engine?: 'whisper' | 'parakeet' | string;
+  dictationEngine?: 'whisper' | 'parakeet' | string;
 }
 
 export interface SttDiagnosticSnapshot {

@@ -41,6 +41,27 @@ export const setMeetingSpeechModel = (id: string | null): Promise<void> =>
 export const setDictationSpeechModel = (id: string | null): Promise<void> =>
   invoke('set_dictation_speech_model', { id });
 
+export interface ParakeetStatus {
+  supported: boolean;
+  installed: boolean;
+  active_for_dictation: boolean;
+  missing_files: string[];
+  models_dir: string;
+  approx_total_bytes: number;
+}
+
+export const getParakeetStatus = (): Promise<ParakeetStatus> =>
+  invoke('get_parakeet_status');
+
+export const downloadParakeetModel = (): Promise<string> =>
+  invoke('download_parakeet_model');
+
+export const deleteParakeetModel = (): Promise<boolean> =>
+  invoke('delete_parakeet_model');
+
+export const setDictationEngine = (engine: 'whisper' | 'parakeet'): Promise<void> =>
+  invoke('set_dictation_engine', { engine });
+
 /** Subscribes to download progress for every model at once. */
 export const onSpeechModelDownload = (
   handler: (progress: SpeechModelDownloadProgress) => void,
