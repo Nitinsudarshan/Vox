@@ -11,7 +11,7 @@ pub use enrichment::{
     extract_deterministic_entities,
     extract_deterministic_knowledge, extract_deterministic_questions, extract_deterministic_title,
     extract_deterministic_topics, summarize_content, summarize_content_from,
-    summarize_scribble, summarize_vault_file,
+    summarize_scribble, summarize_vault_file, bound_summary_content,
     AiEnrichmentResponse, CANONICAL_ANALYSIS_SYSTEM_PROMPT, CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS,
     CANONICAL_SUMMARY_SYSTEM_PROMPT,
 };

@@ -932,6 +932,29 @@ pub async fn summarize_vault_file(
     Ok(file)
 }
 
+/// Binds content to a safe character ceiling for summarization so large notes/documents
+/// don't exhaust local model context windows or GPU VRAM.
+pub fn bound_summary_content(content: &str, max_chars: usize) -> String {
+    let char_count = content.chars().count();
+    if char_count <= max_chars {
+        return content.to_string();
+    }
+    let head_chars = (max_chars * 8) / 10;
+    let tail_chars = max_chars.saturating_sub(head_chars);
+
+    let head: String = content.chars().take(head_chars).collect();
+    let skip = char_count.saturating_sub(tail_chars);
+    let tail: String = content.chars().skip(skip).collect();
+
+    format!(
+        "{}\n\n[... content omitted for summary brevity ({}/{} characters evaluated) ...]\n\n{}",
+        head.trim_end(),
+        max_chars,
+        char_count,
+        tail.trim_start()
+    )
+}
+
 /// Summarizes a scribble concisely using the canonical Relay summary contract.
 pub async fn summarize_scribble(
     llm: &LLMClient,
@@ -947,7 +970,13 @@ pub async fn summarize_scribble(
         return Err("Summaries are only available for scribbles with 100 or more words.".to_string());
     }
 
-    match summarize_content(llm, &scribble.content).await {
+    if let Err(reason) = crate::providers::check_ready(llm.config()).await {
+        return Err(reason.to_string());
+    }
+
+    let bounded = bound_summary_content(&scribble.content, 12_000);
+
+    match summarize_content(llm, &bounded).await {
         Ok(summary_text) => {
             scribble.summary = Some(summary_text);
             scribble.updated_at = chrono::Utc::now().to_rfc3339();
@@ -1115,5 +1144,16 @@ mod tests {
         assert!(enriched.ai_metadata.last_enriched_at.is_some());
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_bound_summary_content_preserves_short_and_bounds_long() {
+        let short = "A brief note well within the limit.";
+        assert_eq!(bound_summary_content(short, 100), short);
+
+        let long = "word ".repeat(500); // 2500 chars
+        let bounded = bound_summary_content(&long, 100);
+        assert!(bounded.contains("[... content omitted for summary brevity"));
+        assert!(bounded.len() < long.len());
     }
 }

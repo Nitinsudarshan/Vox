@@ -14,6 +14,7 @@ import {
   Copy,
   Check,
   X,
+  AlertTriangle,
   Plus,
   FileText,
   Mic,
@@ -77,6 +78,7 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
   const [copiedQuestionIndex, setCopiedQuestionIndex] = useState<number | null>(null);
   const [isEnriching, setIsEnriching] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
 
 
@@ -162,13 +164,16 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
   };
 
   const handleSummarize = async () => {
+    setSummaryError(null);
     setIsSummarizing(true);
     try {
       const res = await invoke<Scribble>('summarize_scribble', { id: scribble.id });
       onUpdate(res);
       setSummary(res.summary || '');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to summarize scribble:', err);
+      const msg = typeof err === 'string' ? err : err?.message || 'Failed to generate summary.';
+      setSummaryError(msg);
     } finally {
       setIsSummarizing(false);
     }
@@ -430,6 +435,26 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
 
       {/* Main Scrollable Body */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-5 min-w-0">
+        {summaryError && (
+          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-destructive" />
+              <div className="flex-1 min-w-0">
+                <span className="font-semibold block mb-0.5">Summarization Failed</span>
+                <span className="text-muted-foreground break-words">{summaryError}</span>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSummaryError(null)}
+              className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        )}
+
         {/* 2. AI Summary (Displayed BEFORE Scribble text when 100+ words and present) */}
         {scribble.summary && isLongScribble && !isEditing && (
           <div className="p-4 rounded-lg bg-muted/30 border border-border space-y-2 text-xs">
