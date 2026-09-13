@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Scribble } from '@/types';
@@ -9,8 +9,10 @@ import {
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { ScribbleDetailEditor } from './ScribbleDetailEditor';
 import { EmptyState } from '../common/EmptyState';
+import { PageHeader } from '../common/PageHeader';
 
 export interface ScribbleViewerProps {
   /** Scribble to select on arrival — how the Knowledge Graph reveals a thought here. */
@@ -112,27 +114,57 @@ export const ScribbleViewer: React.FC<ScribbleViewerProps> = ({
 
   const selectedScribble = scribbles.find((s) => s.id === selectedScribbleId) || null;
 
-  return (
-    <div className="flex-1 flex flex-col gap-3 min-h-0 min-w-0 overflow-hidden">
-      {/* Workspace header — the count, and the one way to add a thought. */}
-      <div className="flex items-center justify-between pb-2.5 shrink-0 border-b border-border">
-        <Badge variant="outline" className="text-[11px] font-mono text-muted-foreground border-border bg-card/60 px-2.5 py-1">
-          {scribbles.length} Scribble{scribbles.length === 1 ? '' : 's'}
-        </Badge>
+  const scribbleStats = useMemo(() => {
+    const total = scribbles.length;
+    const topicSet = new Set<string>();
+    for (const s of scribbles) {
+      for (const t of s.topics || []) {
+        if (t && t.trim()) topicSet.add(t.trim().toLowerCase());
+      }
+    }
+    return { total, topics: topicSet.size };
+  }, [scribbles]);
 
-        {/*
-          Capture lives on the Captures surface. This is a navigation, not a
-          second capture implementation.
-        */}
-        <button
-          type="button"
-          onClick={onStartCapture}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card text-xs font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <PlusCircle className="w-3.5 h-3.5 text-primary" />
-          <span>New thought</span>
-        </button>
-      </div>
+  return (
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+      <PageHeader
+        title="Connected thoughts,"
+        highlightText="living knowledge."
+        description="Atomic thoughts Vox holds, with the ideas they connect to and their origins."
+        glowColor="primary"
+        compact
+      >
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center divide-x divide-border/60 bg-background/60 backdrop-blur-xs border border-border/80 rounded-lg py-1 px-1 shadow-2xs">
+            <div className="px-3 py-0.5 text-center">
+              <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                Scribbles
+              </p>
+              <p className="text-sm font-extrabold text-foreground font-mono">
+                {scribbleStats.total}
+              </p>
+            </div>
+            <div className="px-3 py-0.5 text-center">
+              <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                Topics
+              </p>
+              <p className="text-sm font-extrabold text-foreground font-mono">
+                {scribbleStats.topics}
+              </p>
+            </div>
+          </div>
+
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onStartCapture}
+            className="h-8 px-3 gap-1.5 text-xs font-medium border-border/80 bg-background/60 backdrop-blur-xs hover:bg-accent hover:text-accent-foreground text-foreground shadow-2xs transition-all active:scale-[0.98]"
+          >
+            <PlusCircle className="w-3.5 h-3.5 text-primary" />
+            <span>New thought</span>
+          </Button>
+        </div>
+      </PageHeader>
 
       {/* Main Workspace (List + Editor) */}
       <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden">

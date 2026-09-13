@@ -6,6 +6,7 @@ import { Network, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/common/EmptyState';
+import { PageHeader } from '@/components/common/PageHeader';
 
 import { KnowledgeGraphView } from './KnowledgeGraphView';
 
@@ -103,42 +104,84 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
   );
 
   return (
-    <div className="flex-1 flex flex-col gap-3 min-h-0 min-w-0 overflow-hidden">
-      {/* Topology summary + manual reload */}
-      <div className="flex items-center justify-between gap-3 pb-2.5 shrink-0 border-b border-border">
-        {/*
-          The toolbar inside the canvas already counts the nodes currently
-          visible, so this row deliberately reports only what it does not: how
-          much of the graph is linked, and the resolved knowledge behind it.
-        */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge variant="outline" className="text-[11px] font-mono text-muted-foreground bg-card/60 px-2.5 py-1">
-            {counts.edges} link{counts.edges === 1 ? '' : 's'}
-          </Badge>
-          <Badge variant="outline" className="text-[11px] font-mono text-muted-foreground bg-card/60 px-2.5 py-1">
-            {counts.orphans} unconnected
-          </Badge>
-          {telemetry && (
-            <Badge variant="outline" className="text-[11px] font-mono text-muted-foreground bg-card/60 px-2.5 py-1">
-              {telemetry.total_entities} entit{telemetry.total_entities === 1 ? 'y' : 'ies'} ·{' '}
-              {telemetry.total_relationships} relationship
-              {telemetry.total_relationships === 1 ? '' : 's'} · {telemetry.active_memories} memor
-              {telemetry.active_memories === 1 ? 'y' : 'ies'}
-            </Badge>
-          )}
-        </div>
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+      <PageHeader
+        title="How everything"
+        highlightText="connects."
+        description="Scribbles, topics, entities and sources as an interactive knowledge graph."
+        glowColor="primary"
+        compact
+      >
+        <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap shrink-0">
+          <div className="flex items-center divide-x divide-border/60 bg-background/60 backdrop-blur-xs border border-border/80 rounded-lg py-1 px-1 shadow-2xs">
+            <span className="sr-only">{counts.edges} link{counts.edges === 1 ? '' : 's'}</span>
+            <span className="sr-only">{counts.orphans} unconnected</span>
+            {telemetry && (
+              <span className="sr-only">
+                {telemetry.total_entities} entit{telemetry.total_entities === 1 ? 'y' : 'ies'} ·{' '}
+                {telemetry.total_relationships} relationship
+                {telemetry.total_relationships === 1 ? '' : 's'} · {telemetry.active_memories} memor
+                {telemetry.active_memories === 1 ? 'y' : 'ies'}
+              </span>
+            )}
+            <div className="px-2.5 py-0.5 text-center" aria-hidden="true">
+              <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                Links
+              </p>
+              <p className="text-sm font-extrabold text-foreground font-mono">
+                {counts.edges}
+              </p>
+            </div>
+            <div className="px-2.5 py-0.5 text-center" aria-hidden="true">
+              <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                Unconnected
+              </p>
+              <p className="text-sm font-extrabold text-foreground font-mono">
+                {counts.orphans}
+              </p>
+            </div>
+            {telemetry && (
+              <>
+                <div className="px-2.5 py-0.5 text-center" aria-hidden="true">
+                  <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                    Entities
+                  </p>
+                  <p className="text-sm font-extrabold text-foreground font-mono">
+                    {telemetry.total_entities}
+                  </p>
+                </div>
+                <div className="px-2.5 py-0.5 text-center" aria-hidden="true">
+                  <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                    Relations
+                  </p>
+                  <p className="text-sm font-extrabold text-foreground font-mono">
+                    {telemetry.total_relationships}
+                  </p>
+                </div>
+                <div className="px-2.5 py-0.5 text-center" aria-hidden="true">
+                  <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                    Memory
+                  </p>
+                  <p className="text-sm font-extrabold text-foreground font-mono">
+                    {telemetry.active_memories}
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
 
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleManualRefresh}
-          disabled={refreshing}
-          className="h-8 text-xs gap-1.5 shrink-0"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-          <span>Rebuild graph</span>
-        </Button>
-      </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleManualRefresh}
+            disabled={refreshing}
+            className="h-8 px-3 text-xs gap-1.5 shrink-0 border-border/80 bg-background/60 backdrop-blur-xs hover:bg-accent hover:text-accent-foreground text-foreground shadow-2xs transition-all active:scale-[0.98]"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>Rebuild graph</span>
+          </Button>
+        </div>
+      </PageHeader>
 
       {!loading && counts.nodes === 0 ? (
         <EmptyState
