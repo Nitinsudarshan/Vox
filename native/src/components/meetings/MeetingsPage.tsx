@@ -65,6 +65,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [summaryProgress, setSummaryProgress] = React.useState<SummaryProgress | null>(null);
   const [query, setQuery] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [translatingTranscript, setTranslatingTranscript] = React.useState(false);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
   /** The saved microphone/output choice. Empty means "let Vox decide". */
@@ -236,6 +237,20 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       await meetings.retranscribeMeeting(selectedId);
       await Promise.all([refreshList(), refreshDetail(selectedId)]);
       notify('info', 'Transcribed again with the current speech model.');
+    });
+
+  const handleTranslateTranscript = (targetLanguage?: string) =>
+    run(async () => {
+      if (!selectedId) return;
+      setTranslatingTranscript(true);
+      try {
+        notify('info', 'Translating transcript…');
+        await meetings.translateTranscript(selectedId, targetLanguage);
+        await refreshDetail(selectedId);
+        notify('info', 'Transcript translated.');
+      } finally {
+        setTranslatingTranscript(false);
+      }
     });
 
   const handleDelete = () =>
@@ -429,6 +444,8 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
               onSaveSummary={handleSaveSummary}
               onPromote={handlePromote}
               onOpenProviderSettings={onOpenProviderSettings}
+              onTranslateTranscript={handleTranslateTranscript}
+              isTranslatingTranscript={translatingTranscript}
             />
           ) : (
             <div className="h-full flex items-center justify-center">

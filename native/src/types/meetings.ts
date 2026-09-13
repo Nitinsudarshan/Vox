@@ -39,6 +39,9 @@ export interface TranscriptSegment {
   /** Whisper's own no-speech probability for this span. Lower is more certain. */
   no_speech_prob: number;
   recorded_at: string;
+  original_text?: string | null;
+  romanized_text?: string | null;
+  translated_text?: string | null;
 }
 
 export interface Meeting {

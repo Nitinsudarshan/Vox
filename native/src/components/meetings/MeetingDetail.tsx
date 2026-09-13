@@ -40,6 +40,8 @@ interface MeetingDetailProps {
   onSaveSummary: (markdown: string) => void;
   onPromote: () => void;
   onOpenProviderSettings?: () => void;
+  onTranslateTranscript?: (targetLanguage?: string) => Promise<void> | void;
+  isTranslatingTranscript?: boolean;
 }
 
 /**
@@ -73,6 +75,8 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
   onSaveSummary,
   onPromote,
   onOpenProviderSettings,
+  onTranslateTranscript,
+  isTranslatingTranscript,
 }) => {
   const { meeting, segments, summary } = detail;
   const [pane, setPane] = React.useState<Pane>('transcript');
@@ -314,6 +318,7 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
       >
         {(pane === 'transcript' || pane === 'split') && (
           <MeetingTranscript
+            meetingId={meeting.id}
             segments={segments}
             follow={live}
             playheadSeconds={playhead}
@@ -321,6 +326,8 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
             emptyMessage={
               live ? 'Listening…' : 'Nothing was transcribed for this meeting.'
             }
+            onTranslate={onTranslateTranscript}
+            isTranslating={isTranslatingTranscript}
           />
         )}
         {(pane === 'summary' || pane === 'split') && (

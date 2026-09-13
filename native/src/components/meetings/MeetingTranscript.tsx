@@ -1,12 +1,15 @@
 import React from 'react';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, Languages, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { channelLabel, formatTimestamp, transcriptToText } from '@/lib/meetings';
 import type { TranscriptSegment } from '@/types/meetings';
 
+export type TranscriptViewMode = 'original' | 'romanized' | 'english';
+
 interface MeetingTranscriptProps {
+  meetingId?: string;
   segments: TranscriptSegment[];
   /** Scrolls to the newest line as it arrives. On while recording. */
   follow?: boolean;
@@ -18,25 +21,68 @@ interface MeetingTranscriptProps {
   playheadSeconds?: number;
   /** Set when a line can be clicked to play from there. */
   onSeek?: (seconds: number) => void;
+  /** Optional handler to trigger LLM translation of segments into English. */
+  onTranslate?: (targetLanguage?: string) => Promise<void> | void;
+  isTranslating?: boolean;
+}
+
+function hasScriptVariants(segments: TranscriptSegment[]): boolean {
+  return segments.some(
+    (s) =>
+      Boolean(s.original_text) ||
+      Boolean(s.romanized_text) ||
+      Boolean(s.translated_text) ||
+      /[\u0900-\u097F]/.test(s.text),
+  );
+}
+
+function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode): string {
+  if (mode === 'original') {
+    return segment.original_text || segment.text;
+  }
+  if (mode === 'romanized') {
+    return segment.romanized_text || segment.text;
+  }
+  if (mode === 'english') {
+    return segment.translated_text || segment.text;
+  }
+  return segment.text;
 }
 
 /**
- * A meeting's transcript.
- *
- * Lines are grouped by speaker the way a transcript reads: the label appears
- * when the channel changes, not on every line.
+ * A meeting's transcript with support for toggling between Original,
+ * Romanized (Hinglish/Latin script), and English translation.
  */
 export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
+  meetingId: _meetingId,
   segments,
   follow = false,
   emptyMessage = 'Nothing has been transcribed yet.',
   playheadSeconds,
   onSeek,
+  onTranslate,
+  isTranslating = false,
 }) => {
   const [filter, setFilter] = React.useState('');
   const [copied, setCopied] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<TranscriptViewMode>('original');
   const endRef = React.useRef<HTMLDivElement>(null);
   const activeRef = React.useRef<HTMLDivElement>(null);
+
+  const showVariants = React.useMemo(() => hasScriptVariants(segments), [segments]);
+  const hasAnyEnglishTranslation = React.useMemo(
+    () => segments.some((s) => Boolean(s.translated_text)),
+    [segments],
+  );
+
+  // Pick the most informative view mode by default when translations or romanization exist
+  React.useEffect(() => {
+    if (segments.some((s) => Boolean(s.translated_text))) {
+      setViewMode('english');
+    } else if (segments.some((s) => Boolean(s.romanized_text))) {
+      setViewMode('romanized');
+    }
+  }, [segments]);
 
   React.useEffect(() => {
     if (follow) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -46,14 +92,13 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
   const visible = React.useMemo(
     () =>
       needle
-        ? segments.filter((segment) => segment.text.toLowerCase().includes(needle))
+        ? segments.filter((segment) =>
+            resolveSegmentText(segment, viewMode).toLowerCase().includes(needle),
+          )
         : segments,
-    [segments, needle],
+    [segments, needle, viewMode],
   );
 
-  // The line the playhead is inside — the last one to have started, which is
-  // also correct for the gaps between segments: silence belongs to the line
-  // just spoken, not to the one about to be.
   const activeSequence = React.useMemo(() => {
     if (playheadSeconds === undefined) return null;
     let found: number | null = null;
@@ -64,9 +109,6 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
     return found;
   }, [segments, playheadSeconds]);
 
-  // Keep the playing line on screen, and only then — `nearest` scrolls when
-  // the line is out of view and leaves the list alone when it is not, so
-  // reading ahead while something plays is not fought over.
   React.useEffect(() => {
     if (activeSequence === null) return;
     activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -74,7 +116,9 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(transcriptToText(segments));
+      await navigator.clipboard.writeText(
+        transcriptToText(segments, (s) => resolveSegmentText(s, viewMode)),
+      );
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -85,20 +129,89 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
 
   return (
     <div className="flex flex-col min-h-0 h-full">
-      <div className="flex items-center gap-2 mb-3 shrink-0">
+      <div className="flex items-center gap-2 mb-3 shrink-0 flex-wrap">
         <Input
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           placeholder="Find in transcript…"
-          className="h-8 text-xs"
+          className="h-8 text-xs flex-1 min-w-[140px]"
           aria-label="Find in transcript"
         />
+
+        {showVariants && (
+          <div
+            className="flex bg-muted p-0.5 rounded-lg border border-border shrink-0"
+            role="group"
+            aria-label="Script and translation mode"
+          >
+            <button
+              type="button"
+              onClick={() => setViewMode('original')}
+              className={`px-2 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
+                viewMode === 'original'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Original
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('romanized')}
+              className={`px-2 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
+                viewMode === 'romanized'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Romanized
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('english');
+                if (!hasAnyEnglishTranslation && onTranslate) {
+                  onTranslate('English');
+                }
+              }}
+              className={`px-2 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer inline-flex items-center gap-1 ${
+                viewMode === 'english'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {isTranslating && viewMode === 'english' ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : null}
+              English
+            </button>
+          </div>
+        )}
+
+        {showVariants && onTranslate && !hasAnyEnglishTranslation && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onTranslate('English')}
+            disabled={isTranslating}
+            className="gap-1.5 shrink-0 text-xs h-8"
+            title="Translate transcript into English"
+          >
+            {isTranslating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Languages className="w-3.5 h-3.5" />
+            )}
+            {isTranslating ? 'Translating…' : 'Translate'}
+          </Button>
+        )}
+
         <Button
           variant="outline"
           size="sm"
           onClick={handleCopy}
           disabled={segments.length === 0}
-          className="gap-1.5 shrink-0"
+          className="gap-1.5 shrink-0 h-8 text-xs"
         >
           {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
           {copied ? 'Copied' : 'Copy'}
@@ -115,6 +228,7 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
             const previous = visible[index - 1];
             const showSpeaker = !previous || previous.channel !== segment.channel;
             const active = segment.sequence === activeSequence;
+            const displayText = resolveSegmentText(segment, viewMode);
             return (
               <div key={segment.sequence} className={showSpeaker ? 'pt-2 first:pt-0' : ''}>
                 {showSpeaker && (
@@ -150,7 +264,7 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
                       {formatTimestamp(segment.start_seconds)}
                     </span>
                   )}
-                  <p className="text-sm text-foreground leading-relaxed">{segment.text}</p>
+                  <p className="text-sm text-foreground leading-relaxed">{displayText}</p>
                 </div>
               </div>
             );

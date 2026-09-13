@@ -146,6 +146,12 @@ export const retranscribeMeeting = (meetingId: string): Promise<Meeting> =>
 export const cancelImport = (key: string): Promise<boolean> =>
   invoke('cancel_meeting_import', { key });
 
+export const translateTranscript = (
+  meetingId: string,
+  targetLanguage?: string,
+): Promise<TranscriptSegment[]> =>
+  invoke('translate_meeting_transcript', { meetingId, targetLanguage });
+
 // --- formatting ---------------------------------------------------------
 
 /** `mm:ss`, or `h:mm:ss` once a meeting passes an hour. */
@@ -186,11 +192,14 @@ export function channelLabel(channel: TranscriptSegment['channel']): string {
  * The speaker label is repeated only when it changes, which is how a
  * transcript reads rather than how a log does.
  */
-export function transcriptToText(segments: TranscriptSegment[]): string {
+export function transcriptToText(
+  segments: TranscriptSegment[],
+  textExtractor?: (segment: TranscriptSegment) => string,
+): string {
   const lines: string[] = [];
   let lastChannel: string | null = null;
   for (const segment of segments) {
-    const text = segment.text.trim();
+    const text = (textExtractor ? textExtractor(segment) : segment.text).trim();
     if (!text) continue;
     const stamp = formatTimestamp(segment.start_seconds);
     if (segment.channel !== lastChannel) {
