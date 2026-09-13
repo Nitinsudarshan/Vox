@@ -660,6 +660,21 @@ pub struct MeetingSettings {
     /// announce.
     #[serde(default)]
     pub auto_summarize: bool,
+    /// Which language a meeting's audio is decoded as, overriding the
+    /// resolution in `language`.
+    ///
+    /// Empty — the default — means "whatever Languages & Script resolves to",
+    /// which for a bilingual profile is per-chunk auto-detection. `"auto"`
+    /// forces detection on. Anything else is an ISO code pinned for every
+    /// chunk of every meeting.
+    ///
+    /// This exists because auto-detection is decided once per thirty-second
+    /// chunk rather than once per meeting: code-switched speech can be
+    /// detected as a different language halfway through, and a chunk decoded
+    /// under the wrong language comes back as fluent nonsense rather than as
+    /// an error. See [`crate::capture::stt::SttLanguageConfig::from_settings_with_override`].
+    #[serde(default, alias = "transcriptionLanguage")]
+    pub transcription_language: String,
     /// The microphone and output device recordings open.
     ///
     /// Separate from `audio_input.selected_device`, which dictation shares
@@ -682,6 +697,7 @@ impl Default for MeetingSettings {
             default_template_id: default_meeting_template(),
             summary_language: String::new(),
             auto_summarize: false,
+            transcription_language: String::new(),
             devices: crate::meetings::capture::MeetingDevices::default(),
         }
     }

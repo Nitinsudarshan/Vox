@@ -29,7 +29,9 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 | Storage | `store.rs` | One directory per meeting, atomic writes, crash recovery. |
 | Reports | `summary/` | Six JSON templates, chunking against the configured context window, English-first generation with a translation pass. |
 | Lifecycle | `engine.rs` | Start, pause, resume, stop, recover. |
-| Import | `import.rs` | Decoding an existing recording, and re-transcribing one Vox already has. |
+| Import | `import.rs` | Decoding an existing recording, re-transcribing one Vox already has, and decoding a second English pass over either. |
+| Script & language | `variants.rs` | Devanagari to Latin without a model; batched, validated LLM translation for everything a model is actually needed for. |
+| Speakers | `voiceprint.rs`, `speakers.rs` | MFCC statistics per turn, clustered into proposed speakers with a voice sample for each. |
 
 ## On disk
 
@@ -37,6 +39,7 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 <vault>/meetings/<meeting_id>/
 ├── meeting.json      metadata — the record the list reads
 ├── transcript.json   segments, ordered by sequence
+├── speakers.json     the voices detection proposed, and the names you gave them
 ├── summary.json      the report, its cache fingerprint, and the English original
 ├── notes.md          whatever the user typed
 └── audio/
@@ -53,15 +56,105 @@ together.
 
 ## Speakers
 
-Transcript lines are labelled **You** or **Others**, and that is the capture
-channel rather than diarization. The microphone and the system loopback are
-two separate streams, so which one carried a span is known for free; the
-mixer keeps per-channel energy alongside the mixed window and a span is
-attributed to a channel only when that channel is three times louder than the
-other. Anything closer reads as **Speaker**.
+Two layers, and the difference between them matters.
 
-Two remote participants are both **Others** and cannot be told apart. Vox says
-so in the prompt rather than letting a model invent names for them.
+**The capture channel is measured.** Transcript lines are labelled **You** or
+**Others** from which stream carried them: the microphone and the system
+loopback are two separate streams, so this is known for free. The mixer keeps
+per-channel energy alongside the mixed window and a span is attributed to a
+channel only when that channel is three times louder than the other. Anything
+closer reads as **Speaker**. This is never wrong, and it can never tell two
+remote participants apart.
+
+**Who those participants are is proposed.** `voiceprint.rs` fingerprints each
+turn — 26 MFCC statistics over 32 ms frames, cosine-normalised so the same
+voice at two volumes stays one voice — and `speakers.rs` clusters the
+fingerprints with average-linkage agglomeration, then hands each group a span
+of the recording where that voice is talking alone.
+
+This is not neural diarization. A production system embeds turns with a
+trained speaker encoder (x-vector, ECAPA); that needs an ONNX runtime and a
+model file, and `maybe_later.md` §11 is where it is described. MFCC statistics
+group the same speaker together far more often than chance and are beaten by a
+shared microphone, by two similar voices, and by a turn short enough that one
+vowel dominates it.
+
+So the product shape follows what the technique can honestly claim: Vox
+proposes groups, plays four seconds of each, and the user names them. A wrong
+proposal costs one rename. Two rules keep that bearable:
+
+- The microphone channel is never clustered — one microphone carries one
+  person, so clustering it could only ever invent a second speaker for the
+  same voice — and the two channels are never merged, so a quiet remote voice
+  can never be attributed to the person running Vox.
+- A turn shorter than 1.2 seconds gets no fingerprint and stays unattributed.
+  An unattributed line reads as unknown; a wrongly attributed one reads as
+  known and wrong.
+
+Names the user types survive a re-run; Vox's own `Speaker 3` placeholders do
+not. Reports are rendered with whatever names exist, which is what lets a
+report say "Payal committed to sending the deck" rather than "Others did".
+
+## Script and language
+
+A meeting is rarely in one language. The same conversation can be almost all
+English with a few Hindi sentences, almost all Hindi with a few English words,
+or anything between — and a reader who cannot read Devanagari needs the same
+meeting back in an alphabet they can read.
+
+Three views, produced three different ways, deliberately:
+
+| View | Produced by | Needs a model? |
+|---|---|---|
+| Original | The decode itself | — |
+| Romanized | `capture::romanize`, a Devanagari state machine | No |
+| English | A second Whisper pass in translate mode, then an LLM for what it missed | Yes, for the fallback only |
+
+**Romanization is a projection**: the same words in a different alphabet,
+computed offline in microseconds, faithful by construction. Nothing asks a
+model to do it. Before `variants.rs`, one model call was asked for a
+translation and a romanization in the same object, and a local model answered
+both with the same string — so the Romanized view showed English. The
+acceptance check in `variants::accept_translation` now refuses a "translation"
+that is merely the romanization handed back.
+
+**English comes from the audio first.** `import::generate_english_track`
+decodes the recording a second time with Whisper's translate task. That is
+better than translating the finished transcript for a specific reason: Whisper
+saw far more speech-to-English data than Hindi transcription data, and a model
+handed a garbled Hindi line can only produce a garbled English one. The LLM
+pass fills whatever lines the translate pass left empty, in validated batches,
+and reports what it could not do rather than saving the transcript unchanged.
+
+The report pipeline ensures English exists before it summarises, because every
+report is written in English and translated afterwards whatever the configured
+report language.
+
+## Decoding, and what a re-transcription changes
+
+A live meeting decodes against a clock: audio keeps arriving, and a decoder
+slower than real time eventually drops speech. So the live worker keeps a
+cheaper profile for scripts Whisper writes expensively — greedy, no
+temperature fallback — and switches to it when it sees one.
+
+A batch run has no clock. `BatchConfig` therefore carries **one** decode
+profile and not two, so re-transcribing Hindi audio structurally cannot be
+decoded more cheaply than the same audio in English, and
+`WhisperDecodingConfig::for_meeting_batch` turns off the encoder clamp and
+defaults to the Quality preset.
+
+Re-transcription is a dialog rather than a button, because of what it is for:
+nobody presses it when the transcript is fine. Running it again on the
+settings that produced a wrong transcript produces the wrong transcript again.
+The three choices it offers are the three that change the answer — the
+language to pin, the model to read with, and how hard to look.
+
+Pinning the language matters more than it looks. Whisper re-detects the
+language every thirty seconds, so a call that switches between two languages
+can be detected as the wrong one partway through — and a chunk decoded under
+the wrong language does not fail. It comes back as fluent nonsense in the
+wrong language's phonology, which is worse than an error because nothing about
+it looks broken.
 
 ## Reports
 
@@ -132,9 +225,13 @@ and Gemini, and that is the one place provider choice belongs).
 
 ## What is not here
 
-- **Diarization.** Two people on the far end of a call are not separated. See
-  Decision 68.
-- **Meeting reminders and calendar matching.** Removed with `meetings_v2` and
-  not restored; `maybe_later.md` holds the deferral.
+- **Neural diarization.** Speakers are grouped by MFCC statistics, not by a
+  trained speaker encoder, and the grouping is presented as a proposal for
+  exactly that reason. See `maybe_later.md` §11 and Decision 68.
+- **Voices remembered across meetings.** A name given in one meeting does not
+  carry to the next. That needs an embedding stable enough to store, which is
+  the same gap as above.
+- **Meeting reminders.** Calendar events are matched to recordings, but Vox
+  does not notify before one starts.
 - **A meeting overlay window.** Recording is controlled from the Meetings
   surface and the tray.

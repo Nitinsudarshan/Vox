@@ -141,75 +141,74 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
 
 ### 11. Neural Speaker Embeddings and a Voice Library
 
-- **Status**: Backlog (diarization shipped in 0.31.0 without them)
-- **Area**: Native backend (`native/src-tauri/src/meetings_v2/diarize/*`)
+- **Status**: Backlog (acoustic speaker grouping ships; embeddings do not)
+- **Area**: Native backend (`native/src-tauri/src/meetings/voiceprint.rs`,
+  `native/src-tauri/src/meetings/speakers.rs`)
 - **Original Context**:
-  - 0.31.0 shipped rung 4 of `Meeting-rules/meeting_speaker_identification.md`
-    using classical features: MFCC mean and standard deviation over each
-    utterance, plus a median pitch estimate, clustered agglomeratively with the
-    speaker count read off the merge sequence.
-  - That was a deliberate trade. A neural speaker embedding (x-vector, ECAPA)
-    is materially better, and it means shipping an ONNX runtime, a model
-    download with its own licence question, and the consent flow §6 of the
-    speaker rules requires — because an embedding stored across meetings *is*
-    biometric data, which the classical path never creates.
-  - What the classical features do not buy is written into the module's own
-    docs: telling two similar voices apart on one channel, and matching a voice
-    across meetings. `DiarizationReport::well_separated` exists so the UI can
-    say which of those situations it is in rather than presenting a guess.
+  - Vox groups a meeting's turns by speaker using classical features: 26 MFCC
+    statistics per turn — mean and standard deviation over 32 ms frames —
+    cosine-normalised and clustered with average-linkage agglomeration. The
+    grouping is presented as a *proposal*, with a span of the recording per
+    speaker so the user can hear each voice and name it.
+  - That framing is the point, and it is a deliberate trade rather than a
+    placeholder. A neural speaker embedding (x-vector, ECAPA) is materially
+    better, and it means shipping an ONNX runtime, a model download with its
+    own licence question, and a consent flow — because an embedding stored
+    across meetings **is** biometric data, which the classical path never
+    creates.
+  - What the classical features do not buy is written into
+    `voiceprint.rs`'s own module docs: telling two similar voices apart on one
+    channel, separating speakers who share a microphone, and matching a voice
+    across meetings.
 - **Concept & Implementation Blueprint**:
-  - Add an ONNX runtime behind a feature flag and a settings toggle that is
-    **off** by default, alongside the existing "Separate individual speakers".
-  - Replace `features::VoiceFeatures::vector` with the embedding, keeping the
-    same `cluster::Utterance` shape so the clusterer and the merge-sequence
-    stopping rule are unchanged. Recalibrate `MIN_SPLIT_DISTANCE` against the
-    embedding's own scale — the constant's doc comment records how the current
-    value was measured, and the same method applies.
-  - Only then build the voice library (rung 2): enrolment, a "Remember voices
-    across meetings" toggle that must never default on, and the management UI
-    §6 requires — list, rename, merge, delete. Nothing in 0.31.0 persists a
-    voice, so there is no migration to do first.
-  - Per-source audio tracks would help independently: diarizing the
-    system-audio stream alone removes the local user's voice from the clustering
-    problem entirely.
+  - Add the ONNX runtime behind the existing `parakeet`-style feature flag and
+    a settings toggle that is **off** by default.
+  - Replace the vector `voiceprint::voiceprint` returns with the embedding,
+    keeping `TurnPrint` unchanged so `voiceprint::cluster` and
+    `speakers::assign_speakers` are untouched. Recalibrate
+    `DEFAULT_SPLIT_DISTANCE` against the embedding's own scale; the constant's
+    doc comment records why the current value under-splits rather than
+    over-splits, and the same reasoning applies at any scale.
+  - Only then build the voice library: enrolment, a "Remember voices across
+    meetings" toggle that must never default on, and management UI — list,
+    rename, merge, delete. Nothing currently persists a voice beyond the
+    meeting it was heard in, so there is no migration to do first.
+  - Per-source audio tracks would help independently. `assign_speakers`
+    already clusters the microphone and the loopback separately, but both are
+    decoded from one mixed stream; keeping the streams apart on disk would
+    remove the local user's voice from the clustering problem entirely.
 
-### 12. Calendar Sync for Meeting Attendees and Titles
+### 12. Calendar Attendees as a Speaker Hint
 
-- **Status**: Partly shipped (0.41.0) — calendar integration exists; the
-  expected-speaker hint does not
-- **Area**: Native backend (`native/src-tauri/src/meetings_v2/processing/metadata.rs`, `native/src-tauri/src/oauth/*`)
+- **Status**: Backlog (calendar sync ships; the speaker hint does not)
+- **Area**: Native backend (`native/src-tauri/src/calendar/agenda.rs`,
+  `native/src-tauri/src/meetings/speakers.rs`)
 - **Original Context**:
-  - Rung 3 of `Meeting-rules/meeting_speaker_identification.md` is "calendar
-    attendees + conferencing display names", and §2.2 specifies that a
-    recording's expected-speaker count should default to the calendar attendee
-    count.
-  - **The first half shipped and this entry did not get updated.** Google
-    Calendar accounts, event matching and `ParticipantOrigin::Invited` all
-    exist, and `processing/metadata.rs` populates participants from the matched
-    event's likely attendees — ordered after the voices actually heard and
-    before names merely mentioned, and never marked confirmed, because the
-    calendar is a record rather than evidence that somebody spoke.
-  - What is still missing is §2.2: the attendee count is not used as the
-    expected-speaker hint for diarization, which is the parameter that would
-    let separation know how many voices to look for.
-  - 0.31.0 built the surface those would fill: `MeetingMetadata` carries a
-    participant list with a `ParticipantOrigin`, and `Stated` already covers "a
-    name a person supplied". A calendar attendee is the same shape with a
-    different origin, and the expected-speaker hint is already a parameter on
-    `diarize_session`.
-  - Google OAuth exists in `oauth/` for Drive, so the authorization half is not
-    starting from nothing.
+  - Google Calendar sync ships: several accounts, merged into one day,
+    de-duplicated, and matched to recordings by overlap
+    (`calendar::agenda::match_recordings`). Each event carries its attendee
+    list.
+  - Nothing uses that list. `speakers::assign_speakers` finds however many
+    groups the audio suggests, capped at `voiceprint::MAX_SPEAKERS`, with no
+    reference to how many people were invited — so a three-person call whose
+    voices cluster into five groups asks the user to name five.
+  - The attendee count is the one piece of outside evidence available about
+    how many voices to expect, and it is already sitting on the matched event.
 - **Concept & Implementation Blueprint**:
-  - Add a `ParticipantOrigin::Calendar` and populate participants from the
-    event whose window contains the recording's start time. Match an attendee
-    name to a diarization cluster only where exactly one candidate fits, which
-    is what rung 3 requires — several candidates means no claim.
-  - Default `expected_speakers` to the attendee count when an event matched,
-    leaving the user's explicit setting to win over it.
-  - Use the event title as the meeting title only when the user has not typed
-    one, and never overwrite a title the extraction stage produced.
-  - Treat the calendar as external source material, per `rules/security.md`: an
-    event description is data, never an instruction to Relay's AI.
+  - Pass an `expected_speakers: Option<usize>` through `DetectionSettings`,
+    defaulted from the matched event's non-resource attendee count, with an
+    explicit user setting winning over it.
+  - Use it as a *stopping hint* rather than a target: keep merging while the
+    cluster count exceeds it, and never split to reach it. The calendar says
+    who was invited, not who spoke — someone who never unmuted is on the list
+    and not in the audio.
+  - Do **not** auto-assign attendee names to clusters. Matching a name to a
+    voice needs exactly one candidate to fit, and a calendar of five people
+    offers five; a wrong name in a report is read as fact. Offer the attendee
+    list as the autocomplete behind `SpeakerPanel`'s rename field instead,
+    which is the same information with the user's judgement in the loop.
+  - Treat the calendar as external source material, per `rules/security.md`:
+    an event title or description is data, never an instruction to Vox's AI.
 
 ### 13. Auto-Learning Dictionary Words From Corrections
 

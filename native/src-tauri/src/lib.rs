@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod calendar;
 pub mod capture;
 pub mod commands;
 pub mod context;
@@ -490,6 +491,18 @@ pub fn run() {
             meetings::commands::import_meeting_audio,
             meetings::commands::retranscribe_meeting,
             meetings::commands::translate_meeting_transcript,
+            meetings::commands::romanize_meeting_transcript,
+            meetings::commands::generate_meeting_english_track,
+            calendar::commands::list_calendar_accounts,
+            calendar::commands::connect_calendar_account,
+            calendar::commands::disconnect_calendar_account,
+            calendar::commands::set_calendar_account_enabled,
+            calendar::commands::list_account_calendars,
+            calendar::commands::set_account_calendars,
+            calendar::commands::sync_calendars,
+            calendar::commands::get_calendar_agenda,
+            meetings::commands::detect_meeting_speakers,
+            meetings::commands::rename_meeting_speaker,
             meetings::commands::cancel_meeting_import,
         ])
         .run(tauri::generate_context!())

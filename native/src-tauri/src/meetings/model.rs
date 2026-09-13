@@ -101,6 +101,45 @@ pub struct TranscriptSegment {
     pub romanized_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translated_text: Option<String>,
+    /// Which [`Speaker`] this line was attributed to, if any.
+    ///
+    /// Absent means "not attributed", which is a real and common answer: a
+    /// line too short to fingerprint gets no vote on who was speaking, and
+    /// saying so is better than guessing. [`SegmentChannel`] still applies
+    /// either way — it is measured rather than inferred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+}
+
+/// One person Vox believes spoke during a meeting.
+///
+/// The name is the user's; everything else is evidence. Vox proposes the
+/// grouping and plays a sample back so the user can hear who it found — see
+/// [`crate::meetings::voiceprint`] for why proposing rather than asserting is
+/// the honest shape for the technique underneath.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Speaker {
+    /// Stable within a meeting, and what [`TranscriptSegment::speaker_id`]
+    /// points at.
+    pub id: String,
+    /// What to call this person. Starts as "Speaker 1"; the user renames it.
+    pub label: String,
+    /// Whether [`Self::label`] is the user's word or Vox's placeholder. A
+    /// re-run may renumber its own placeholders and must never overwrite a
+    /// name somebody typed.
+    #[serde(default)]
+    pub named_by_user: bool,
+    /// Which capture channel this speaker was heard on, where it is
+    /// consistent. `Microphone` is the person holding the laptop.
+    pub channel: SegmentChannel,
+    /// A span of the recording where this speaker is talking alone, so the UI
+    /// can play a few seconds and let the user put a name to the voice.
+    pub sample_start_seconds: f64,
+    pub sample_end_seconds: f64,
+    /// Transcript lines attributed to this speaker.
+    pub segment_count: usize,
+    /// Seconds of speech attributed to this speaker.
+    pub speaking_seconds: f64,
 }
 
 impl TranscriptSegment {
@@ -310,6 +349,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
+            speaker_id: None,
         };
         assert_eq!(segment.duration_seconds(), 0.0);
     }

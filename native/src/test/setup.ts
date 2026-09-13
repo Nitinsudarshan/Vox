@@ -41,6 +41,17 @@ Element.prototype.scrollIntoView = vi.fn();
 HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
 HTMLMediaElement.prototype.pause = vi.fn(() => undefined);
 
+// jsdom implements no Pointer Events API, and Radix's menus, selects and
+// popovers are all driven by `pointerdown` rather than `click` — so without
+// these a dropdown never opens in a test and the component looks broken when
+// it is the environment that is missing.
+if (!('PointerEvent' in globalThis)) {
+  globalThis.PointerEvent = MouseEvent as unknown as typeof PointerEvent;
+}
+Element.prototype.hasPointerCapture = vi.fn(() => false);
+Element.prototype.setPointerCapture = vi.fn();
+Element.prototype.releasePointerCapture = vi.fn();
+
 globalThis.ResizeObserver = class {
   observe() {}
   unobserve() {}

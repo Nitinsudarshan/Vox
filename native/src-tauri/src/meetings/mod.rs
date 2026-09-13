@@ -53,6 +53,9 @@ pub mod segmenter;
 pub mod store;
 pub mod summary;
 pub mod transcription;
+pub mod speakers;
+pub mod variants;
+pub mod voiceprint;
 
 pub use model::{
     Meeting, MeetingListItem, MeetingSource, MeetingState, MeetingSummary, SegmentChannel,

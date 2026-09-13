@@ -15,6 +15,8 @@ import type {
   MeetingSearchHit,
   MeetingSummary,
   MeetingTemplate,
+  Speaker,
+  SpeakerReport,
   TranscriptSegment,
 } from '@/types/meetings';
 import type { AudioDeviceInfo } from '@/types';
@@ -140,8 +142,29 @@ export const pickAudioFile = (): Promise<string | null> =>
 export const importAudio = (path: string, title?: string): Promise<Meeting> =>
   invoke('import_meeting_audio', { path, title });
 
-export const retranscribeMeeting = (meetingId: string): Promise<Meeting> =>
-  invoke('retranscribe_meeting', { meetingId });
+/**
+ * What one re-transcription may override about the saved settings.
+ *
+ * All optional. A re-transcription with no overrides repeats what settings
+ * say — which is the right default for "the model finished downloading" and
+ * the wrong one for "this transcript is wrong", hence the dialog that fills
+ * these in.
+ */
+export interface RetranscribeOverrides {
+  /** ISO code to pin, or `'auto'` to force detection. */
+  language?: string;
+  /** A speech-model catalogue id, for this run only. */
+  modelId?: string;
+  /** `'fast' | 'balanced' | 'quality'`. */
+  preset?: string;
+  /** Whether the run also decodes an English rendering of every line. */
+  englishTrack?: boolean;
+}
+
+export const retranscribeMeeting = (
+  meetingId: string,
+  overrides?: RetranscribeOverrides,
+): Promise<Meeting> => invoke('retranscribe_meeting', { meetingId, overrides });
 
 export const cancelImport = (key: string): Promise<boolean> =>
   invoke('cancel_meeting_import', { key });
@@ -151,6 +174,43 @@ export const translateTranscript = (
   targetLanguage?: string,
 ): Promise<TranscriptSegment[]> =>
   invoke('translate_meeting_transcript', { meetingId, targetLanguage });
+
+/**
+ * Decodes the recording again in Whisper's translate mode.
+ *
+ * The primary route to an English view, and not a model call over the finished
+ * transcript: Whisper reads the audio, so it is not limited by how good the
+ * native-script transcript turned out. Leaves that transcript untouched.
+ * Resolves to the number of lines that gained English.
+ */
+export const generateEnglishTrack = (
+  meetingId: string,
+  overrides?: RetranscribeOverrides,
+): Promise<number> => invoke('generate_meeting_english_track', { meetingId, overrides });
+
+/**
+ * Works out who spoke, and returns a voice sample for each so the user can put
+ * a name to them.
+ */
+export const detectSpeakers = (meetingId: string): Promise<SpeakerReport> =>
+  invoke('detect_meeting_speakers', { meetingId });
+
+/** Puts a name to one of the voices detection found. */
+export const renameSpeaker = (
+  meetingId: string,
+  speakerId: string,
+  label: string,
+): Promise<Speaker[]> => invoke('rename_meeting_speaker', { meetingId, speakerId, label });
+
+/**
+ * Fills in the Latin-script view of a transcript.
+ *
+ * Deterministic and offline — no provider, no model, no network. Separate from
+ * `translateTranscript` because the Romanized view must keep working on a
+ * machine where translation cannot run at all.
+ */
+export const romanizeTranscript = (meetingId: string): Promise<TranscriptSegment[]> =>
+  invoke('romanize_meeting_transcript', { meetingId });
 
 // --- formatting ---------------------------------------------------------
 
@@ -172,6 +232,22 @@ export function formatDuration(seconds: number): string {
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
   return `${hours} h ${String(minutes % 60).padStart(2, '0')} min`;
+}
+
+/**
+ * The name shown against a transcript line.
+ *
+ * A detected speaker's name where there is one; otherwise the capture channel,
+ * which is measured rather than inferred and so is always available.
+ */
+export function speakerLabel(
+  segment: TranscriptSegment,
+  speakers: Speaker[] = [],
+): string {
+  const speaker = segment.speaker_id
+    ? speakers.find((candidate) => candidate.id === segment.speaker_id)
+    : undefined;
+  return speaker ? speaker.label : channelLabel(segment.channel);
 }
 
 /** The speaker label shown against a transcript line. */
@@ -210,6 +286,63 @@ export function transcriptToText(
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * The heading a meeting sits under in the index: "Today", "Yesterday", or the
+ * date it was recorded.
+ *
+ * Compared on calendar days in the viewer's own timezone rather than on
+ * elapsed hours: a call at 11pm is "Yesterday" at 1am, not "2 hours ago", and
+ * someone scanning for "the one from Tuesday" is looking for a date.
+ */
+export function dayLabel(iso: string, now: Date = new Date()): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return 'Undated';
+
+  const midnight = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((midnight(now) - midnight(when)) / 86_400_000);
+
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days > 1 && days < 7) {
+    return when.toLocaleDateString(undefined, { weekday: 'long' });
+  }
+  return when.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(when.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
+}
+
+/** The clock time a meeting started, for a list row. */
+export function formatClockTime(iso: string): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return '';
+  return when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * The index, split into the day headings it renders under.
+ *
+ * Order is preserved rather than re-sorted: the backend already returns
+ * newest first, and a second sort here is a second answer to "which is
+ * newest" that can disagree with it.
+ */
+export function groupByDay<T extends { created_at: string }>(
+  items: T[],
+  now: Date = new Date(),
+): Array<{ label: string; items: T[] }> {
+  const groups: Array<{ label: string; items: T[] }> = [];
+  for (const item of items) {
+    const label = dayLabel(item.created_at, now);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(item);
+    else groups.push({ label, items: [item] });
+  }
+  return groups;
 }
 
 /** Whether a summary run is still in flight. */
