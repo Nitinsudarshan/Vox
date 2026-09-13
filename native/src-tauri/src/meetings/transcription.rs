@@ -274,10 +274,14 @@ pub struct TranscriptionStats {
     pub slowest_rtf: f64,
     pub slowest_sequence: u64,
 
-    /// The segment whose transcript first showed a script whisper decodes
-    /// expensively, after which the rest of the meeting used the cheaper
-    /// profile. `None` when the meeting stayed on the careful one throughout.
-    pub switched_at: Option<u64>,
+    /// Every profile change, as (first segment on the new profile, whether
+    /// that profile is the cheaper one). Empty when the meeting stayed on the
+    /// careful profile throughout, which is the English case.
+    ///
+    /// A list rather than a flag because a meeting that turns to another
+    /// language and back is the case this tracking exists for, and a single
+    /// switch point could not describe it.
+    pub switches: Vec<(u64, bool)>,
     pub segments_on_cheap_profile: u64,
 }
 
@@ -391,9 +395,9 @@ fn run_worker(
         ..TranscriptionStats::default()
     };
 
-    // Starts careful and stays there for an all-Latin meeting; the first
-    // segment that comes back in another script moves it for good.
-    let mut expensive_script = false;
+    // Starts careful and stays there for an all-Latin meeting; a run of
+    // segments in another script moves it, and a run back moves it back.
+    let mut script = crate::capture::stt::ScriptTracker::new();
 
     for job in rx {
         if cancel.load(Ordering::SeqCst) {
@@ -402,30 +406,26 @@ fn run_worker(
         }
 
         let sequence = job.sequence;
-        let (outcome, mut timing) = decode_segment(&engine, &config, &job, expensive_script);
+        let (outcome, mut timing) = decode_segment(&engine, &config, &job, script.is_expensive());
 
-        // What the decoder just wrote decides how the *next* segment is
-        // decoded. One segment of a Hindi meeting pays the careful profile
-        // before the meeting has shown what it is, which is the price of not
-        // guessing from a settings page: a bilingual profile says what someone
-        // might speak, not what this meeting is.
+        // What the decoder has been writing decides how the *next* segment is
+        // decoded. Read from the transcript rather than from a settings page:
+        // a bilingual profile says what someone might speak, not what this
+        // meeting is, so someone set up for English and Hindi who holds an
+        // English meeting keeps the beam they can afford.
         //
-        // One-way on purpose. A code-switched meeting crosses back and forth,
-        // and a decoder whose settings flapped with it would make the
-        // transcript's quality depend on which sentence a segment happened to
-        // start in.
-        if !expensive_script {
-            if let DecodeOutcome::Kept(segment) = &outcome {
-                if crate::capture::stt::uses_expensive_script(&segment.text) {
-                    tracing::info!(
-                        "meeting {}: segment {} is in a script whisper decodes expensively; \
-                         dropping to the faster profile for the rest of the meeting",
-                        config.meeting_id,
-                        sequence
-                    );
-                    expensive_script = true;
-                    stats.switched_at = Some(sequence);
-                }
+        // Only a kept segment counts. One screened as a hallucination says
+        // nothing about which language is being spoken.
+        if let DecodeOutcome::Kept(segment) = &outcome {
+            if script.observe(&segment.text) {
+                let now_expensive = script.is_expensive();
+                tracing::info!(
+                    "meeting {}: switching to the {} decode profile from segment {}",
+                    config.meeting_id,
+                    if now_expensive { "faster" } else { "careful" },
+                    sequence + 1
+                );
+                stats.switches.push((sequence + 1, now_expensive));
             }
         }
         counters.completed.fetch_add(1, Ordering::SeqCst);
@@ -639,12 +639,20 @@ pub fn print_meeting_summary(
     println!("strategy             : {}", stats.strategy);
     println!(
         "decode profile       : {}",
-        match stats.switched_at {
-            Some(seq) => format!(
-                "careful, then fast from seq {seq} ({} of {} segments)",
+        if stats.switches.is_empty() {
+            "careful throughout (no non-Latin script seen)".to_string()
+        } else {
+            let path = stats
+                .switches
+                .iter()
+                .map(|(seq, expensive)| {
+                    format!(" -> {} @seq {seq}", if *expensive { "fast" } else { "careful" })
+                })
+                .collect::<String>();
+            format!(
+                "careful{path}   ({} of {} segments on fast)",
                 stats.segments_on_cheap_profile, stats.decoded
-            ),
-            None => "careful throughout (no non-Latin script seen)".to_string(),
+            )
         }
     );
     println!("language             : {}", stats.language);

@@ -17,7 +17,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use crate::sync::MutexExt;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -321,9 +323,9 @@ fn run_batch(
     let mut segmenter = Segmenter::new();
     let mut sequence: u64 = 0;
     let mut kept = 0usize;
-    // Shared rather than a local `bool` because the decode happens inside the
+    // Shared rather than a local because the decode happens inside the
     // streaming sink's closure as well as in the flush that follows it.
-    let expensive_script = AtomicBool::new(false);
+    let script = Mutex::new(crate::capture::stt::ScriptTracker::new());
     let mut total_seconds: Option<f64> = None;
     let mut last_emit = std::time::Instant::now();
 
@@ -340,7 +342,7 @@ fn run_batch(
             }
             for segment in segmenter.push(chunk, &[], &[]) {
                 if let Some(transcript) =
-                    decode_one(engine, config, &segment, sequence, &expensive_script)
+                    decode_one(engine, config, &segment, sequence, &script)
                 {
                     store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
                     kept += 1;
@@ -373,7 +375,7 @@ fn run_batch(
         if cancel.load(Ordering::SeqCst) {
             return Err(ImportError::Cancelled);
         }
-        if let Some(transcript) = decode_one(engine, config, &segment, sequence, &expensive_script) {
+        if let Some(transcript) = decode_one(engine, config, &segment, sequence, &script) {
             store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
             kept += 1;
         }
@@ -410,10 +412,10 @@ fn decode_one(
     config: &BatchConfig,
     segment: &super::segmenter::SpeechSegment,
     sequence: u64,
-    expensive_script: &AtomicBool,
+    script: &Mutex<crate::capture::stt::ScriptTracker>,
 ) -> Option<TranscriptSegment> {
     let profile = speech_health::profile_speech(&segment.samples, SEGMENT_SAMPLE_RATE);
-    let decoding = if expensive_script.load(Ordering::SeqCst) {
+    let decoding = if script.lock_or_recover().is_expensive() {
         &config.decoding_expensive_script
     } else {
         &config.decoding
@@ -435,17 +437,18 @@ fn decode_one(
     if text.trim().is_empty() {
         return None;
     }
-    // Same one-way switch the live worker makes, for the same reason: what was
-    // just written decides how the rest of the file is decoded.
-    if !expensive_script.load(Ordering::SeqCst)
-        && crate::capture::stt::uses_expensive_script(&text)
+    // Same tracking the live worker does, for the same reason: what has been
+    // written decides how the rest of the file is decoded, and a file that
+    // changes language partway through changes back with it.
     {
-        tracing::info!(
-            "imported segment {} is in a script whisper decodes expensively; \
-             dropping to the faster profile for the rest of the file",
-            sequence
-        );
-        expensive_script.store(true, Ordering::SeqCst);
+        let mut script = script.lock_or_recover();
+        if script.observe(&text) {
+            tracing::info!(
+                "imported file: switching to the {} decode profile from segment {}",
+                if script.is_expensive() { "faster" } else { "careful" },
+                sequence + 1
+            );
+        }
     }
     let mean_no_speech_prob = if utterances.is_empty() {
         1.0
