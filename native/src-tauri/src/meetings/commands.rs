@@ -721,6 +721,11 @@ fn batch_config(state: &State<'_, AppState>) -> Result<BatchConfig, CommandError
         model_path: model_path.to_string_lossy().to_string(),
         language: SttLanguageConfig::from_settings(&settings.language, SttWindow::LongForm),
         decoding: WhisperDecodingConfig::for_meetings(&settings.stt, SttPreset::Balanced),
+        decoding_expensive_script: WhisperDecodingConfig::for_meetings(
+            &settings.stt,
+            SttPreset::Balanced,
+        )
+        .for_expensive_script(),
         glossary: settings.dictionary.clone(),
     })
 }

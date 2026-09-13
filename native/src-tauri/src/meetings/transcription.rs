@@ -222,6 +222,9 @@ struct SegmentTiming {
     /// The encoder clamp this segment decoded against, `None` for whisper's
     /// full thirty-second window.
     audio_ctx: Option<i32>,
+    /// Whether this segment decoded with the cheaper profile kept for scripts
+    /// whisper writes expensively.
+    expensive_script: bool,
 }
 
 impl SegmentTiming {
@@ -270,6 +273,12 @@ pub struct TranscriptionStats {
     /// several times over, which the mean hides.
     pub slowest_rtf: f64,
     pub slowest_sequence: u64,
+
+    /// The segment whose transcript first showed a script whisper decodes
+    /// expensively, after which the rest of the meeting used the cheaper
+    /// profile. `None` when the meeting stayed on the careful one throughout.
+    pub switched_at: Option<u64>,
+    pub segments_on_cheap_profile: u64,
 }
 
 impl TranscriptionStats {
@@ -303,6 +312,15 @@ pub struct WorkerConfig {
     pub model_path: String,
     pub language: SttLanguageConfig,
     pub decoding: WhisperDecodingConfig,
+    /// The same configuration wound back for a script whisper writes
+    /// expensively — see [`WhisperDecodingConfig::for_expensive_script`].
+    ///
+    /// Held alongside rather than replacing it, because which one a segment
+    /// wants is not known until the meeting is under way: the careful profile
+    /// costs an English meeting almost nothing and is worth keeping, and the
+    /// cheap one is worth its accuracy only where the cost it avoids is
+    /// actually being paid.
+    pub decoding_expensive_script: WhisperDecodingConfig,
     /// Words the user has told Vox about, applied to every decoded segment.
     pub glossary: Vec<String>,
 }
@@ -373,6 +391,10 @@ fn run_worker(
         ..TranscriptionStats::default()
     };
 
+    // Starts careful and stays there for an all-Latin meeting; the first
+    // segment that comes back in another script moves it for good.
+    let mut expensive_script = false;
+
     for job in rx {
         if cancel.load(Ordering::SeqCst) {
             tracing::info!("meeting {}: transcription cancelled", config.meeting_id);
@@ -380,7 +402,32 @@ fn run_worker(
         }
 
         let sequence = job.sequence;
-        let (outcome, mut timing) = decode_segment(&engine, &config, &job);
+        let (outcome, mut timing) = decode_segment(&engine, &config, &job, expensive_script);
+
+        // What the decoder just wrote decides how the *next* segment is
+        // decoded. One segment of a Hindi meeting pays the careful profile
+        // before the meeting has shown what it is, which is the price of not
+        // guessing from a settings page: a bilingual profile says what someone
+        // might speak, not what this meeting is.
+        //
+        // One-way on purpose. A code-switched meeting crosses back and forth,
+        // and a decoder whose settings flapped with it would make the
+        // transcript's quality depend on which sentence a segment happened to
+        // start in.
+        if !expensive_script {
+            if let DecodeOutcome::Kept(segment) = &outcome {
+                if crate::capture::stt::uses_expensive_script(&segment.text) {
+                    tracing::info!(
+                        "meeting {}: segment {} is in a script whisper decodes expensively; \
+                         dropping to the faster profile for the rest of the meeting",
+                        config.meeting_id,
+                        sequence
+                    );
+                    expensive_script = true;
+                    stats.switched_at = Some(sequence);
+                }
+            }
+        }
         counters.completed.fetch_add(1, Ordering::SeqCst);
 
         let outcome_label = match outcome {
@@ -462,6 +509,9 @@ fn run_worker(
 }
 
 fn accumulate(stats: &mut TranscriptionStats, timing: &SegmentTiming) {
+    if timing.expensive_script {
+        stats.segments_on_cheap_profile += 1;
+    }
     stats.speech_seconds += timing.audio_seconds;
     stats.decode_ms += timing.decode_ms;
     stats.queue_wait_ms += timing.queue_wait_ms;
@@ -524,6 +574,14 @@ fn print_segment_trace(
             None => "30.0 s (full window)".to_string(),
         }
     );
+    println!(
+        "decode profile       : {}",
+        if timing.expensive_script {
+            "fast (non-Latin script: greedy, no fallback)"
+        } else {
+            "careful (beam search)"
+        }
+    );
     println!("decode               : {} ms", timing.decode_ms);
     println!("screen + normalize   : {} ms", timing.post_ms);
     println!("persist              : {} ms", timing.persist_ms);
@@ -579,6 +637,16 @@ pub fn print_meeting_summary(
     println!("meeting              : {meeting_id}");
     println!("model                : {}", stats.model_path);
     println!("strategy             : {}", stats.strategy);
+    println!(
+        "decode profile       : {}",
+        match stats.switched_at {
+            Some(seq) => format!(
+                "careful, then fast from seq {seq} ({} of {} segments)",
+                stats.segments_on_cheap_profile, stats.decoded
+            ),
+            None => "careful throughout (no non-Latin script seen)".to_string(),
+        }
+    );
     println!("language             : {}", stats.language);
     println!("threads              : {}", stats.threads);
     println!();
@@ -647,12 +715,20 @@ fn decode_segment(
     engine: &SttEngine,
     config: &WorkerConfig,
     job: &DecodeJob,
+    expensive_script: bool,
 ) -> (DecodeOutcome, SegmentTiming) {
     let samples = &job.segment.samples;
+
+    let decoding = if expensive_script {
+        &config.decoding_expensive_script
+    } else {
+        &config.decoding
+    };
 
     let mut timing = SegmentTiming {
         audio_seconds: job.segment.duration_seconds(),
         queue_wait_ms: job.submitted_at.elapsed().as_millis(),
+        expensive_script,
         ..SegmentTiming::default()
     };
 
@@ -665,7 +741,7 @@ fn decode_segment(
         Some(&config.model_path),
         samples,
         &config.language,
-        &config.decoding,
+        decoding,
     );
 
     let utterances = match result {
@@ -985,6 +1061,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
+            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
             },
             SttEngine::new(),

@@ -1038,6 +1038,37 @@ impl WhisperDecodingConfig {
         cfg
     }
 
+    /// The same configuration, wound back to what a script whisper writes
+    /// expensively can afford.
+    ///
+    /// Whisper's tokenizer is fitted to Latin text. Devanagari and the other
+    /// non-Latin scripts cost several tokens where English costs one, and the
+    /// decoder runs once per token — so the same sentence is several times
+    /// more decoder work in Hindi than in English. Measured on one machine
+    /// with `ggml-small.bin`: 18.3 ms of decode per character of English
+    /// against 103.8 ms per character of Hindi, and decode time tracking
+    /// transcript length at r = +0.80 in Hindi where English showed no
+    /// relationship at all.
+    ///
+    /// A beam search multiplies precisely that cost, so it is the first thing
+    /// to go. [`SttPreset::Fast`] is reused rather than hand-assembled because
+    /// dropping the beam and loosening the no-speech threshold belong
+    /// together: the wider beam is what made keeping low-confidence segments
+    /// safe, so a config that drops one and not the other gets the trade
+    /// backwards. `temperature_inc` goes to zero on top, which stops a
+    /// segment whisper is unsure of being decoded up to six times over — a
+    /// fallback whose signature showed up on Hindi audio and never on English.
+    ///
+    /// This is a real trade, not a free win: greedy decoding and no fallback
+    /// are less accurate, on exactly the audio whose accuracy is already
+    /// weakest. It buys keeping up with the meeting, and it is applied only
+    /// where the cost it targets is actually being paid.
+    pub fn for_expensive_script(&self) -> Self {
+        let mut cfg = self.clone().with_preset(SttPreset::Fast);
+        cfg.temperature_inc = 0.0;
+        cfg
+    }
+
     /// Resolves the effective decoding configuration specifically for Universal Dictation.
     ///
     /// Defaults to [`SttPreset::Fast`], deliberately: push-to-talk is
@@ -1505,6 +1536,52 @@ pub fn join_utterance_text(utterances: &[SttUtterance]) -> String {
 /// roughly halves that cost — the same trick whisper.cpp's own `stream`
 /// example uses — and every window a live stream submits is far shorter than
 /// the clamped span.
+/// Letters outside this range are treated as a script whisper writes
+/// expensively. Basic Latin through Latin Extended-B, so the accented letters
+/// of European languages count as Latin — those are cheap, and flagging French
+/// or Turkish here would spend accuracy for nothing.
+const LAST_LATIN_CODEPOINT: u32 = 0x024F;
+
+/// Share of a segment's letters that must be non-Latin before its script is
+/// judged expensive. Well clear of a stray character or a single borrowed
+/// word, well under the mix in genuinely code-switched speech.
+const EXPENSIVE_SCRIPT_PERCENT: usize = 20;
+
+/// Too few letters to judge from. A three-word segment that happens to be one
+/// Hindi word should not decide how the rest of a meeting is decoded.
+const EXPENSIVE_SCRIPT_MIN_LETTERS: usize = 8;
+
+/// Whether `text` is written in a script that costs whisper's decoder more
+/// than Latin does.
+///
+/// Measured rather than assumed: on one machine the same model spent 18.3 ms
+/// of decode per character of English and 103.8 ms per character of Hindi.
+/// The tokenizer is the reason — non-Latin scripts take several tokens where
+/// Latin takes one, and the decoder runs once per token.
+///
+/// Judged from the transcript rather than from the user's configured
+/// languages, because a bilingual profile says what someone *might* speak,
+/// not what this meeting actually is. Someone set up for English and Hindi
+/// who holds an all-English meeting should keep the careful decoder, and they
+/// do.
+pub fn uses_expensive_script(text: &str) -> bool {
+    let (latin, other) = text
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .fold((0usize, 0usize), |(latin, other), c| {
+            if (c as u32) <= LAST_LATIN_CODEPOINT {
+                (latin + 1, other)
+            } else {
+                (latin, other + 1)
+            }
+        });
+    let letters = latin + other;
+    if letters < EXPENSIVE_SCRIPT_MIN_LETTERS {
+        return false;
+    }
+    other * 100 / letters >= EXPENSIVE_SCRIPT_PERCENT
+}
+
 /// Encoder positions whisper produces for one full thirty-second window.
 ///
 /// whisper.cpp mels a window into 3000 frames and the encoder halves that, so
@@ -1700,6 +1777,92 @@ fn num_cpus() -> std::ffi::c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case this exists for: Devanagari costs whisper's decoder several
+    /// times what Latin does, and a meeting written in it needs the cheaper
+    /// profile.
+    #[test]
+    fn devanagari_is_recognised_as_an_expensive_script() {
+        assert!(uses_expensive_script("मुझे लगता है कि यह ठीक है"));
+        // Code-switched Hinglish counts too: the Hindi half is what costs.
+        assert!(uses_expensive_script(
+            "So basically हमें यह करना चाहिए before the deadline"
+        ));
+    }
+
+    /// The mistake worth avoiding: European languages are Latin script and
+    /// cheap, and flagging them would spend accuracy for no speed.
+    #[test]
+    fn accented_european_text_is_not_expensive() {
+        assert!(!uses_expensive_script("Je pense que c'est déjà réglé"));
+        assert!(!uses_expensive_script("Das hätte größer sein müssen"));
+        assert!(!uses_expensive_script("La reunión terminó sin más"));
+        assert!(!uses_expensive_script("Bugün toplantı iyi geçti"));
+    }
+
+    /// Plain English never switches the profile, so an English meeting keeps
+    /// the beam search it can afford.
+    #[test]
+    fn english_keeps_the_careful_profile() {
+        assert!(!uses_expensive_script(
+            "I think we should ship this before the end of the week"
+        ));
+    }
+
+    /// One borrowed word does not redecide the meeting.
+    #[test]
+    fn a_stray_foreign_word_does_not_flip_a_latin_transcript() {
+        assert!(!uses_expensive_script(
+            "The word नमस्ते came up but the rest of this meeting is in English \
+             and should stay on the careful decoder throughout"
+        ));
+    }
+
+    /// Too little evidence is not evidence.
+    #[test]
+    fn a_very_short_segment_never_decides() {
+        assert!(!uses_expensive_script("हाँ"));
+        assert!(!uses_expensive_script(""));
+        assert!(!uses_expensive_script("   ...   "));
+    }
+
+    /// The cheap profile drops the beam and the fallback together, and keeps
+    /// the threshold that makes greedy decoding safe.
+    #[test]
+    fn the_expensive_script_profile_drops_the_beam_and_the_fallback() {
+        let careful = WhisperDecodingConfig::baseline().with_preset(SttPreset::Balanced);
+        assert!(matches!(
+            careful.strategy,
+            SttSamplingStrategy::BeamSearch { .. }
+        ));
+        assert!(careful.temperature_inc > 0.0);
+
+        let cheap = careful.for_expensive_script();
+        assert!(matches!(
+            cheap.strategy,
+            SttSamplingStrategy::Greedy { best_of: 1 }
+        ));
+        assert_eq!(cheap.temperature_inc, 0.0);
+        // The no-speech threshold moves with the beam rather than being left
+        // where a beam search put it — keeping low-confidence segments is only
+        // safe while something is choosing among candidates.
+        assert_eq!(cheap.no_speech_thold, SttPreset::Fast.no_speech_thold());
+    }
+
+    /// Everything the careful profile carried that is not about decode cost
+    /// survives the switch.
+    #[test]
+    fn the_expensive_script_profile_keeps_everything_unrelated_to_cost() {
+        let mut careful = WhisperDecodingConfig::baseline().with_preset(SttPreset::Balanced);
+        careful.initial_prompt = Some("Vox, Ollama, Parakeet".to_string());
+        careful.trim_audio_context = true;
+        careful.n_threads = Some(6);
+
+        let cheap = careful.for_expensive_script();
+        assert_eq!(cheap.initial_prompt, careful.initial_prompt);
+        assert!(cheap.trim_audio_context, "the encoder clamp still applies");
+        assert_eq!(cheap.n_threads, careful.n_threads);
+    }
 
     /// The property the last truncation bug violated, checked across the whole
     /// range a segmenter can produce: the clamp must always cover at least as

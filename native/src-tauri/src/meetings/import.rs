@@ -96,6 +96,10 @@ pub struct BatchConfig {
     pub model_path: String,
     pub language: SttLanguageConfig,
     pub decoding: WhisperDecodingConfig,
+    /// Used from the first segment that comes back in a script whisper writes
+    /// expensively. An imported recording pays the same tokenizer cost a live
+    /// meeting does, so it gets the same escape.
+    pub decoding_expensive_script: WhisperDecodingConfig,
     pub glossary: Vec<String>,
 }
 
@@ -317,6 +321,9 @@ fn run_batch(
     let mut segmenter = Segmenter::new();
     let mut sequence: u64 = 0;
     let mut kept = 0usize;
+    // Shared rather than a local `bool` because the decode happens inside the
+    // streaming sink's closure as well as in the flush that follows it.
+    let expensive_script = AtomicBool::new(false);
     let mut total_seconds: Option<f64> = None;
     let mut last_emit = std::time::Instant::now();
 
@@ -333,7 +340,7 @@ fn run_batch(
             }
             for segment in segmenter.push(chunk, &[], &[]) {
                 if let Some(transcript) =
-                    decode_one(engine, config, &segment, sequence)
+                    decode_one(engine, config, &segment, sequence, &expensive_script)
                 {
                     store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
                     kept += 1;
@@ -366,7 +373,7 @@ fn run_batch(
         if cancel.load(Ordering::SeqCst) {
             return Err(ImportError::Cancelled);
         }
-        if let Some(transcript) = decode_one(engine, config, &segment, sequence) {
+        if let Some(transcript) = decode_one(engine, config, &segment, sequence, &expensive_script) {
             store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
             kept += 1;
         }
@@ -403,14 +410,20 @@ fn decode_one(
     config: &BatchConfig,
     segment: &super::segmenter::SpeechSegment,
     sequence: u64,
+    expensive_script: &AtomicBool,
 ) -> Option<TranscriptSegment> {
     let profile = speech_health::profile_speech(&segment.samples, SEGMENT_SAMPLE_RATE);
+    let decoding = if expensive_script.load(Ordering::SeqCst) {
+        &config.decoding_expensive_script
+    } else {
+        &config.decoding
+    };
     let (utterances, _) = engine
         .transcribe_utterances_with_config(
             Some(&config.model_path),
             &segment.samples,
             &config.language,
-            &config.decoding,
+            decoding,
         )
         .map_err(|err| {
             tracing::warn!("imported segment {} failed to decode: {}", sequence, err);
@@ -421,6 +434,18 @@ fn decode_one(
     let text = join_utterance_text(&utterances);
     if text.trim().is_empty() {
         return None;
+    }
+    // Same one-way switch the live worker makes, for the same reason: what was
+    // just written decides how the rest of the file is decoded.
+    if !expensive_script.load(Ordering::SeqCst)
+        && crate::capture::stt::uses_expensive_script(&text)
+    {
+        tracing::info!(
+            "imported segment {} is in a script whisper decodes expensively; \
+             dropping to the faster profile for the rest of the file",
+            sequence
+        );
+        expensive_script.store(true, Ordering::SeqCst);
     }
     let mean_no_speech_prob = if utterances.is_empty() {
         1.0
@@ -775,6 +800,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
+            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
             },
             Arc::new(AtomicBool::new(false)),
@@ -801,6 +827,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
+            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
             },
             Arc::new(AtomicBool::new(false)),
@@ -829,6 +856,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
+            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
             },
             Arc::new(AtomicBool::new(false)),
@@ -857,6 +885,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
+            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
             },
             Arc::new(AtomicBool::new(false)),
