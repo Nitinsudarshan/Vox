@@ -641,6 +641,11 @@ fn stop_dictation_session(
                 (cleaned, expanded)
             };
             let final_text = if !expanded_text.trim().is_empty() { expanded_text } else { cleaned };
+            let final_text = {
+                let s = state.settings.lock_or_recover();
+                let script = crate::capture::romanize::OutputScript::from_setting(&s.language.output_script);
+                crate::capture::romanize::project(&final_text, script).into_owned()
+            };
             let t_snippet_complete = std::time::Instant::now();
 
             let (auto_paste, copy_to_clipboard, injection_method) = {

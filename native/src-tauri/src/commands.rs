@@ -638,6 +638,10 @@ async fn process_captured_audio(
     // Expand snippets if trigger words were dictated
     let expanded = settings.expand_snippets(&transcript);
     let transcript = if !expanded.trim().is_empty() { expanded } else { transcript };
+    let transcript = {
+        let script = crate::capture::romanize::OutputScript::from_setting(&settings.language.output_script);
+        crate::capture::romanize::project(&transcript, script).into_owned()
+    };
 
     // Every successful, non-empty transcript becomes a Voice Note — this
     // must not depend on which mode-specific pipeline runs next, or on
