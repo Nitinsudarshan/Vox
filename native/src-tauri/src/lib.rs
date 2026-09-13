@@ -271,8 +271,17 @@ pub fn run() {
             
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &record_i, &quit_i])?;
             
-            let _tray = tauri::tray::TrayIconBuilder::new()
-                .menu(&menu)
+            if let Some(window) = app.get_webview_window("main") {
+                if let Some(icon) = app.default_window_icon() {
+                    let _ = window.set_icon(icon.clone());
+                }
+            }
+
+            let mut tray_builder = tauri::tray::TrayIconBuilder::new().menu(&menu);
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            let _tray = tray_builder
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         app.exit(0);
