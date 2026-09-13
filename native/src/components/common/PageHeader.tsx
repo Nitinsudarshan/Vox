@@ -19,6 +19,7 @@ export interface PageHeaderProps {
   glowColor?: 'emerald' | 'primary' | 'purple' | 'amber' | 'none';
   children?: React.ReactNode;
   className?: string;
+  compact?: boolean;
 }
 
 export const PageHeader: React.FC<PageHeaderProps> = ({
@@ -31,29 +32,30 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   glowColor = 'none',
   children,
   className,
+  compact = false,
 }) => {
   if (variant === 'minimal') {
     return (
-      <div className={cn("space-y-1 mb-5 shrink-0", className)}>
+      <div className={cn("space-y-1 mb-3.5 shrink-0", className)}>
         {kicker && (
-          <p className="font-mono text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">
+          <p className="font-mono text-[9px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">
             {kicker}
           </p>
         )}
         {badge && (
-          <div className="flex items-center gap-2 mb-1.5">
+          <div className="flex items-center gap-2 mb-1">
             <Badge
               variant={badge.variant || 'outline'}
-              className="text-[10px] font-mono uppercase tracking-wider gap-1.5 py-0.5 px-2"
+              className="text-[9px] font-mono uppercase tracking-wider gap-1.5 py-0.5 px-2"
             >
-              {badge.icon && <badge.icon className="w-3 h-3" />}
+              {badge.icon && <badge.icon className="w-2.5 h-2.5" />}
               <span>{badge.label}</span>
             </Badge>
           </div>
         )}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div>
-            <h1 className="text-xl md:text-2xl font-extrabold tracking-tight text-foreground">
+            <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-foreground">
               {title}
               {highlightText && (
                 <>
@@ -63,7 +65,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
               )}
             </h1>
             {description && (
-              <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed mt-1">
+              <p className="text-[11px] text-muted-foreground max-w-xl leading-snug mt-0.5">
                 {description}
               </p>
             )}
@@ -85,23 +87,30 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   return (
     <div
       className={cn(
-        "relative rounded-lg border border-border bg-gradient-to-br from-card via-card/95 to-card/90 p-5 md:p-6 shadow-xs overflow-hidden mb-5 shrink-0",
+        "relative rounded-lg border border-border bg-gradient-to-br from-card via-card/95 to-card/90 shadow-xs overflow-hidden shrink-0",
+        compact ? "py-3 px-4 md:py-3.5 md:px-5 mb-3" : "py-3.5 px-4 md:py-4 md:px-5 mb-3.5",
         className
       )}
     >
       {glowColor !== 'none' && (
         <div
           className={cn(
-            "absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none",
+            "absolute -right-8 -top-8 rounded-full pointer-events-none",
+            compact ? "w-28 h-28 blur-2xl" : "w-36 h-36 blur-3xl",
             glowClass
           )}
         />
       )}
 
-      <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="space-y-1.5">
+      <div
+        className={cn(
+          "relative z-10 flex flex-col md:flex-row md:items-center justify-between",
+          compact ? "gap-3" : "gap-4"
+        )}
+      >
+        <div className={compact ? "space-y-1 min-w-0" : "space-y-1.5 min-w-0"}>
           {kicker && (
-            <p className="font-mono text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
+            <p className="font-mono text-[9px] font-semibold text-muted-foreground uppercase tracking-widest">
               {kicker}
             </p>
           )}
@@ -110,15 +119,25 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
             <div className="flex items-center gap-2">
               <Badge
                 variant={badge.variant || 'outline'}
-                className="text-[10px] font-mono uppercase tracking-wider gap-1.5 py-0.5 px-2"
+                className={cn(
+                  "font-mono uppercase tracking-wider",
+                  compact
+                    ? "text-[9px] gap-1 py-0.5 px-1.5"
+                    : "text-[10px] gap-1.5 py-0.5 px-2"
+                )}
               >
-                {badge.icon && <badge.icon className="w-3 h-3" />}
+                {badge.icon && <badge.icon className={compact ? "w-2.5 h-2.5" : "w-3 h-3"} />}
                 <span>{badge.label}</span>
               </Badge>
             </div>
           )}
 
-          <h1 className="text-xl md:text-2xl font-extrabold tracking-tight text-foreground">
+          <h1
+            className={cn(
+              "font-extrabold tracking-tight text-foreground",
+              compact ? "text-lg md:text-xl" : "text-xl md:text-2xl"
+            )}
+          >
             {title}
             {highlightText && (
               <>
@@ -129,7 +148,14 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           </h1>
 
           {description && (
-            <div className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
+            <div
+              className={cn(
+                "text-muted-foreground",
+                compact
+                  ? "text-[11px] max-w-xl leading-snug"
+                  : "text-xs max-w-2xl leading-relaxed"
+              )}
+            >
               {description}
             </div>
           )}

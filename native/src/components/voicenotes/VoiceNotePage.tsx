@@ -5,6 +5,7 @@ import { HardDrive, Mic, ShieldCheck, Edit3, Trash2, GitMerge, Copy, Check, X, S
 import { Badge } from '@/components/ui/badge';
 import { findSelection, looksLikeVocabulary, type PhraseSelection } from './selection';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '../common/PageHeader';
 import { EmptyState } from '../common/EmptyState';
 import { AppSettings, CorrectionRecord, VaultLocationInfo, VaultNote } from '../../types';
 
@@ -558,28 +559,42 @@ export const VoiceNotePage: React.FC = () => {
   }
 
   return (
-    <div className="flex-1 flex flex-col gap-4 min-h-0 overflow-hidden">
-      {/* Top Stats Overview */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 shrink-0">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-            Total Voice Notes
-          </p>
-          <p className="text-2xl font-extrabold text-foreground">{stats.total}</p>
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      {/* Hero Banner with Compact Stats */}
+      <PageHeader
+        title="Voice"
+        highlightText="Notes"
+        description="Everything you dictate, captured in one truthful history."
+        glowColor="emerald"
+        compact
+      >
+        <div className="flex items-center divide-x divide-border/60 bg-background/60 backdrop-blur-xs border border-border/80 rounded-lg py-1 px-1 shadow-2xs">
+          <div className="px-3 py-0.5 text-center">
+            <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+              Notes
+            </p>
+            <p className="text-sm font-extrabold text-foreground font-mono">
+              {stats.total}
+            </p>
+          </div>
+          <div className="px-3 py-0.5 text-center">
+            <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+              Words
+            </p>
+            <p className="text-sm font-extrabold text-foreground font-mono">
+              {stats.totalWords.toLocaleString()}
+            </p>
+          </div>
+          <div className="px-3 py-0.5 text-center">
+            <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+              Today
+            </p>
+            <p className="text-sm font-extrabold text-foreground font-mono">
+              {stats.notesToday}
+            </p>
+          </div>
         </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-            Total Words
-          </p>
-          <p className="text-2xl font-extrabold text-foreground">{stats.totalWords.toLocaleString()}</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-            Notes Today
-          </p>
-          <p className="text-2xl font-extrabold text-foreground">{stats.notesToday}</p>
-        </div>
-      </div>
+      </PageHeader>
 
       {/* Error Alert Banner */}
       {error && (

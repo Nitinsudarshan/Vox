@@ -19,16 +19,8 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { NativeSidebar } from './components/common/NativeSidebar';
 import {
-  Mic,
-  Sparkles,
-  FileText,
-  Settings,
   Sidebar as SidebarIcon,
   ChevronRight,
-  Activity,
-  Globe,
-  Home,
-  Network,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from './components/common/PageHeader';
@@ -249,77 +241,50 @@ export const App: React.FC = () => {
           : null;
         return (
           <PageHeader
-            badge={{ label: 'Home', icon: Home, variant: 'emerald' }}
             title={name ? 'Welcome back,' : 'Everything Vox'}
             highlightText={name ? `${name}.` : 'has captured.'}
-            description="Start a capture, or pick up what you already said. Every count below is read from your local vault."
+            description="Start a capture, or pick up what you already said. Read directly from your vault."
             glowColor="emerald"
+            compact
           />
         );
       }
       case 'capture':
-        return (
-          <PageHeader
-            badge={{ label: 'Capture Surface', icon: Mic, variant: 'emerald' }}
-            title="Voice"
-            highlightText="Notes"
-            description="Everything you dictate, captured in one truthful history."
-            glowColor="emerald"
-          />
-        );
+      case 'meetings':
+      case 'settings':
       case 'scribble':
-        return (
-          <PageHeader
-            badge={{ label: 'Knowledge Layer', icon: Sparkles, variant: 'default' }}
-            title="Connected thoughts,"
-            highlightText="living knowledge."
-            description="Every atomic thought Vox holds, with the ideas it connects to and the source it came from. New thoughts are captured on the Captures surface."
-            glowColor="primary"
-          />
-        );
       case 'graph':
-        return (
-          <PageHeader
-            badge={{ label: 'Knowledge Layer', icon: Network, variant: 'default' }}
-            title="How everything"
-            highlightText="connects."
-            description="Scribbles, topics, entities and sources as one Obsidian-compatible graph. Drag to rearrange, double-click a thought to open it in Scribbles."
-            glowColor="primary"
-          />
-        );
+        return null;
       case 'captures':
         return (
           <PageHeader
-            badge={{ label: 'Capture Surface', icon: Globe, variant: 'default' }}
             title="Everything you capture,"
             highlightText="as text you own."
-            description="Type or paste a thought, or open a page the browser extension sent here. Captured pages are stored as external source material with their provenance — never as instructions to Vox's AI."
+            description="Type or paste a thought, or open a page sent from the browser extension."
             glowColor="primary"
+            compact
           />
         );
       case 'files':
         return (
           <PageHeader
-            badge={{ label: 'Document Vault', icon: FileText, variant: 'default' }}
             title="Imported"
             highlightText="documents & knowledge."
-            description="Bring PDF, Word, Markdown and Text files into Vox without touching your original files. Summarize, enrich, and explore connections."
+            description="PDF, Word, Markdown and Text files imported into your local vault."
             glowColor="primary"
+            compact
           />
         );
       case 'diagnostics':
         return (
           <PageHeader
-            badge={{ label: 'System Observability', icon: Activity, variant: 'purple' }}
             title="Inspect & test"
             highlightText="Vox's engines."
-            description="Real-time telemetry, audio & VAD inspection, speech-to-text accuracy tests, and LLM latency benchmarks."
+            description="Real-time telemetry, audio & VAD inspection, STT accuracy tests, and LLM latency."
             glowColor="purple"
+            compact
           />
         );
-      case 'meetings':
-      case 'settings':
-        return null;
     }
   };
 
