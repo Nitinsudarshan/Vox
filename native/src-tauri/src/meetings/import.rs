@@ -444,14 +444,23 @@ fn decode_one(
     }
 
     let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &config.glossary);
+    let (text, original_text, romanized_text) = if crate::capture::romanize::contains_devanagari(&normalized.text) {
+        let romanized = crate::capture::romanize::to_latin(&normalized.text);
+        (normalized.text.clone(), Some(normalized.text), Some(romanized))
+    } else {
+        (normalized.text, None, None)
+    };
     Some(TranscriptSegment {
         sequence,
-        text: normalized.text,
+        text,
         start_seconds: segment.start_seconds,
         end_seconds: segment.end_seconds,
         channel: segment.channel,
         no_speech_prob: mean_no_speech_prob,
         recorded_at: chrono::Utc::now().to_rfc3339(),
+        original_text,
+        romanized_text,
+        translated_text: None,
     })
 }
 

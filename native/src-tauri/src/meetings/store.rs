@@ -536,6 +536,9 @@ mod tests {
             channel: SegmentChannel::Mixed,
             no_speech_prob: 0.01,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            original_text: None,
+            romanized_text: None,
+            translated_text: None,
         }
     }
 

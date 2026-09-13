@@ -277,12 +277,113 @@ pub fn get_meeting(
         .summary_service
         .reconcile_orphaned(&meeting_id)
         .map_err(CommandError::from)?;
+    let mut segments = store.load_transcript(&meeting_id)?;
+    for seg in &mut segments {
+        if crate::capture::romanize::contains_devanagari(&seg.text) {
+            if seg.original_text.is_none() {
+                seg.original_text = Some(seg.text.clone());
+            }
+            if seg.romanized_text.is_none() {
+                seg.romanized_text = Some(crate::capture::romanize::to_latin(&seg.text));
+            }
+        }
+    }
     Ok(MeetingDetail {
         meeting: store.load_meeting(&meeting_id)?,
-        segments: store.load_transcript(&meeting_id)?,
+        segments,
         summary,
         notes: store.load_notes(&meeting_id)?,
     })
+}
+
+#[tauri::command]
+pub async fn translate_meeting_transcript(
+    app: AppHandle,
+    meeting_id: String,
+    target_language: Option<String>,
+) -> Result<Vec<TranscriptSegment>, CommandError> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let mut segments = state.meeting_store.load_transcript(&meeting_id)?;
+        if segments.is_empty() {
+            return Err(CommandError::new(
+                "MEETING_EMPTY_TRANSCRIPT",
+                "This meeting has no transcript to translate.",
+            ));
+        }
+
+        let provider = state.settings.lock_or_recover().provider.clone();
+        let client = crate::providers::LLMClient::new(provider);
+
+        let lang_name = target_language
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("English");
+
+        let items: Vec<serde_json::Value> = segments
+            .iter()
+            .map(|s| {
+                let text_to_translate = s.original_text.as_deref().unwrap_or(&s.text);
+                serde_json::json!({
+                    "sequence": s.sequence,
+                    "text": text_to_translate
+                })
+            })
+            .collect();
+
+        let system = format!(
+            "You are a professional translator. Translate each transcript segment faithfully into natural {lang_name}.\n\
+             Return ONLY a JSON array of objects, with each object having:\n\
+             {{\"sequence\": <number>, \"translated_text\": \"<translated text>\"}}\n\
+             Preserve the sequence numbers exactly. Do not output anything else."
+        );
+        let user = serde_json::to_string_pretty(&items).unwrap_or_default();
+
+        let rt = tokio::runtime::Handle::current();
+        let options = crate::providers::CompletionOptions {
+            temperature: 0.2,
+            max_output_tokens: 4096,
+            context_tokens: client.context_tokens(),
+            ..Default::default()
+        };
+
+        let response = rt.block_on(async {
+            client.complete_verified(&user, Some(&system), options).await
+        }).map_err(|e| CommandError::new("MEETING_TRANSLATION_FAILED", &e.to_string()))?;
+
+        let json_str = crate::meetings::summary::processor::clean_markdown(&response.text);
+        let start = json_str.find('[');
+        let end = json_str.rfind(']');
+        if let (Some(s), Some(e)) = (start, end) {
+            if s <= e {
+                if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str[s..=e]) {
+                    for obj in parsed {
+                        if let (Some(seq), Some(trans)) = (
+                            obj.get("sequence").and_then(|v| v.as_u64()),
+                            obj.get("translated_text").and_then(|v| v.as_str()),
+                        ) {
+                            if let Some(seg) = segments.iter_mut().find(|s| s.sequence == seq) {
+                                if seg.original_text.is_none() && crate::capture::romanize::contains_devanagari(&seg.text) {
+                                    seg.original_text = Some(seg.text.clone());
+                                }
+                                if seg.romanized_text.is_none() && crate::capture::romanize::contains_devanagari(&seg.text) {
+                                    seg.romanized_text = Some(crate::capture::romanize::to_latin(&seg.text));
+                                }
+                                seg.translated_text = Some(trans.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        state.meeting_store.save_transcript(&meeting_id, &segments)?;
+        Ok(segments)
+    })
+    .await
+    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
 }
 
 #[tauri::command]

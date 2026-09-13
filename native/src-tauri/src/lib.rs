@@ -489,6 +489,7 @@ pub fn run() {
             meetings::commands::pick_meeting_audio_file,
             meetings::commands::import_meeting_audio,
             meetings::commands::retranscribe_meeting,
+            meetings::commands::translate_meeting_transcript,
             meetings::commands::cancel_meeting_import,
         ])
         .run(tauri::generate_context!())

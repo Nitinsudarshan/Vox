@@ -95,6 +95,12 @@ pub struct TranscriptSegment {
     /// to users as if it were a confidence score.
     pub no_speech_prob: f32,
     pub recorded_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub romanized_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translated_text: Option<String>,
 }
 
 impl TranscriptSegment {
@@ -301,6 +307,9 @@ mod tests {
             channel: SegmentChannel::Mixed,
             no_speech_prob: 0.0,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            original_text: None,
+            romanized_text: None,
+            translated_text: None,
         };
         assert_eq!(segment.duration_seconds(), 0.0);
     }
