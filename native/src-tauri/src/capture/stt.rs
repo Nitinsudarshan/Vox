@@ -1077,6 +1077,20 @@ pub struct SttSessionDiagnostics {
     pub segment_count: usize,
     pub is_empty: bool,
     pub transcript_char_count: usize,
+    /// How long this call waited for the engine's model lock before it could
+    /// begin. Non-zero means another surface — a meeting worker, a dictation —
+    /// was mid-decode and this one queued behind it.
+    #[serde(default)]
+    pub lock_wait_ms: u128,
+    /// Time spent getting the model into memory. Zero when it was already
+    /// resident, which is the normal case.
+    #[serde(default)]
+    pub model_load_ms: u128,
+    /// Whether a *different* model had to be evicted to run this call. True
+    /// here is the model-thrash signal: meetings and dictation are fighting
+    /// over the engine's single model slot.
+    #[serde(default)]
+    pub model_reloaded: bool,
 }
 
 /// Local, zero-cost speech-to-text via whisper.cpp (through whisper-rs) or NVIDIA Parakeet TDT.
@@ -1170,6 +1184,9 @@ impl SttEngine {
                 segment_count: result.tokens.len(),
                 is_empty: result.text.trim().is_empty(),
                 transcript_char_count: result.text.chars().count(),
+                lock_wait_ms: 0,
+                model_load_ms: 0,
+                model_reloaded: false,
             };
 
             Ok((result.text, diag))
@@ -1255,6 +1272,9 @@ impl SttEngine {
                     segment_count: 0,
                     is_empty: true,
                     transcript_char_count: 0,
+                    lock_wait_ms: 0,
+                    model_load_ms: 0,
+                    model_reloaded: false,
                 };
                 return Ok((Vec::new(), diag));
             }
@@ -1262,14 +1282,27 @@ impl SttEngine {
             // TEMP: whisper internal latency diagnostics
             let t_whisper_start = std::time::Instant::now();
 
+            // Timed separately from the decode because they fail for
+            // different reasons and are fixed in different places: a long
+            // `lock_wait_ms` means contention with another surface, a non-zero
+            // `model_load_ms` means the single model slot was evicted. Rolling
+            // either into the decode number hides both.
+            let t_lock_start = std::time::Instant::now();
             let mut guard = self.loaded.lock_or_recover();
+            let lock_wait_ms = t_lock_start.elapsed().as_millis();
+
             let needs_reload = match guard.as_ref() {
                 Some((loaded_path, _)) => loaded_path != model_path,
                 None => true,
             };
+            // A first load is not thrash; evicting a *different* model is.
+            let evicted_other_model =
+                matches!(guard.as_ref(), Some((loaded_path, _)) if loaded_path != model_path);
 
+            let mut model_load_ms = 0u128;
             if needs_reload {
                 tracing::info!("Loading Whisper model from {}", model_path);
+                let t_load_start = std::time::Instant::now();
                 let ctx =
                     WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
                         .map_err(|e| SttError::ModelLoadFailed {
@@ -1277,6 +1310,7 @@ impl SttEngine {
                             message: e.to_string(),
                         })?;
                 *guard = Some((model_path.to_string(), ctx));
+                model_load_ms = t_load_start.elapsed().as_millis();
             }
 
             let (_, ctx) = guard
@@ -1363,6 +1397,9 @@ impl SttEngine {
                 segment_count,
                 is_empty: trimmed_text.is_empty(),
                 transcript_char_count: trimmed_text.chars().count(),
+                lock_wait_ms,
+                model_load_ms,
+                model_reloaded: evicted_other_model,
             };
 
             // TEMP: whisper internal latency diagnostics (timing summary)
