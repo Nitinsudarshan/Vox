@@ -141,7 +141,7 @@ fn spawn_background_pull(host: &str, model: &str) {
     });
 }
 
-async fn model_is_present(host: &str, model: &str) -> bool {
+pub async fn model_is_present(host: &str, model: &str) -> bool {
     let Ok(res) = reqwest::Client::new()
         .get(format!("{}/api/tags", host))
         .timeout(Duration::from_secs(5))
@@ -153,12 +153,20 @@ async fn model_is_present(host: &str, model: &str) -> bool {
     let Ok(json) = res.json::<serde_json::Value>().await else {
         return false;
     };
+    let bare_model = model.trim_end_matches(":latest");
+    let tagged_model = if model.contains(':') {
+        model.to_string()
+    } else {
+        format!("{}:latest", model)
+    };
     json["models"]
         .as_array()
         .map(|models| {
-            models
-                .iter()
-                .any(|m| m["name"].as_str() == Some(model))
+            models.iter().any(|m| {
+                let name = m["name"].as_str().unwrap_or("");
+                let bare_name = name.trim_end_matches(":latest");
+                name == model || name == tagged_model || bare_name == bare_model
+            })
         })
         .unwrap_or(false)
 }

@@ -343,6 +343,19 @@ impl MeetingStore {
     pub fn recover_interrupted(&self) -> Result<Vec<String>, MeetingStoreError> {
         let mut recovered = Vec::new();
         for meeting in self.list_meetings()? {
+            if let Ok(Some(mut summary)) = self.load_summary(&meeting.id) {
+                if summary.is_running() {
+                    summary.status = SummaryStatus::Failed;
+                    summary.error = Some(
+                        "Generation was interrupted when Vox closed or restarted."
+                            .to_string(),
+                    );
+                    summary.markdown = summary.previous_markdown.take().or(summary.markdown);
+                    summary.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                    let _ = self.save_summary(&summary);
+                }
+            }
+
             if !meeting.state.is_interrupted() {
                 continue;
             }

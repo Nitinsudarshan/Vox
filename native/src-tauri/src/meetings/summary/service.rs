@@ -155,13 +155,47 @@ impl SummaryService {
     /// its next await point, restores the previous report, and marks the
     /// record `Cancelled`.
     pub fn cancel(&self, meeting_id: &str) -> bool {
-        match self.running.lock_or_recover().get(meeting_id) {
-            Some(flag) => {
-                flag.store(true, Ordering::SeqCst);
-                true
-            }
-            None => false,
+        if let Some(flag) = self.running.lock_or_recover().get(meeting_id) {
+            flag.store(true, Ordering::SeqCst);
+            return true;
         }
+
+        // If not active in memory, check if an orphaned pending/processing run is on disk.
+        if let Ok(Some(mut record)) = self.store.load_summary(meeting_id) {
+            if record.is_running() {
+                record.status = SummaryStatus::Cancelled;
+                record.markdown = record.previous_markdown.take().or(record.markdown);
+                record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                let _ = self.store.save_summary(&record);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Checks if a stored summary is marked as running on disk despite not being
+    /// active in memory (e.g. after a process crash or restart). If so, transitions
+    /// it to [`SummaryStatus::Failed`], restores any previous report, and writes it back.
+    pub fn reconcile_orphaned(
+        &self,
+        meeting_id: &str,
+    ) -> Result<Option<MeetingSummary>, MeetingStoreError> {
+        if let Some(mut record) = self.store.load_summary(meeting_id)? {
+            if record.is_running() && !self.is_running(meeting_id) {
+                record.status = SummaryStatus::Failed;
+                record.error = Some(
+                    "Generation was interrupted when Vox closed or restarted."
+                        .to_string(),
+                );
+                record.markdown = record.previous_markdown.take().or(record.markdown);
+                record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                self.store.save_summary(&record)?;
+                return Ok(Some(record));
+            }
+            return Ok(Some(record));
+        }
+        Ok(None)
     }
 
     /// Starts generating a report, returning as soon as the task is spawned.
@@ -231,18 +265,6 @@ impl SummaryService {
             system_audio_captured: meeting.system_audio_captured,
             user_instructions: options.user_instructions.clone(),
         };
-        // Before any work is queued against it. Without this, a machine with no
-        // Ollama installed spent three attempts and a minute of backoff on
-        // `http://localhost:11434` and then stored the transport error as the
-        // meeting's report status — every word true, and no help at all.
-        //
-        // Unconditional, including where the English report is already cached:
-        // the language pass still needs a provider, and the check costs one
-        // local ping or, for a cloud provider, nothing at all.
-        if let Err(reason) = crate::providers::check_ready(&provider).await {
-            return Err(SummaryError::ProviderUnavailable(reason.to_string()));
-        }
-
         let client = LLMClient::new(provider.clone());
         let fingerprint = fingerprint(&transcript, &template, &options, &provider, &client);
 
@@ -257,6 +279,27 @@ impl SummaryService {
         record.english_markdown = existing.as_ref().and_then(|s| s.english_markdown.clone());
         self.store.save_summary(&record)?;
         emit(&app, meeting_id, SummaryStatus::Processing, "Starting", Some(0.0));
+
+        // Before any work is queued against it. Without this, a machine with no
+        // Ollama installed spent three attempts and a minute of backoff on
+        // `http://localhost:11434` and then stored the transport error as the
+        // meeting's report status — every word true, and no help at all.
+        //
+        // Unconditional, including where the English report is already cached:
+        // the language pass still needs a provider, and the check costs one
+        // local ping or, for a cloud provider, nothing at all.
+        if let Err(reason) = crate::providers::check_ready(&provider).await {
+            let err = SummaryError::ProviderUnavailable(reason.to_string());
+            record.status = SummaryStatus::Failed;
+            record.markdown = previous_markdown;
+            record.previous_markdown = None;
+            record.error = Some(err.to_string());
+            record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            record.processing_ms = started.elapsed().as_millis() as u64;
+            let _ = self.store.save_summary(&record);
+            emit(&app, meeting_id, SummaryStatus::Failed, "Failed", None);
+            return Err(err);
+        }
 
         let cached_english = existing
             .as_ref()
@@ -769,4 +812,64 @@ mod tests {
         cancel.store(true, Ordering::SeqCst);
         assert!(matches!(check_cancelled(&cancel), Err(SummaryError::Cancelled)));
     }
+
+    #[test]
+    fn cancelling_an_orphaned_running_summary_marks_it_cancelled() {
+        let dir = std::env::temp_dir().join(format!(
+            "vox-summary-cancel-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(MeetingStore::new(&dir));
+        let meeting = crate::meetings::Meeting::new(
+            "meeting-orphan".into(),
+            "Orphan".into(),
+            crate::meetings::MeetingSource::Recorded,
+        );
+        store.create(&meeting).unwrap();
+
+        let mut summary = MeetingSummary::pending("meeting-orphan", "general");
+        summary.status = SummaryStatus::Processing;
+        summary.previous_markdown = Some("Old report".into());
+        store.save_summary(&summary).unwrap();
+
+        let service = SummaryService::new(Arc::clone(&store));
+        assert!(!service.is_running("meeting-orphan"));
+        assert!(service.cancel("meeting-orphan"));
+
+        let loaded = store.load_summary("meeting-orphan").unwrap().unwrap();
+        assert_eq!(loaded.status, SummaryStatus::Cancelled);
+        assert_eq!(loaded.markdown.as_deref(), Some("Old report"));
+    }
+
+    #[test]
+    fn reconciling_an_orphaned_summary_transitions_to_failed() {
+        let dir = std::env::temp_dir().join(format!(
+            "vox-summary-reconcile-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(MeetingStore::new(&dir));
+        let meeting = crate::meetings::Meeting::new(
+            "meeting-reconcile".into(),
+            "Reconcile".into(),
+            crate::meetings::MeetingSource::Recorded,
+        );
+        store.create(&meeting).unwrap();
+
+        let mut summary = MeetingSummary::pending("meeting-reconcile", "general");
+        summary.status = SummaryStatus::Processing;
+        store.save_summary(&summary).unwrap();
+
+        let service = SummaryService::new(Arc::clone(&store));
+        let reconciled = service.reconcile_orphaned("meeting-reconcile").unwrap().unwrap();
+        assert_eq!(reconciled.status, SummaryStatus::Failed);
+        assert!(reconciled.error.is_some());
+
+        let loaded = store.load_summary("meeting-reconcile").unwrap().unwrap();
+        assert_eq!(loaded.status, SummaryStatus::Failed);
+    }
 }
+

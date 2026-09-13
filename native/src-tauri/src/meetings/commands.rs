@@ -273,10 +273,14 @@ pub fn get_meeting(
     meeting_id: String,
 ) -> Result<MeetingDetail, CommandError> {
     let store = &state.meeting_store;
+    let summary = state
+        .summary_service
+        .reconcile_orphaned(&meeting_id)
+        .map_err(CommandError::from)?;
     Ok(MeetingDetail {
         meeting: store.load_meeting(&meeting_id)?,
         segments: store.load_transcript(&meeting_id)?,
-        summary: store.load_summary(&meeting_id)?,
+        summary,
         notes: store.load_notes(&meeting_id)?,
     })
 }
@@ -437,7 +441,10 @@ pub fn get_meeting_summary(
     state: State<'_, AppState>,
     meeting_id: String,
 ) -> Result<Option<MeetingSummary>, CommandError> {
-    state.meeting_store.load_summary(&meeting_id).map_err(CommandError::from)
+    state
+        .summary_service
+        .reconcile_orphaned(&meeting_id)
+        .map_err(CommandError::from)
 }
 
 /// Saves the user's own edits to a report.

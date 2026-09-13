@@ -3,7 +3,7 @@ mod ollama_manager;
 pub mod ollama_install;
 
 pub use ollama_manager::{
-    ensure_ollama_ready, set_managed_binary, list_installed_models, test_ollama_prompt, OllamaModelDetails,
+    ensure_ollama_ready, model_is_present, set_managed_binary, list_installed_models, test_ollama_prompt, OllamaModelDetails,
     OllamaPromptTestResult, OllamaStatus,
 };
 use serde::{Deserialize, Serialize};
@@ -124,6 +124,8 @@ pub enum ProviderUnavailable {
     OllamaNotInstalled,
     /// Configured against a host that did not answer.
     OllamaUnreachable { host: String },
+    /// Configured model is not installed in the local Ollama instance.
+    OllamaModelNotFound { model: String },
     /// A cloud provider with no key saved for it.
     NoApiKey { provider: &'static str },
     /// `custom_openai` selected with nothing in the endpoint field.
@@ -143,6 +145,11 @@ impl std::fmt::Display for ProviderUnavailable {
                 f,
                 "Nothing answered at {host}. Start Ollama, or point Vox at a different host \
                  under Settings › AI Models & STT."
+            ),
+            ProviderUnavailable::OllamaModelNotFound { model } => write!(
+                f,
+                "The Ollama model '{model}' is not installed locally. Run `ollama pull {model}` \
+                 in your terminal, or select an installed model under Settings › AI Models & STT."
             ),
             ProviderUnavailable::NoApiKey { provider } => write!(
                 f,
@@ -181,7 +188,14 @@ fn display_name(provider: &ProviderType) -> &'static str {
 pub async fn check_ready(config: &ProviderConfig) -> Result<(), ProviderUnavailable> {
     match config.active_provider {
         ProviderType::Ollama => match ensure_ollama_ready(&config.ollama_host, &config.ollama_model).await {
-            OllamaStatus::Running | OllamaStatus::Started => Ok(()),
+            OllamaStatus::Running | OllamaStatus::Started => {
+                if !model_is_present(&config.ollama_host, &config.ollama_model).await {
+                    return Err(ProviderUnavailable::OllamaModelNotFound {
+                        model: config.ollama_model.clone(),
+                    });
+                }
+                Ok(())
+            }
             OllamaStatus::NotInstalled => Err(ProviderUnavailable::OllamaNotInstalled),
             OllamaStatus::Unreachable { .. } => Err(ProviderUnavailable::OllamaUnreachable {
                 host: config.ollama_host.clone(),
@@ -511,6 +525,10 @@ impl LLMClient {
         }
     }
 
+    pub fn config(&self) -> &ProviderConfig {
+        &self.config
+    }
+
     /// Completes without masking a provider failure.
     ///
     /// [`complete`](Self::complete) substitutes canned filler when a provider is
@@ -798,9 +816,18 @@ impl LLMClient {
             })?;
 
         if !res.status().is_success() {
+            let status = res.status();
+            let msg = if status.as_u16() == 404 {
+                format!(
+                    "Model '{}' was not found in Ollama. Pull it with `ollama pull {}` or select an installed model in Settings.",
+                    self.config.ollama_model, self.config.ollama_model
+                )
+            } else {
+                format!("HTTP {}", status)
+            };
             return Err(ProviderError::OllamaUnavailable {
                 host: self.config.ollama_host.clone(),
-                message: format!("HTTP {}", res.status()),
+                message: msg,
             });
         }
 
