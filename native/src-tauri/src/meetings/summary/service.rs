@@ -42,7 +42,7 @@ use crate::sync::MutexExt;
 
 use super::super::model::{MeetingSummary, SummaryStatus};
 use super::super::store::{MeetingStore, MeetingStoreError};
-use super::super::transcription::render_transcript;
+use super::super::transcription::{render_transcript, render_transcript_prefer_translated};
 use super::processor::{self, LanguageAction, MeetingContext};
 use super::templates::{Template, TemplateLibrary, DEFAULT_TEMPLATE_ID};
 
@@ -250,7 +250,15 @@ impl SummaryService {
         let started = Instant::now();
         let meeting = self.store.load_meeting(meeting_id)?;
         let segments = self.store.load_transcript(meeting_id)?;
-        let transcript = render_transcript(&segments);
+        let prefer_english = match options.language.as_deref() {
+            Some(l) => l.trim().is_empty() || l.trim().eq_ignore_ascii_case("english") || l.trim().eq_ignore_ascii_case("en"),
+            None => true,
+        };
+        let transcript = if prefer_english {
+            render_transcript_prefer_translated(&segments)
+        } else {
+            render_transcript(&segments)
+        };
         let template = templates.get_or_default(Some(&options.template_id));
 
         // Back up before touching anything: from here on, every exit path

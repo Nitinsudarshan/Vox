@@ -777,10 +777,30 @@ fn emit_warning(app: &Option<AppHandle>, meeting_id: &str, kind: &str, message: 
 /// model has to guess who proposed something and who agreed to it, and it
 /// guesses wrong.
 pub fn render_transcript(segments: &[TranscriptSegment]) -> String {
+    render_transcript_internal(segments, false)
+}
+
+/// Renders a transcript preferring translated or romanized text over raw non-Latin text.
+///
+/// Useful when feeding the transcript into a summarizer generating an English report.
+pub fn render_transcript_prefer_translated(segments: &[TranscriptSegment]) -> String {
+    render_transcript_internal(segments, true)
+}
+
+fn render_transcript_internal(segments: &[TranscriptSegment], prefer_translated: bool) -> String {
     let mut out = String::new();
     let mut last_channel: Option<SegmentChannel> = None;
     for segment in segments {
-        let text = segment.text.trim();
+        let text_source = if prefer_translated {
+            segment
+                .translated_text
+                .as_deref()
+                .or(segment.romanized_text.as_deref())
+                .unwrap_or(&segment.text)
+        } else {
+            &segment.text
+        };
+        let text = text_source.trim();
         if text.is_empty() {
             continue;
         }

@@ -206,9 +206,9 @@ fn base_rules() -> &'static str {
 
 /// Instruction forcing English generation regardless of the meeting's language.
 const ENGLISH_BASE_INSTRUCTION: &str =
-    "Write the report in English, even when the meeting was conducted in another language. \
-     Quote distinctive phrases in their original language where the wording matters, with a \
-     short English gloss.";
+    "Write the report in English, strictly and completely, even when the meeting was conducted in another language. \
+     Translate all content faithfully into clear English. Do not mix languages or leave phrases untranslated in the \
+     meeting's original language or script. Every section, summary point, decision, and action item must be written entirely in English.";
 
 /// Wraps the transcript as untrusted external content.
 fn framed_transcript(transcript: &str, label: &str) -> String {
