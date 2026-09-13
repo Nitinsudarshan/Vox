@@ -163,7 +163,7 @@ struct ActiveMeeting {
     title: String,
     capture: DualCapture,
     queue: TranscriptionQueue,
-    worker: std::thread::JoinHandle<()>,
+    worker: std::thread::JoinHandle<transcription::TranscriptionStats>,
     pump: std::thread::JoinHandle<PumpResult>,
     cancel: Arc<AtomicBool>,
     warning: Option<String>,
@@ -406,6 +406,11 @@ impl MeetingEngine {
 
         // 3. Let the decoder finish its backlog, then close its channel and
         //    join it.
+        //
+        // Timed from here rather than from the start of `stop`: capture and
+        // pump shutdown above are bounded and quick, while this is the
+        // open-ended part the user sits through after pressing stop.
+        let t_drain_start = Instant::now();
         let drained = wait_for_drain(&active.queue, DRAIN_TIMEOUT);
         if !drained {
             let (queued, completed, _) = active.queue.counts();
@@ -419,8 +424,22 @@ impl MeetingEngine {
         }
         let (queued, completed, dropped) = active.queue.counts();
         drop(active.queue);
-        if active.worker.join().is_err() {
-            tracing::error!("meeting {}: the transcription worker panicked", id);
+        let stats = match active.worker.join() {
+            Ok(stats) => Some(stats),
+            Err(_) => {
+                tracing::error!("meeting {}: the transcription worker panicked", id);
+                None
+            }
+        };
+        let drain_seconds = t_drain_start.elapsed().as_secs_f64();
+
+        if let Some(stats) = stats {
+            transcription::print_meeting_summary(
+                &id,
+                &stats,
+                pump.duration_seconds as f64,
+                drain_seconds,
+            );
         }
 
         // 4. Write the finished record.

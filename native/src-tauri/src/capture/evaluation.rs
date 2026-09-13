@@ -1513,6 +1513,9 @@ pub mod tests {
             segment_count: 1,
             is_empty: false,
             transcript_char_count: 18,
+            lock_wait_ms: 0,
+            model_load_ms: 0,
+            model_reloaded: false,
         };
 
         let snapshot = build_diagnostic_snapshot(
