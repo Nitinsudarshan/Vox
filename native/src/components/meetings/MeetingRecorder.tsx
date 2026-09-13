@@ -40,7 +40,7 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
   busy,
   devices,
   onDevicesChange,
-  onStart,
+  onStart: _onStart,
   onPause,
   onResume,
   onStop,
@@ -71,23 +71,7 @@ export const MeetingRecorder: React.FC<MeetingRecorderProps> = ({
   const backlog = Math.max(0, status.segments_queued - status.segments_completed);
 
   if (!isRecording) {
-    return (
-      <Card className="p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <h2 className="text-sm font-semibold text-foreground">Record a meeting</h2>
-            <p className="text-xs text-muted-foreground mt-1">
-              Captures your microphone and this machine&apos;s audio together, transcribes on
-              device, and keeps both in your vault.
-            </p>
-          </div>
-          <Button onClick={onStart} disabled={busy} className="gap-2 shrink-0">
-            <Radio className="w-4 h-4" />
-            Start recording
-          </Button>
-        </div>
-      </Card>
-    );
+    return null;
   }
 
   return (

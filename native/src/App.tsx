@@ -317,6 +317,7 @@ export const App: React.FC = () => {
             glowColor="purple"
           />
         );
+      case 'meetings':
       case 'settings':
         return null;
     }
