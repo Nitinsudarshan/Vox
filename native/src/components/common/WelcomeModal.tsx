@@ -94,7 +94,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
         {/* Brand Header */}
         <div className="text-center space-y-2.5 relative z-10">
           <div className="flex justify-center mb-1">
-            <VoxLogo className="w-10 h-10" />
+            <VoxLogo expanded className="h-11 w-auto" />
           </div>
           <div className="space-y-1">
             <h2 className="text-2xl font-extrabold tracking-tight text-foreground">

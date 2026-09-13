@@ -197,16 +197,13 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                 title="Vox Home"
                 aria-label="Vox Home"
               >
-                <div className="flex aspect-square size-7 items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <VoxLogo className="w-7 h-7" />
-                </div>
-                <div className="grid flex-1 leading-tight min-w-0 ml-2">
-                  <span className="truncate font-bold tracking-wider text-xs text-sidebar-foreground group-hover:text-primary transition-colors">
-                    VOX
-                  </span>
-                  <span className="truncate text-[9px] text-muted-foreground font-mono uppercase tracking-wider">
-                    {activeWorkspace === 'cloud' ? 'Hybrid Cloud' : 'Local Vault'}
-                  </span>
+                <div className="flex items-center h-full gap-2 min-w-0 flex-1">
+                  <VoxLogo expanded className="h-6 w-auto shrink-0 group-hover:scale-105 transition-transform" />
+                  <div className="flex flex-col justify-center leading-none min-w-0 pl-1.5 border-l border-border/50">
+                    <span className="truncate text-[9px] text-muted-foreground font-mono uppercase tracking-wider">
+                      {activeWorkspace === 'cloud' ? 'Hybrid Cloud' : 'Local Vault'}
+                    </span>
+                  </div>
                 </div>
               </button>
 
