@@ -10,6 +10,7 @@ export type TranscriptViewMode = 'original' | 'romanized' | 'english';
 
 interface MeetingTranscriptProps {
   meetingId?: string;
+  meetingLanguage?: string | null;
   segments: TranscriptSegment[];
   /** Scrolls to the newest line as it arrives. On while recording. */
   follow?: boolean;
@@ -26,14 +27,23 @@ interface MeetingTranscriptProps {
   isTranslating?: boolean;
 }
 
-function hasScriptVariants(segments: TranscriptSegment[]): boolean {
-  return segments.some(
+function hasScriptVariants(segments: TranscriptSegment[], meetingLanguage?: string | null): boolean {
+  const lang = (meetingLanguage || '').trim().toLowerCase();
+  const isExplicitlyEnglish = lang === 'en' || lang === 'english';
+  const hasNonLatinCharacters = segments.some((s) => /[\u0900-\u097F]/.test(s.text));
+  const hasDistinctVariants = segments.some(
     (s) =>
-      Boolean(s.original_text) ||
-      Boolean(s.romanized_text) ||
-      Boolean(s.translated_text) ||
-      /[\u0900-\u097F]/.test(s.text),
+      Boolean(s.original_text && s.original_text !== s.text) ||
+      Boolean(s.romanized_text && s.romanized_text !== s.text) ||
+      Boolean(s.translated_text && s.translated_text !== s.text),
   );
+
+  // If the meeting is English and there are no non-Latin/variant texts, keep single view
+  if (isExplicitlyEnglish && !hasNonLatinCharacters && !hasDistinctVariants) {
+    return false;
+  }
+
+  return hasNonLatinCharacters || hasDistinctVariants || (lang !== '' && lang !== 'en' && lang !== 'auto');
 }
 
 function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode): string {
@@ -44,7 +54,16 @@ function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode
     return segment.romanized_text || segment.text;
   }
   if (mode === 'english') {
-    return segment.translated_text || segment.text;
+    if (segment.translated_text && segment.translated_text.trim()) {
+      return segment.translated_text;
+    }
+    // Never show Hindi Devanagari script when English mode is selected
+    if (/[\u0900-\u097F]/.test(segment.text)) {
+      return segment.romanized_text
+        ? `${segment.romanized_text} [Translation pending]`
+        : '[Translation pending — click Translate]';
+    }
+    return segment.text;
   }
   return segment.text;
 }
@@ -55,6 +74,7 @@ function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode
  */
 export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
   meetingId: _meetingId,
+  meetingLanguage,
   segments,
   follow = false,
   emptyMessage = 'Nothing has been transcribed yet.',
@@ -69,7 +89,7 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
   const endRef = React.useRef<HTMLDivElement>(null);
   const activeRef = React.useRef<HTMLDivElement>(null);
 
-  const showVariants = React.useMemo(() => hasScriptVariants(segments), [segments]);
+  const showVariants = React.useMemo(() => hasScriptVariants(segments, meetingLanguage), [segments, meetingLanguage]);
   const hasAnyEnglishTranslation = React.useMemo(
     () => segments.some((s) => Boolean(s.translated_text)),
     [segments],

@@ -319,6 +319,7 @@ export const MeetingDetail: React.FC<MeetingDetailProps> = ({
         {(pane === 'transcript' || pane === 'split') && (
           <MeetingTranscript
             meetingId={meeting.id}
+            meetingLanguage={meeting.language}
             segments={segments}
             follow={live}
             playheadSeconds={playhead}
