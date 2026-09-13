@@ -334,10 +334,11 @@ pub async fn translate_meeting_transcript(
             .collect();
 
         let system = format!(
-            "You are a professional translator. Translate each transcript segment faithfully into natural {lang_name}.\n\
-             Return ONLY a JSON array of objects, with each object having:\n\
-             {{\"sequence\": <number>, \"translated_text\": \"<translated text>\"}}\n\
-             Preserve the sequence numbers exactly. Do not output anything else."
+            "You are a professional multilingual translator and language specialist. For each transcript segment in the JSON array:\n\
+             1. 'translated_text': Faithful, clean, complete translation into natural {lang_name}. Translate all non-English words into English meaning. Never return untranslated non-English script in translated_text.\n\
+             2. 'romanized_text': If the original text is in a non-Latin script (such as Hindi/Devanagari), provide clear, conversational Romanized Latin script (Hinglish). If already Latin script, keep it as is.\n\
+             Return ONLY a JSON array of objects with keys: sequence, translated_text, romanized_text.\n\
+             Preserve the sequence numbers exactly. Do not output markdown or explanatory text."
         );
         let user = serde_json::to_string_pretty(&items).unwrap_or_default();
 
@@ -368,10 +369,16 @@ pub async fn translate_meeting_transcript(
                                 if seg.original_text.is_none() && crate::capture::romanize::contains_devanagari(&seg.text) {
                                     seg.original_text = Some(seg.text.clone());
                                 }
+                                if let Some(rom) = obj.get("romanized_text").and_then(|v| v.as_str()) {
+                                    let trimmed = rom.trim();
+                                    if !trimmed.is_empty() && !crate::capture::romanize::contains_devanagari(trimmed) {
+                                        seg.romanized_text = Some(trimmed.to_string());
+                                    }
+                                }
                                 if seg.romanized_text.is_none() && crate::capture::romanize::contains_devanagari(&seg.text) {
                                     seg.romanized_text = Some(crate::capture::romanize::to_latin(&seg.text));
                                 }
-                                seg.translated_text = Some(trans.to_string());
+                                seg.translated_text = Some(trans.trim().to_string());
                             }
                         }
                     }
