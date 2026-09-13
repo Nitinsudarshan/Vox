@@ -849,6 +849,10 @@ pub struct WhisperDecodingConfig {
     /// to decode a fifteen-second question with half an encoder context.
     #[serde(default)]
     pub audio_ctx: Option<i32>,
+    /// Whether a decode with no explicit [`Self::audio_ctx`] should size the
+    /// encoder clamp to the audio it was handed, via
+    /// [`audio_ctx_for_seconds`]. An explicit `audio_ctx` always wins.
+    pub trim_audio_context: bool,
     /// Force exactly one segment per decode.
     ///
     /// Correct for a sub-two-second window, where it stops whisper discarding
@@ -890,6 +894,7 @@ impl WhisperDecodingConfig {
             print_timestamps: false,
             n_threads: None,
             audio_ctx: None,
+            trim_audio_context: false,
             single_segment: false,
             no_context: false,
         }
@@ -1014,6 +1019,25 @@ impl WhisperDecodingConfig {
         cfg
     }
 
+    /// As [`from_settings_defaulting`], plus the encoder clamp meetings want.
+    ///
+    /// Separate from the dictation resolver because the trade differs. A
+    /// meeting is a stream of segments the segmenter cut at silence, so most
+    /// of them are well under whisper's thirty-second window and each one pays
+    /// for the difference. Dictation is one short utterance the user is
+    /// waiting on, decoded once — and its own latency is dominated by the
+    /// model load, not by encoder width.
+    ///
+    /// [`from_settings_defaulting`]: Self::from_settings_defaulting
+    pub fn for_meetings(
+        stt_settings: &crate::settings::SttSettings,
+        default_preset: SttPreset,
+    ) -> Self {
+        let mut cfg = Self::from_settings_defaulting(stt_settings, default_preset);
+        cfg.trim_audio_context = stt_settings.meeting_trim_audio_context;
+        cfg
+    }
+
     /// Resolves the effective decoding configuration specifically for Universal Dictation.
     ///
     /// Defaults to [`SttPreset::Fast`], deliberately: push-to-talk is
@@ -1091,6 +1115,12 @@ pub struct SttSessionDiagnostics {
     /// over the engine's single model slot.
     #[serde(default)]
     pub model_reloaded: bool,
+    /// The encoder clamp this decode ran with, or `None` for whisper's full
+    /// thirty-second window. Reported because it is the difference between a
+    /// segment costing what its audio is worth and costing a flat thirty
+    /// seconds — and because a decode that loses its tail will name it.
+    #[serde(default)]
+    pub audio_ctx: Option<i32>,
 }
 
 /// Local, zero-cost speech-to-text via whisper.cpp (through whisper-rs) or NVIDIA Parakeet TDT.
@@ -1187,6 +1217,7 @@ impl SttEngine {
                 lock_wait_ms: 0,
                 model_load_ms: 0,
                 model_reloaded: false,
+                audio_ctx: None,
             };
 
             Ok((result.text, diag))
@@ -1275,6 +1306,7 @@ impl SttEngine {
                     lock_wait_ms: 0,
                     model_load_ms: 0,
                     model_reloaded: false,
+                    audio_ctx: None,
                 };
                 return Ok((Vec::new(), diag));
             }
@@ -1344,6 +1376,20 @@ impl SttEngine {
             }
             params.set_n_threads(decoding_config.n_threads.unwrap_or_else(num_cpus));
 
+            // Whisper decodes a thirty-second window whatever it is given, so a
+            // shorter segment pays for silence it does not contain. An explicit
+            // clamp wins; otherwise it is sized to this segment's own audio.
+            let effective_audio_ctx = decoding_config.audio_ctx.or_else(|| {
+                if decoding_config.trim_audio_context {
+                    audio_ctx_for_seconds(audio_dur)
+                } else {
+                    None
+                }
+            });
+            if let Some(audio_ctx) = effective_audio_ctx {
+                params.set_audio_ctx(audio_ctx);
+            }
+
             // TEMP: whisper internal latency diagnostics (state_full)
             let t_state_full_start = std::time::Instant::now();
             state
@@ -1400,6 +1446,7 @@ impl SttEngine {
                 lock_wait_ms,
                 model_load_ms,
                 model_reloaded: evicted_other_model,
+                audio_ctx: effective_audio_ctx,
             };
 
             // TEMP: whisper internal latency diagnostics (timing summary)
@@ -1458,6 +1505,51 @@ pub fn join_utterance_text(utterances: &[SttUtterance]) -> String {
 /// roughly halves that cost — the same trick whisper.cpp's own `stream`
 /// example uses — and every window a live stream submits is far shorter than
 /// the clamped span.
+/// Encoder positions whisper produces for one full thirty-second window.
+///
+/// whisper.cpp mels a window into 3000 frames and the encoder halves that, so
+/// 1500 positions cover 30 s — fifty positions per second of audio. Passing
+/// this, or anything larger, is the same as not clamping at all.
+pub const FULL_AUDIO_CTX: i32 = 1500;
+
+/// Encoder positions per second of audio. See [`FULL_AUDIO_CTX`].
+const AUDIO_CTX_PER_SECOND: f32 = FULL_AUDIO_CTX as f32 / 30.0;
+
+/// Slack added on top of the audio's own span, in seconds.
+///
+/// The minimum safe clamp is exactly the audio's length: everything past it is
+/// simply not encoded. The margin exists because "exactly" is where the last
+/// incident came from — a *fixed* [`LIVE_AUDIO_CTX`] cut the tail off anything
+/// longer than about fifteen seconds, and the report read as "captures only
+/// part of what I say". Two seconds covers the convolution front-end's reach
+/// past its input and leaves whisper some silence to end a segment against,
+/// at a cost of a hundred positions.
+const AUDIO_CTX_HEADROOM_SECONDS: f32 = 2.0;
+
+/// The encoder clamp for a segment holding `audio_seconds` of speech, or
+/// `None` when it is long enough to want the whole window.
+///
+/// Whisper works in thirty-second windows whatever it is given, so a segment
+/// shorter than that pays for silence it does not have. Measured on a real
+/// meeting, decode cost 28.6 s fixed plus 0.09 s per second of speech — 94% of
+/// it independent of how much was said. Clamping the encoder to the audio's
+/// own span is what turns that fixed cost back into a proportional one.
+///
+/// Sized per segment rather than fixed, which is the difference between this
+/// and the clamp that truncated audio before: a value derived from the samples
+/// in hand cannot be smaller than the samples in hand.
+pub fn audio_ctx_for_seconds(audio_seconds: f32) -> Option<i32> {
+    if !audio_seconds.is_finite() || audio_seconds <= 0.0 {
+        return None;
+    }
+    let needed = ((audio_seconds + AUDIO_CTX_HEADROOM_SECONDS) * AUDIO_CTX_PER_SECOND).ceil();
+    if needed >= FULL_AUDIO_CTX as f32 {
+        // Long enough that clamping would save nothing and risk the tail.
+        return None;
+    }
+    Some(needed as i32)
+}
+
 pub const LIVE_AUDIO_CTX: i32 = 768;
 
 /// A dedicated Whisper context for one low-latency stream.
@@ -1608,6 +1700,90 @@ fn num_cpus() -> std::ffi::c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The property the last truncation bug violated, checked across the whole
+    /// range a segmenter can produce: the clamp must always cover at least as
+    /// much audio as it was given, or the tail is silently not encoded.
+    #[test]
+    fn the_encoder_clamp_always_covers_the_audio_it_was_sized_for() {
+        let mut checked = 0;
+        for tenths in 1..=400 {
+            let seconds = tenths as f32 / 10.0;
+            let Some(ctx) = audio_ctx_for_seconds(seconds) else {
+                // Falling back to the full window is always safe.
+                continue;
+            };
+            let covered = ctx as f32 / AUDIO_CTX_PER_SECOND;
+            assert!(
+                covered >= seconds,
+                "a {seconds:.1}s segment clamped to {ctx} covers only {covered:.2}s"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the sweep has to actually exercise the clamp");
+    }
+
+    /// A fixed clamp is what cut tails off before. This is the case that
+    /// distinguishes the two: at `LIVE_AUDIO_CTX` a twenty-second segment lost
+    /// its end, and sizing per segment must not.
+    #[test]
+    fn a_segment_longer_than_the_old_fixed_clamp_is_not_truncated() {
+        let ctx = audio_ctx_for_seconds(20.0).expect("20s still fits inside the window");
+        assert!(
+            ctx > LIVE_AUDIO_CTX,
+            "sizing to the audio must exceed the fixed clamp that truncated it"
+        );
+        assert!(ctx as f32 / AUDIO_CTX_PER_SECOND >= 20.0);
+    }
+
+    /// Anything at or past the window gets the full encoder rather than a
+    /// clamp that would round down into the audio.
+    #[test]
+    fn audio_at_or_beyond_the_window_keeps_the_full_encoder() {
+        assert_eq!(audio_ctx_for_seconds(28.0), None);
+        assert_eq!(audio_ctx_for_seconds(30.0), None);
+        assert_eq!(audio_ctx_for_seconds(45.0), None);
+    }
+
+    /// Short segments are where the saving is, since they pay the same flat
+    /// cost as long ones today.
+    #[test]
+    fn a_short_segment_asks_for_much_less_than_the_full_window() {
+        let ctx = audio_ctx_for_seconds(8.0).expect("8s is well inside the window");
+        assert!(
+            ctx < FULL_AUDIO_CTX / 2,
+            "an 8s segment should need under half the window, asked for {ctx}"
+        );
+    }
+
+    /// Nonsense in, full window out — never a clamp of zero, which would
+    /// encode nothing at all.
+    #[test]
+    fn degenerate_durations_fall_back_to_the_full_window() {
+        assert_eq!(audio_ctx_for_seconds(0.0), None);
+        assert_eq!(audio_ctx_for_seconds(-1.0), None);
+        assert_eq!(audio_ctx_for_seconds(f32::NAN), None);
+        assert_eq!(audio_ctx_for_seconds(f32::INFINITY), None);
+    }
+
+    /// Meetings opt in through the setting; dictation is left alone, and an
+    /// explicit clamp still wins over the automatic one.
+    #[test]
+    fn only_meetings_trim_the_encoder_and_only_when_the_setting_allows() {
+        let on = crate::settings::SttSettings::default();
+        assert!(on.meeting_trim_audio_context, "on unless turned off");
+        assert!(WhisperDecodingConfig::for_meetings(&on, SttPreset::Balanced).trim_audio_context);
+
+        let off = crate::settings::SttSettings {
+            meeting_trim_audio_context: false,
+            ..crate::settings::SttSettings::default()
+        };
+        assert!(!WhisperDecodingConfig::for_meetings(&off, SttPreset::Balanced).trim_audio_context);
+
+        // Dictation never trims, whatever the meeting setting says.
+        assert!(!WhisperDecodingConfig::for_dictation(&on).trim_audio_context);
+        assert!(!WhisperDecodingConfig::baseline().trim_audio_context);
+    }
     use crate::settings::LanguageSettings;
 
     #[test]
