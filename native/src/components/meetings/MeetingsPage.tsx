@@ -1,6 +1,6 @@
 import React from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Import, Radio, Search, Users } from 'lucide-react';
+import { Import, Radio, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -295,32 +295,39 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   return (
     <div className="flex flex-col h-full min-h-0">
       <PageHeader
-        badge={{ label: 'Capture Surface', icon: Users, variant: 'emerald' }}
         title="Meetings &"
         highlightText="Calls"
         description="Record both sides of a call, transcribe locally on device, and turn conversations into reports."
         glowColor="emerald"
+        compact
       >
-        {status.active ? (
-          <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
-            <span className="flex h-2 w-2 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-            </span>
-            <span className="text-xs font-mono font-medium text-red-500 dark:text-red-400">
-              Recording in progress
-            </span>
-          </div>
-        ) : (
-          <Button
-            onClick={handleStart}
-            disabled={busy}
-            className="gap-2 shrink-0 font-medium shadow-sm hover:shadow-md transition-all"
-          >
-            <Radio className="w-4 h-4 text-red-500 animate-pulse" />
-            <span>Start recording</span>
-          </Button>
-        )}
+        <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
+          <MeetingModelGate
+            mode="status-only"
+            key={`status-${modelGateNonce}`}
+            onOpenSpeechSettings={onOpenSpeechSettings}
+          />
+          {status.active ? (
+            <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+              </span>
+              <span className="text-xs font-mono font-medium text-red-500 dark:text-red-400">
+                Recording in progress
+              </span>
+            </div>
+          ) : (
+            <Button
+              onClick={handleStart}
+              disabled={busy}
+              className="h-8 px-3.5 gap-2 shrink-0 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-xs transition-all active:scale-[0.98]"
+            >
+              <Radio className="w-3.5 h-3.5 text-white" />
+              <span>Start recording</span>
+            </Button>
+          )}
+        </div>
       </PageHeader>
 
       <div className="shrink-0 space-y-3">
@@ -341,7 +348,8 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
           onStop={handleStop}
         />
         <MeetingModelGate
-          key={modelGateNonce}
+          mode="card-only"
+          key={`card-${modelGateNonce}`}
           onOpenSpeechSettings={onOpenSpeechSettings}
           onModelInstalled={() => notify('info', 'Speech model installed. Recording is ready.')}
         />

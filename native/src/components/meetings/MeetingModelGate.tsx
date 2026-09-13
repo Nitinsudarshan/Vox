@@ -1,8 +1,9 @@
 import React from 'react';
-import { AlertTriangle, Download, Settings2, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Cpu, Download, Settings2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 import {
   cancelSpeechModelDownload,
   downloadFraction,
@@ -18,6 +19,9 @@ interface MeetingModelGateProps {
   onOpenSpeechSettings?: () => void;
   /** Called once a model lands, so the page can retry whatever was blocked. */
   onModelInstalled?: () => void;
+  /** Whether to render only the model status line, the install card, or both. Default: 'all'. */
+  mode?: 'all' | 'status-only' | 'card-only';
+  className?: string;
 }
 
 /**
@@ -36,6 +40,8 @@ interface MeetingModelGateProps {
 export const MeetingModelGate: React.FC<MeetingModelGateProps> = ({
   onOpenSpeechSettings,
   onModelInstalled,
+  mode = 'all',
+  className,
 }) => {
   const [catalogue, setCatalogue] = React.useState<SpeechModelCatalogue | null>(null);
   const [progress, setProgress] = React.useState<{ fraction: number | null; id: string } | null>(
@@ -91,24 +97,36 @@ export const MeetingModelGate: React.FC<MeetingModelGateProps> = ({
   const active = catalogue.models.find((m) => m.id === catalogue.active_meeting_model);
 
   if (installed.length > 0) {
+    if (mode === 'card-only') return null;
     return (
-      <p className="text-[11px] text-muted-foreground">
-        Transcribing with {active ? active.name : 'the best installed model'}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onOpenSpeechSettings}
+        disabled={!onOpenSpeechSettings}
+        className={cn(
+          "h-8 px-2.5 gap-1.5 text-xs font-medium border-border/80 bg-background/60 backdrop-blur-xs text-foreground hover:bg-accent hover:text-accent-foreground shadow-2xs transition-all",
+          className
+        )}
+        title="Change active speech model"
+        aria-label={`Change speech model. Current: ${active ? active.name : 'Default model'}`}
+      >
+        <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+        <span className="text-foreground font-medium truncate max-w-[220px] sm:max-w-[280px]">
+          {`Transcribing with ${active ? active.name : 'the best installed model'}`}
+        </span>
         {onOpenSpeechSettings && (
           <>
-            {' · '}
-            <button
-              type="button"
-              onClick={onOpenSpeechSettings}
-              className="underline underline-offset-2 hover:text-foreground"
-            >
-              change
-            </button>
+            <span className="text-muted-foreground/70 font-normal">· change</span>
+            <ChevronRight className="w-3 h-3 text-muted-foreground/60 shrink-0" />
           </>
         )}
-      </p>
+      </Button>
     );
   }
+
+  if (mode === 'status-only') return null;
 
   const recommended: SpeechModel | undefined =
     catalogue.models.find((m) => m.id === catalogue.recommended_meeting_model) ??
@@ -117,7 +135,7 @@ export const MeetingModelGate: React.FC<MeetingModelGateProps> = ({
   const percent = progress?.fraction === null ? null : Math.round((progress?.fraction ?? 0) * 100);
 
   return (
-    <Card className="p-4 border-amber-500/40 bg-amber-500/5">
+    <Card className={`p-4 border-amber-500/40 bg-amber-500/5 ${className ?? ''}`}>
       <div className="flex items-start gap-3">
         <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
