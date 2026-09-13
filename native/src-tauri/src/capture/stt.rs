@@ -1582,6 +1582,92 @@ pub fn uses_expensive_script(text: &str) -> bool {
     other * 100 / letters >= EXPENSIVE_SCRIPT_PERCENT
 }
 
+/// Consecutive segments in an expensive script before the decoder gives up the
+/// beam search.
+///
+/// Two rather than one so a single code-switched sentence in an otherwise
+/// English meeting does not decide the rest of it.
+const SEGMENTS_BEFORE_GOING_FAST: u32 = 2;
+
+/// Consecutive Latin segments before the decoder takes the beam search back.
+///
+/// Three rather than two on purpose. Returning to the careful profile is the
+/// accuracy win but also the throughput risk, so it asks for more evidence
+/// that the expensive stretch is actually over than it asked to leave.
+const SEGMENTS_BEFORE_GOING_CAREFUL: u32 = 3;
+
+/// Leaving the careful profile must never ask for more evidence than
+/// returning to it: the asymmetry is the whole design, and reversing it by
+/// editing one constant would be silent.
+const _: () = assert!(SEGMENTS_BEFORE_GOING_CAREFUL > SEGMENTS_BEFORE_GOING_FAST);
+
+/// Follows which script a meeting is being held in, so the decoder can change
+/// profile when the language genuinely changes without flapping on one
+/// sentence.
+///
+/// A run in both directions is what separates the two cases that look alike
+/// segment by segment. Code-switched Hinglish crosses language inside single
+/// sentences, and a decoder that changed settings with it would make the
+/// transcript's quality depend on which language a segment happened to start
+/// in; a meeting that runs in English, turns to Hindi for a few minutes and
+/// goes back is a genuine change and should be followed. Requiring several
+/// consecutive segments before moving handles the first by ignoring it and
+/// the second by noticing it.
+#[derive(Debug, Clone)]
+pub struct ScriptTracker {
+    expensive: bool,
+    /// Consecutive segments disagreeing with the current profile.
+    run: u32,
+}
+
+impl Default for ScriptTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScriptTracker {
+    /// Starts careful. An English meeting never leaves this state, and a
+    /// meeting in another script pays the careful profile for its opening
+    /// segments — the price of reading the meeting rather than a settings
+    /// page.
+    pub fn new() -> Self {
+        Self {
+            expensive: false,
+            run: 0,
+        }
+    }
+
+    /// Whether the next segment should use the cheaper profile.
+    pub fn is_expensive(&self) -> bool {
+        self.expensive
+    }
+
+    /// Records what the decoder just wrote, returning `true` if that changed
+    /// which profile the next segment gets.
+    pub fn observe(&mut self, text: &str) -> bool {
+        let seen = uses_expensive_script(text);
+        if seen == self.expensive {
+            // Agreement resets the run: the segments have to be consecutive,
+            // or an alternating meeting would creep across the threshold.
+            self.run = 0;
+            return false;
+        }
+        self.run += 1;
+        let needed = if self.expensive {
+            SEGMENTS_BEFORE_GOING_CAREFUL
+        } else {
+            SEGMENTS_BEFORE_GOING_FAST
+        };
+        if self.run < needed {
+            return false;
+        }
+        self.expensive = seen;
+        self.run = 0;
+        true
+    }
+}
+
 /// Encoder positions whisper produces for one full thirty-second window.
 ///
 /// whisper.cpp mels a window into 3000 frames and the encoder halves that, so
@@ -1777,6 +1863,116 @@ fn num_cpus() -> std::ffi::c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HI: &str = "मुझे लगता है कि यह ठीक है और हमें आगे बढ़ना चाहिए";
+    const EN: &str = "I think that is fine and we should move ahead with it";
+
+    /// Feeds a sequence of segments and returns which profile each one after
+    /// them would get, so a scenario reads as what the meeting sounded like.
+    fn profiles_for(segments: &[&str]) -> Vec<bool> {
+        let mut tracker = ScriptTracker::new();
+        segments
+            .iter()
+            .map(|text| {
+                tracker.observe(text);
+                tracker.is_expensive()
+            })
+            .collect()
+    }
+
+    /// An English meeting never leaves the careful profile, so it never pays
+    /// accuracy for speed it does not need.
+    #[test]
+    fn an_english_meeting_stays_careful_throughout() {
+        assert_eq!(profiles_for(&[EN; 8]), vec![false; 8]);
+    }
+
+    /// A meeting held in Hindi moves after two segments and stays there.
+    #[test]
+    fn a_hindi_meeting_moves_to_the_fast_profile_and_stays() {
+        assert_eq!(
+            profiles_for(&[HI, HI, HI, HI, HI]),
+            vec![false, true, true, true, true],
+            "two segments of evidence, then fast for the rest"
+        );
+    }
+
+    /// The reported case: English, a Hindi stretch, then English again. The
+    /// tail must get its beam search back rather than being stuck on the
+    /// cheaper profile for the rest of the meeting.
+    #[test]
+    fn a_hindi_stretch_inside_an_english_meeting_is_left_behind_afterwards() {
+        let profiles = profiles_for(&[EN, EN, HI, HI, HI, HI, EN, EN, EN, EN, EN]);
+        assert!(!profiles[1], "still careful before the switch");
+        assert!(profiles[3], "fast once the Hindi stretch is established");
+        assert!(profiles[5], "and stays fast while it lasts");
+        assert!(
+            !profiles[9],
+            "back to careful once English has settled again: {profiles:?}"
+        );
+    }
+
+    /// And the other direction, which has the same shape.
+    #[test]
+    fn an_english_stretch_inside_a_hindi_meeting_returns_to_hindi() {
+        let profiles = profiles_for(&[HI, HI, HI, EN, EN, EN, EN, HI, HI, HI, HI]);
+        assert!(profiles[2], "fast during the opening Hindi");
+        assert!(!profiles[6], "careful once English has settled");
+        assert!(profiles[9], "fast again when Hindi comes back");
+    }
+
+    /// The case the run length exists for: sentence-level code-switching must
+    /// not make the profile flap, because then transcript quality would depend
+    /// on which language a segment happened to start in.
+    #[test]
+    fn alternating_code_switched_segments_do_not_flap() {
+        // Strictly alternating never accumulates a run, so nothing moves.
+        assert_eq!(
+            profiles_for(&[EN, HI, EN, HI, EN, HI, EN, HI]),
+            vec![false; 8],
+            "a run has to be consecutive"
+        );
+    }
+
+    /// A single Hindi segment in an English meeting is not enough on its own.
+    #[test]
+    fn one_isolated_segment_never_moves_the_profile() {
+        assert_eq!(
+            profiles_for(&[EN, EN, HI, EN, EN, EN]),
+            vec![false; 6],
+            "one segment is not a change of language"
+        );
+    }
+
+    /// Leaving the careful profile asks for less evidence than returning to
+    /// it, because falling behind costs more than a slightly cheaper decode.
+    #[test]
+    fn returning_to_careful_asks_for_more_evidence_than_leaving_it() {
+        // Two Hindi segments are enough to leave.
+        let mut tracker = ScriptTracker::new();
+        tracker.observe(HI);
+        assert!(!tracker.is_expensive());
+        tracker.observe(HI);
+        assert!(tracker.is_expensive());
+
+        // Two English segments are not enough to come back.
+        tracker.observe(EN);
+        tracker.observe(EN);
+        assert!(tracker.is_expensive(), "two is not yet three");
+        tracker.observe(EN);
+        assert!(!tracker.is_expensive());
+    }
+
+    /// `observe` reports the change so a caller can record where a meeting
+    /// turned, and reports it exactly once per change.
+    #[test]
+    fn a_switch_is_reported_once() {
+        let mut tracker = ScriptTracker::new();
+        assert!(!tracker.observe(HI));
+        assert!(tracker.observe(HI), "the segment that crosses reports it");
+        assert!(!tracker.observe(HI), "staying put is not a switch");
+        assert!(!tracker.observe(HI));
+    }
 
     /// The case this exists for: Devanagari costs whisper's decoder several
     /// times what Latin does, and a meeting written in it needs the cheaper
