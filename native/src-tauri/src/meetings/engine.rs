@@ -294,10 +294,7 @@ impl MeetingEngine {
                 // Balanced rather than Fast: a meeting is decoded once and
                 // read later, so it can afford the wider beam that dictation
                 // cannot. An explicit user preset still wins.
-                decoding: WhisperDecodingConfig::from_settings_defaulting(
-                    &settings.stt,
-                    SttPreset::Balanced,
-                ),
+                decoding: WhisperDecodingConfig::for_meetings(&settings.stt, SttPreset::Balanced),
                 glossary: settings.dictionary.clone(),
             },
             stt,

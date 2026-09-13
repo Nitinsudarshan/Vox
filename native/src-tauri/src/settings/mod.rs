@@ -81,7 +81,7 @@ pub enum DictationSttQuality {
 }
 
 /// Local speech-to-text configuration (whisper.cpp via whisper-rs).
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SttSettings {
     /// Path to a GGML Whisper model file (e.g. `ggml-small.bin`). Download
     /// one from https://huggingface.co/ggerganov/whisper.cpp/tree/main and
@@ -137,6 +137,49 @@ pub struct SttSettings {
     /// Which engine dictation uses: "whisper" (default) or "parakeet".
     #[serde(default, alias = "dictationEngine")]
     pub dictation_engine: Option<String>,
+    /// Whether a meeting segment is decoded against only as much of whisper's
+    /// encoder window as its audio actually occupies.
+    ///
+    /// Whisper always works in thirty-second windows, so a fourteen-second
+    /// segment costs the same as a twenty-five-second one: measured on a real
+    /// meeting, decode time was 28.6 s fixed plus 0.09 s per second of speech,
+    /// which is to say 94% of it had nothing to do with how much anyone said.
+    /// Trimming the window to fit recovers that.
+    ///
+    /// On by default, and a setting rather than a constant because it trades
+    /// against transcript quality: this is the same mechanism that, at a
+    /// *fixed* `LIVE_AUDIO_CTX`, cut the tail off anything longer than about
+    /// fifteen seconds. Sized per segment it should not, but "should not" is
+    /// what the toggle is for — turn it off and re-record to compare.
+    #[serde(default = "default_trim_meeting_audio_context", alias = "meetingTrimAudioContext")]
+    pub meeting_trim_audio_context: bool,
+}
+
+fn default_trim_meeting_audio_context() -> bool {
+    true
+}
+
+/// Written out rather than derived because one field does not default to its
+/// zero value: `meeting_trim_audio_context` is on unless a user turns it off.
+/// A derived `Default` would have said `false` while a freshly written config
+/// file said `true`, so which one a meeting got would depend on whether the
+/// settings file happened to exist.
+impl Default for SttSettings {
+    fn default() -> Self {
+        Self {
+            whisper_model_path: None,
+            dictation_quality: DictationSttQuality::default(),
+            dictation_threads: None,
+            enable_initial_prompt: false,
+            custom_initial_prompt: None,
+            preset: String::new(),
+            text_transform: false,
+            cleanup_style: String::new(),
+            meeting_model_id: None,
+            dictation_engine: None,
+            meeting_trim_audio_context: default_trim_meeting_audio_context(),
+        }
+    }
 }
 
 impl SttSettings {

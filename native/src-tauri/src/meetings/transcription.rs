@@ -219,6 +219,9 @@ struct SegmentTiming {
     /// Hallucination screen plus text normalisation.
     post_ms: u128,
     persist_ms: u128,
+    /// The encoder clamp this segment decoded against, `None` for whisper's
+    /// full thirty-second window.
+    audio_ctx: Option<i32>,
 }
 
 impl SegmentTiming {
@@ -508,6 +511,19 @@ fn print_segment_trace(
             ""
         }
     );
+    println!(
+        "encoder_window       : {}",
+        match timing.audio_ctx {
+            // Shown as the span it covers, since that is what has to be at
+            // least as long as the audio above for nothing to be lost.
+            Some(ctx) => format!(
+                "{:.1} s (clamped to {ctx} of {} positions)",
+                ctx as f32 / (crate::capture::stt::FULL_AUDIO_CTX as f32 / 30.0),
+                crate::capture::stt::FULL_AUDIO_CTX
+            ),
+            None => "30.0 s (full window)".to_string(),
+        }
+    );
     println!("decode               : {} ms", timing.decode_ms);
     println!("screen + normalize   : {} ms", timing.post_ms);
     println!("persist              : {} ms", timing.persist_ms);
@@ -660,6 +676,7 @@ fn decode_segment(
             timing.lock_wait_ms = diagnostics.lock_wait_ms;
             timing.model_load_ms = diagnostics.model_load_ms;
             timing.model_reloaded = diagnostics.model_reloaded;
+            timing.audio_ctx = diagnostics.audio_ctx;
             utterances
         }
         Err(err) => return (DecodeOutcome::Failed(err.to_string()), timing),
