@@ -199,10 +199,10 @@ describe('MeetingsPage', () => {
     expect(screen.getByText(/we agreed to ship the migration/)).toBeInTheDocument();
   });
 
-  test('offers to record when nothing is recording', async () => {
+  test('offers to start a meeting when none is running', async () => {
     mockBackend();
     render(<MeetingsPage />);
-    expect(await screen.findByRole('button', { name: /start recording/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /start meeting/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
   });
 
@@ -274,7 +274,7 @@ describe('MeetingsPage', () => {
     });
     render(<MeetingsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /start recording/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /start meeting/i }));
 
     expect(await screen.findByText('No speech model is installed.')).toBeInTheDocument();
   });
@@ -488,7 +488,7 @@ describe('MeetingsPage', () => {
       get_meeting_devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
     });
     render(<MeetingsPage />);
-    const startBtn = await screen.findByRole('button', { name: /start recording/i });
+    const startBtn = await screen.findByRole('button', { name: /start meeting/i });
     fireEvent.click(startBtn);
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith('start_meeting', {
@@ -773,7 +773,9 @@ describe('MeetingsPage', () => {
     render(<MeetingsPage />);
     fireEvent.click(await screen.findByText('Weekly sync'));
 
-    expect(await screen.findByText('Payal')).toBeInTheDocument();
+    // Named twice on purpose: once as the line's speaker, and once in the
+    // banner as somebody who was in the meeting.
+    expect(await screen.findAllByText('Payal')).toHaveLength(2);
     expect(screen.queryByText('Others')).not.toBeInTheDocument();
   });
 
@@ -828,6 +830,63 @@ describe('MeetingsPage', () => {
         label: 'Soni',
       }),
     );
+  });
+
+  test('a meeting being read is what the banner is about, not starting another', async () => {
+    // Offering to start a second meeting from inside the first is an
+    // invitation to a mistake.
+    mockBackend({ get_meeting: recordedMeetingDetail() });
+    render(<MeetingsPage />);
+    expect(await screen.findByRole('button', { name: /start meeting/i })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    await screen.findByRole('button', { name: /all meetings/i });
+    expect(screen.queryByRole('button', { name: /start meeting/i })).not.toBeInTheDocument();
+    // The banner is the meeting: its name, its recording, its actions.
+    expect(screen.getByRole('heading', { name: 'Weekly sync' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /play recording/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /more actions/i })).toBeInTheDocument();
+  });
+
+  test('a live recording keeps its stop control while its transcript is watched', async () => {
+    // The banner changing must not take the only way to stop the recording
+    // with it.
+    mockBackend({
+      get_meeting_recording_status: {
+        ...idleStatus,
+        active: true,
+        meeting_id: 'meeting-1',
+        elapsed_seconds: 42,
+      },
+      get_meeting: recordedMeetingDetail(),
+    });
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  test('adding a report to the graph is offered by the report, not by the meeting menu', async () => {
+    mockBackend({
+      get_meeting: recordedMeetingDetail({
+        summary: {
+          markdown: '# Notes\n\nWe agreed to ship.',
+          status: 'completed',
+          template_id: 'general',
+          model: 'llama3.2:latest',
+          chunk_count: 1,
+          processing_ms: 900,
+        },
+      }),
+    });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /more actions/i }));
+    expect(screen.queryByRole('menuitem', { name: /add to graph/i })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: /add to graph/i })).toBeInTheDocument();
   });
 
   test('the calendar shows what is coming up and links to notes already recorded', async () => {

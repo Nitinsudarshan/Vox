@@ -428,54 +428,64 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <PageHeader
-        title="Meetings &"
-        highlightText="Calls"
-        description="Record both sides of a call, transcribe locally on device, and turn conversations into reports."
-        glowColor="emerald"
-        compact
-      >
-        <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
-          <MeetingModelGate
-            mode="status-only"
-            key={`status-${modelGateNonce}`}
-            onOpenSpeechSettings={onOpenSpeechSettings}
-          />
-          {accounts.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCalendarOpen(true)}
-              className="h-8 px-3 gap-2 shrink-0 text-xs font-medium"
-            >
-              <CalendarDays className="w-3.5 h-3.5" />
-              <span>Calendar</span>
-            </Button>
-          )}
-          {status.active ? (
-            <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-              </span>
-              <span className="text-xs font-mono font-medium text-red-500 dark:text-red-400">
-                Recording in progress
-              </span>
-            </div>
-          ) : (
-            <Button
-              onClick={handleStart}
-              disabled={busy}
-              className="h-8 px-3.5 gap-2 shrink-0 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-xs transition-all active:scale-[0.98]"
-            >
-              <Radio className="w-3.5 h-3.5 text-white" />
-              <span>Start recording</span>
-            </Button>
-          )}
-        </div>
-      </PageHeader>
+      {/* The banner belongs to whatever is on screen. On the index it is the
+          meetings surface and the way into a new one; inside a meeting it is
+          that meeting, because offering to start a second one from inside the
+          first is an invitation to a mistake. */}
+      {!detail && (
+        <PageHeader
+          title="Meetings &"
+          highlightText="Calls"
+          description="Join, record and transcribe your calls on this device, and turn them into reports."
+          glowColor="emerald"
+          compact
+        >
+          <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
+            <MeetingModelGate
+              mode="status-only"
+              key={`status-${modelGateNonce}`}
+              onOpenSpeechSettings={onOpenSpeechSettings}
+            />
+            {accounts.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCalendarOpen(true)}
+                className="h-8 px-3 gap-2 shrink-0 text-xs font-medium"
+              >
+                <CalendarDays className="w-3.5 h-3.5" />
+                <span>Calendar</span>
+              </Button>
+            )}
+            {status.active ? (
+              <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+                </span>
+                <span className="text-xs font-mono font-medium text-red-500 dark:text-red-400">
+                  Meeting in progress
+                </span>
+              </div>
+            ) : (
+              <Button
+                onClick={handleStart}
+                disabled={busy}
+                className="h-8 px-3.5 gap-2 shrink-0 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-xs transition-all active:scale-[0.98]"
+              >
+                <Radio className="w-3.5 h-3.5 text-white" />
+                <span>Start meeting</span>
+              </Button>
+            )}
+          </div>
+        </PageHeader>
+      )}
 
-      <div className="shrink-0 space-y-3">
+      <div className="shrink-0 space-y-3 empty:hidden">
+        {/* Rendered whatever is on screen: it is the live meeting's own
+            controls, and a recording you cannot stop from the meeting you are
+            watching it produce is not a control surface. It draws nothing when
+            no meeting is running. */}
         <MeetingRecorder
           status={status}
           busy={busy}
@@ -492,12 +502,14 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
           }}
           onStop={handleStop}
         />
-        <MeetingModelGate
-          mode="card-only"
-          key={`card-${modelGateNonce}`}
-          onOpenSpeechSettings={onOpenSpeechSettings}
-          onModelInstalled={() => notify('info', 'Speech model installed. Recording is ready.')}
-        />
+        {!detail && (
+          <MeetingModelGate
+            mode="card-only"
+            key={`card-${modelGateNonce}`}
+            onOpenSpeechSettings={onOpenSpeechSettings}
+            onModelInstalled={() => notify('info', 'Speech model installed. Meetings are ready.')}
+          />
+        )}
         {message && (
           <p
             role="status"
@@ -510,7 +522,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         )}
       </div>
 
-      <div className="flex-1 min-h-0 mt-4">
+      <div className="flex-1 min-h-0 mt-3">
         {detail ? (
           <MeetingView
             detail={detail}

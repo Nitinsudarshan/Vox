@@ -12,11 +12,30 @@ export interface PageHeaderBadge {
 export interface PageHeaderProps {
   kicker?: string;
   badge?: PageHeaderBadge;
-  title: string;
+  /**
+   * The page's name. A node rather than a string so a detail page can put an
+   * inline rename field where its title is, rather than beside it.
+   */
+  title: React.ReactNode;
   highlightText?: string;
   description?: string | React.ReactNode;
   variant?: 'banner' | 'minimal';
   glowColor?: 'emerald' | 'primary' | 'purple' | 'amber' | 'none';
+  /**
+   * Rendered at the far left, before the title block.
+   *
+   * For a control that belongs to the banner rather than beside it — a back
+   * button on a detail page, which has nowhere else to go once the banner is
+   * the page's own header.
+   */
+  leading?: React.ReactNode;
+  /**
+   * Rendered full width underneath the title row, inside the banner.
+   *
+   * For something that needs the whole width rather than the right-hand
+   * corner, such as a meeting's audio player.
+   */
+  footer?: React.ReactNode;
   children?: React.ReactNode;
   className?: string;
   compact?: boolean;
@@ -30,6 +49,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   description,
   variant = 'banner',
   glowColor = 'none',
+  leading,
+  footer,
   children,
   className,
   compact = false,
@@ -54,6 +75,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           </div>
         )}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          {leading && <div className="flex items-center shrink-0">{leading}</div>}
           <div>
             <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-foreground">
               {title}
@@ -72,6 +94,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           </div>
           {children && <div className="flex items-center gap-2 shrink-0">{children}</div>}
         </div>
+        {footer && <div className="mt-2.5">{footer}</div>}
       </div>
     );
   }
@@ -108,7 +131,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           compact ? "gap-3" : "gap-4"
         )}
       >
-        <div className={compact ? "space-y-1 min-w-0" : "space-y-1.5 min-w-0"}>
+        {leading && <div className="flex items-center shrink-0 -ml-1.5">{leading}</div>}
+        <div className={compact ? "space-y-1 min-w-0 flex-1" : "space-y-1.5 min-w-0 flex-1"}>
           {kicker && (
             <p className="font-mono text-[9px] font-semibold text-muted-foreground uppercase tracking-widest">
               {kicker}
@@ -163,6 +187,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
 
         {children && <div className="flex items-center gap-2 shrink-0">{children}</div>}
       </div>
+
+      {footer && <div className={cn("relative z-10", compact ? "mt-3" : "mt-3.5")}>{footer}</div>}
     </div>
   );
 };
