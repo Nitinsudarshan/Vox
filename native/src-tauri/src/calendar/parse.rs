@@ -89,6 +89,11 @@ pub fn parse_event(
             .get("htmlLink")
             .and_then(|l| l.as_str())
             .map(str::to_string),
+        description: item
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(flatten_html)
+            .filter(|d| !d.is_empty()),
         attendees,
         attendance,
         meeting_id: None,
@@ -198,6 +203,175 @@ fn conference_url(item: &serde_json::Value) -> Option<String> {
         .and_then(|point| point.get("uri"))
         .and_then(|uri| uri.as_str())
         .map(str::to_string)
+}
+
+/// Longest description Vox keeps.
+///
+/// An invitation's notes are occasionally an entire wiki page pasted into the
+/// field. The cache is re-fetched on every sync and read on every agenda
+/// render, so a bound belongs here rather than on the screen that shows it.
+const MAX_DESCRIPTION_CHARS: usize = 4000;
+
+/// Google's description HTML, as the text a person would have read.
+///
+/// Google stores the field as HTML and there is no plain-text alternative in
+/// the response, so the choice is flattening it here or rendering foreign
+/// markup in the app. It is flattened: `rules/untrusted-input.md` makes a
+/// calendar invitation somebody else wrote exactly the kind of content that
+/// gets shown as text and never interpreted, and an agenda is not a browser.
+///
+/// Block-level tags become line breaks rather than disappearing, because an
+/// agenda pasted as a list reads as one run-on sentence otherwise.
+pub fn flatten_html(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '<' => {
+                let mut tag = String::new();
+                for next in chars.by_ref() {
+                    if next == '>' {
+                        break;
+                    }
+                    tag.push(next);
+                }
+                out.push_str(tag_replacement(&tag));
+            }
+            '&' => {
+                let mut entity = String::new();
+                // Bounded: an unterminated `&` is an ampersand somebody typed,
+                // not the start of an entity that runs to the end of the note.
+                while let Some(&next) = chars.peek() {
+                    if next == ';' || entity.len() >= 10 {
+                        break;
+                    }
+                    entity.push(next);
+                    chars.next();
+                }
+                match chars.peek() {
+                    Some(';') => {
+                        chars.next();
+                        out.push_str(&decode_entity(&entity));
+                    }
+                    _ => {
+                        out.push('&');
+                        out.push_str(&entity);
+                    }
+                }
+            }
+            other => out.push(other),
+        }
+    }
+
+    tidy(&out)
+}
+
+/// What one tag leaves behind: a break, a bullet, or nothing.
+///
+/// A block break is emitted by the *closing* tag, not by both halves. Emitting
+/// one for each is what turns a three-item list into three items separated by
+/// blank lines, which is markup showing through rather than formatting.
+fn tag_replacement(tag: &str) -> &'static str {
+    let closing = tag.starts_with('/');
+    let name = tag
+        .trim_start_matches('/')
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match (name.as_str(), closing) {
+        // `<br>` has no closing half to wait for.
+        ("br", _) => "\n",
+        // The bullet has to precede the text, so this one is the open tag.
+        ("li", false) => "\n• ",
+        (
+            "p" | "div" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol"
+            | "blockquote" | "table",
+            true,
+        ) => "\n",
+        ("td" | "th", true) => " ",
+        _ => "",
+    }
+}
+
+fn decode_entity(entity: &str) -> String {
+    match entity.to_ascii_lowercase().as_str() {
+        "amp" => "&".to_string(),
+        "lt" => "<".to_string(),
+        "gt" => ">".to_string(),
+        "quot" => "\"".to_string(),
+        "apos" | "#39" => "'".to_string(),
+        "nbsp" => " ".to_string(),
+        "hellip" => "…".to_string(),
+        "mdash" => "—".to_string(),
+        "ndash" => "–".to_string(),
+        other => other
+            .strip_prefix('#')
+            .and_then(|code| {
+                let value = match code.strip_prefix(['x', 'X']) {
+                    Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                    None => code.parse().ok()?,
+                };
+                char::from_u32(value).map(String::from)
+            })
+            // An entity Vox does not know is shown as it was written. Dropping
+            // it silently turns "&pound;50" into "50".
+            .unwrap_or_else(|| format!("&{other};")),
+    }
+}
+
+/// Collapses the whitespace HTML flattening leaves behind, and caps the length.
+fn tidy(raw: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut blanks = 0usize;
+
+    for line in raw.lines() {
+        let trimmed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if trimmed.is_empty() {
+            blanks += 1;
+            // One blank line separates paragraphs; six is the markup showing
+            // through.
+            if blanks > 1 || lines.is_empty() {
+                continue;
+            }
+            lines.push(String::new());
+        } else {
+            blanks = 0;
+            lines.push(trimmed);
+        }
+    }
+
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+
+    let text = lines.join("\n");
+    if text.chars().count() <= MAX_DESCRIPTION_CHARS {
+        return text;
+    }
+    let truncated: String = text.chars().take(MAX_DESCRIPTION_CHARS).collect();
+    format!("{truncated}…")
+}
+
+/// Whether a link is one Vox is willing to hand to the browser.
+///
+/// The join link on an invitation is written by whoever sent it, and
+/// `tauri-plugin-opener` hands what it is given to the shell. `http`/`https`
+/// only is the whole check: it is what stops a `file:` path from opening a
+/// local document, and anything more elaborate would be guessing at a URL
+/// Google already validated.
+pub fn is_web_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered
+        .strip_prefix("https://")
+        .or_else(|| lowered.strip_prefix("http://"))
+        .is_some_and(|host| !host.is_empty())
 }
 
 #[cfg(test)]
@@ -358,6 +532,80 @@ mod tests {
     fn a_response_with_no_items_is_an_empty_calendar_not_a_failure() {
         assert!(parse_events(&serde_json::json!({}), "me@example.com", "primary").is_empty());
         assert!(parse_events(&serde_json::json!({"items": []}), "me@example.com", "primary").is_empty());
+    }
+
+    #[test]
+    fn an_invitation_carries_the_notes_somebody_wrote_on_it() {
+        // The agenda, the dial-in and the "read this first" link live here,
+        // and Google only ever sends them as HTML.
+        let mut item = timed_event();
+        item["description"] = serde_json::json!(
+            "<p>Agenda:</p><ul><li>Budget</li><li>Hiring</li></ul><p>Doc: \
+             <a href=\"https://docs.example.com/x\">https://docs.example.com/x</a></p>"
+        );
+        let event = parse_event(&item, "nitin@navgurukul.org", "primary").expect("an event");
+        assert_eq!(
+            event.description.as_deref(),
+            Some("Agenda:\n\n• Budget\n• Hiring\nDoc: https://docs.example.com/x")
+        );
+    }
+
+    #[test]
+    fn an_invitation_with_no_notes_says_nothing_rather_than_saying_nothing_loudly() {
+        let mut item = timed_event();
+        item["description"] = serde_json::json!("<div><br></div>");
+        let event = parse_event(&item, "nitin@navgurukul.org", "primary").expect("an event");
+        assert!(event.description.is_none(), "empty markup is not a description");
+    }
+
+    #[test]
+    fn markup_is_flattened_rather_than_carried_into_the_app() {
+        // `rules/untrusted-input.md`: an invitation somebody else wrote is
+        // shown as text. Nothing downstream should receive a tag at all.
+        let flattened = flatten_html("<script>alert(1)</script>Hello <b>there</b>");
+        assert_eq!(flattened, "alert(1)Hello there");
+        assert!(!flattened.contains('<'));
+    }
+
+    #[test]
+    fn the_entities_a_pasted_agenda_actually_contains_are_decoded() {
+        assert_eq!(
+            flatten_html("R&amp;D &lt;sync&gt; &quot;weekly&quot; &#39;26 &nbsp;&#x2014;"),
+            "R&D <sync> \"weekly\" '26 —"
+        );
+        // An entity Vox does not know is left as written rather than dropped.
+        assert_eq!(flatten_html("&pound;50"), "&pound;50");
+        // A bare ampersand is an ampersand.
+        assert_eq!(flatten_html("Tom & Jerry"), "Tom & Jerry");
+    }
+
+    #[test]
+    fn a_wall_of_blank_markup_collapses_to_readable_paragraphs() {
+        assert_eq!(
+            flatten_html("One<br><br><br><br>Two<br>Three"),
+            "One\n\nTwo\nThree"
+        );
+    }
+
+    #[test]
+    fn a_description_pasted_from_a_wiki_is_capped_rather_than_cached_whole() {
+        let long = "x".repeat(MAX_DESCRIPTION_CHARS + 500);
+        let flattened = flatten_html(&long);
+        assert_eq!(flattened.chars().count(), MAX_DESCRIPTION_CHARS + 1);
+        assert!(flattened.ends_with('…'));
+    }
+
+    #[test]
+    fn only_a_web_link_is_worth_handing_to_the_browser() {
+        assert!(is_web_url("https://meet.google.com/abc-defg-hij"));
+        assert!(is_web_url("http://10.0.0.5:8080/join"));
+        // The shell would happily open every one of these.
+        assert!(!is_web_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_web_url("javascript:alert(1)"));
+        assert!(!is_web_url("C:\\Windows\\System32\\calc.exe"));
+        assert!(!is_web_url("https://"));
+        assert!(!is_web_url(""));
+        assert!(!is_web_url("https://example.com /extra"));
     }
 
     #[test]

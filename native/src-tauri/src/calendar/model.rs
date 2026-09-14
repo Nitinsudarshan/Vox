@@ -106,6 +106,16 @@ pub struct CalendarEvent {
     pub conference_url: Option<String>,
     #[serde(default)]
     pub html_link: Option<String>,
+    /// The invitation's own notes, as plain text.
+    ///
+    /// This is where the agenda, the dial-in details and the "read this
+    /// first" link actually live, and reading them in Vox is the difference
+    /// between a row that says a meeting exists and one that says what it is
+    /// for. Google writes the field as HTML; [`super::parse`] flattens it on
+    /// the way in, so nothing downstream has to render markup it did not
+    /// write.
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(default)]
     pub attendees: Vec<EventAttendee>,
     pub attendance: Attendance,

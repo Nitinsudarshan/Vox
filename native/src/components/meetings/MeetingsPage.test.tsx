@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { MeetingsPage } from './MeetingsPage';
 import { MeetingSettingsView } from '../settings/MeetingSettingsView';
 import type { MeetingListItem, MeetingRecordingStatus } from '@/types/meetings';
+import type { CalendarAccount, CalendarEvent } from '@/types/calendar';
 
 const idleStatus: MeetingRecordingStatus = {
   active: false,
@@ -37,6 +38,46 @@ const meeting = (overrides: Partial<MeetingListItem> = {}): MeetingListItem => (
   preview: 'we agreed to ship the migration',
   ...overrides,
 });
+
+/** A connected Google account, as `list_calendar_accounts` returns one. */
+const account = (email: string, overrides: Partial<CalendarAccount> = {}): CalendarAccount => ({
+  email,
+  display_name: null,
+  enabled: true,
+  calendar_ids: [],
+  last_synced_at: null,
+  last_error: null,
+  ...overrides,
+});
+
+/** An event on the fixed test clock's own day, at `hour` local. */
+const calendarEvent = (
+  hour: number,
+  overrides: Partial<CalendarEvent> = {},
+): CalendarEvent => {
+  const start = new Date(2026, 8, 14, hour, 0);
+  return {
+    id: `evt-${hour}`,
+    account_email: 'me@work.com',
+    calendar_id: 'primary',
+    title: 'Scrum Call',
+    start: start.toISOString(),
+    end: new Date(start.getTime() + 30 * 60_000).toISOString(),
+    all_day: false,
+    conference_url: 'https://meet.google.com/abc-defg-hij',
+    attendees: [],
+    attendance: 'accepted',
+    ...overrides,
+  };
+};
+
+/** `YYYY-MM-DD` for an event, the way the backend groups days. */
+const dayOf = (event: CalendarEvent): string => {
+  const start = new Date(event.start);
+  return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(
+    start.getDate(),
+  ).padStart(2, '0')}`;
+};
 
 /** Routes each command to a canned answer, so a test only states what differs. */
 function mockBackend(overrides: Record<string, unknown> = {}) {
@@ -158,10 +199,10 @@ describe('MeetingsPage', () => {
     expect(screen.getByText(/we agreed to ship the migration/)).toBeInTheDocument();
   });
 
-  test('offers to record when nothing is recording', async () => {
+  test('offers to start a meeting when none is running', async () => {
     mockBackend();
     render(<MeetingsPage />);
-    expect(await screen.findByRole('button', { name: /start recording/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /start meeting/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
   });
 
@@ -233,7 +274,7 @@ describe('MeetingsPage', () => {
     });
     render(<MeetingsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /start recording/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /start meeting/i }));
 
     expect(await screen.findByText('No speech model is installed.')).toBeInTheDocument();
   });
@@ -447,7 +488,7 @@ describe('MeetingsPage', () => {
       get_meeting_devices: { microphone: 'Yeti Stereo Microphone', system_audio: null },
     });
     render(<MeetingsPage />);
-    const startBtn = await screen.findByRole('button', { name: /start recording/i });
+    const startBtn = await screen.findByRole('button', { name: /start meeting/i });
     fireEvent.click(startBtn);
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith('start_meeting', {
@@ -604,6 +645,56 @@ describe('MeetingsPage', () => {
     expect(await screen.findByText('Today')).toBeInTheDocument();
   });
 
+  test('older days are a heading and a count until they are opened', async () => {
+    // A list that renders every day it has ever recorded pushes today off the
+    // screen by the second week.
+    const day = (offset: number) => {
+      const when = new Date();
+      when.setDate(when.getDate() - offset);
+      return when.toISOString();
+    };
+    mockBackend({
+      list_meetings: [
+        meeting({ id: 'm-0', title: 'Today call', created_at: day(0) }),
+        meeting({ id: 'm-1', title: 'Yesterday call', created_at: day(1) }),
+        meeting({ id: 'm-2a', title: 'Old call one', created_at: day(6) }),
+        meeting({ id: 'm-2b', title: 'Old call two', created_at: day(6) }),
+      ],
+    });
+    render(<MeetingsPage />);
+
+    // The two most recent days are open.
+    expect(await screen.findByText('Today call')).toBeInTheDocument();
+    expect(screen.getByText('Yesterday call')).toBeInTheDocument();
+
+    // The older one is a count, and opens on a click.
+    expect(screen.queryByText('Old call one')).not.toBeInTheDocument();
+    const older = screen.getByText('2 meetings');
+    expect(older).toBeInTheDocument();
+    fireEvent.click(older);
+    expect(await screen.findByText('Old call one')).toBeInTheDocument();
+    expect(screen.getByText('Old call two')).toBeInTheDocument();
+  });
+
+  test('a search shows what it found rather than hiding it behind a heading', async () => {
+    const when = new Date();
+    when.setDate(when.getDate() - 30);
+    mockBackend({
+      list_meetings: [
+        meeting({ id: 'm-0', title: 'Today call' }),
+        meeting({ id: 'm-1', title: 'Yesterday call' }),
+        meeting({ id: 'm-2', title: 'Budget review', created_at: when.toISOString() }),
+      ],
+    });
+    render(<MeetingsPage />);
+
+    await screen.findByText('Today call');
+    fireEvent.change(screen.getByRole('textbox', { name: /search meetings/i }), {
+      target: { value: 'budget' },
+    });
+    expect(await screen.findByText('Budget review')).toBeInTheDocument();
+  });
+
   test('secondary actions live in the overflow menu rather than a row of icons', async () => {
     mockBackend({ get_meeting: recordedMeetingDetail() });
     render(<MeetingsPage />);
@@ -732,7 +823,9 @@ describe('MeetingsPage', () => {
     render(<MeetingsPage />);
     fireEvent.click(await screen.findByText('Weekly sync'));
 
-    expect(await screen.findByText('Payal')).toBeInTheDocument();
+    // Named twice on purpose: once as the line's speaker, and once in the
+    // banner as somebody who was in the meeting.
+    expect(await screen.findAllByText('Payal')).toHaveLength(2);
     expect(screen.queryByText('Others')).not.toBeInTheDocument();
   });
 
@@ -789,6 +882,63 @@ describe('MeetingsPage', () => {
     );
   });
 
+  test('a meeting being read is what the banner is about, not starting another', async () => {
+    // Offering to start a second meeting from inside the first is an
+    // invitation to a mistake.
+    mockBackend({ get_meeting: recordedMeetingDetail() });
+    render(<MeetingsPage />);
+    expect(await screen.findByRole('button', { name: /start meeting/i })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    await screen.findByRole('button', { name: /all meetings/i });
+    expect(screen.queryByRole('button', { name: /start meeting/i })).not.toBeInTheDocument();
+    // The banner is the meeting: its name, its recording, its actions.
+    expect(screen.getByRole('heading', { name: 'Weekly sync' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /play recording/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /more actions/i })).toBeInTheDocument();
+  });
+
+  test('a live recording keeps its stop control while its transcript is watched', async () => {
+    // The banner changing must not take the only way to stop the recording
+    // with it.
+    mockBackend({
+      get_meeting_recording_status: {
+        ...idleStatus,
+        active: true,
+        meeting_id: 'meeting-1',
+        elapsed_seconds: 42,
+      },
+      get_meeting: recordedMeetingDetail(),
+    });
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  test('adding a report to the graph is offered by the report, not by the meeting menu', async () => {
+    mockBackend({
+      get_meeting: recordedMeetingDetail({
+        summary: {
+          markdown: '# Notes\n\nWe agreed to ship.',
+          status: 'completed',
+          template_id: 'general',
+          model: 'llama3.2:latest',
+          chunk_count: 1,
+          processing_ms: 900,
+        },
+      }),
+    });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /more actions/i }));
+    expect(screen.queryByRole('menuitem', { name: /add to graph/i })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: /add to graph/i })).toBeInTheDocument();
+  });
+
   test('the calendar shows what is coming up and links to notes already recorded', async () => {
     const tomorrow = new Date(Date.now() + 86_400_000);
     const date = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
@@ -831,5 +981,214 @@ describe('MeetingsPage', () => {
     render(<MeetingsPage />);
     await screen.findByText('Weekly sync');
     expect(screen.queryByText('Coming up')).not.toBeInTheDocument();
+  });
+
+  describe('the agenda', () => {
+    // A fixed clock. Every one of these tests turns on what day an event is
+    // on relative to now, which is not a thing to leave to whatever time the
+    // suite happens to run at.
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date(2026, 8, 14, 16, 0, 0));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Puts `events` on the agenda, each under its own day. */
+    const withAgenda = (events: CalendarEvent[], overrides: Record<string, unknown> = {}) => {
+      const days = new Map<string, CalendarEvent[]>();
+      for (const event of events) {
+        const date = dayOf(event);
+        days.set(date, [...(days.get(date) ?? []), event]);
+      }
+      mockBackend({
+        get_calendar_agenda: [...days.entries()].map(([date, items]) => ({
+          date,
+          events: items,
+        })),
+        list_calendar_accounts: [account('me@work.com')],
+        ...overrides,
+      });
+    };
+
+    test('a meeting on today can be joined without leaving Vox', async () => {
+      withAgenda([calendarEvent(18, { title: 'Campus Learning Weekly Check-in' })]);
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^join$/i }));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('open_calendar_link', {
+          url: 'https://meet.google.com/abc-defg-hij',
+        }),
+      );
+    });
+
+    test('a meeting earlier today is still joinable, because a call can resume', async () => {
+      withAgenda([
+        calendarEvent(10, {
+          title: 'Morning standup',
+          // Still running at 16:00, so it is on the agenda at all.
+          end: new Date(2026, 8, 14, 17, 0).toISOString(),
+        }),
+      ]);
+      render(<MeetingsPage />);
+      expect(await screen.findByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test("a meeting on another day shows it has a link but does not offer to open it", async () => {
+      const tomorrow = new Date(2026, 8, 15, 10, 0);
+      withAgenda([
+        calendarEvent(10, {
+          id: 'evt-tomorrow',
+          title: 'Tomorrow sync',
+          start: tomorrow.toISOString(),
+          end: new Date(tomorrow.getTime() + 30 * 60_000).toISOString(),
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      await screen.findByText('Tomorrow sync');
+      expect(screen.queryByRole('button', { name: /^join$/i })).not.toBeInTheDocument();
+      expect(screen.getByTitle(/opens on the day/i)).toBeInTheDocument();
+    });
+
+    test('a meeting the user declined is struck through and stays joinable', async () => {
+      // Declining a series and dropping into one of its meetings is normal, so
+      // the strike-through is a statement about the invitation, not a lock.
+      withAgenda([
+        calendarEvent(18, {
+          title: 'Campus Learning Weekly Check-in',
+          attendance: 'declined',
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      const title = await screen.findByText('Campus Learning Weekly Check-in');
+      expect(title.className).toMatch(/line-through/);
+      expect(screen.getByText('Declined')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test('two connected calendars are named in a key, so a row can be placed', async () => {
+      withAgenda(
+        [
+          calendarEvent(18, { title: 'Work sync', account_email: 'me@work.com' }),
+          calendarEvent(19, {
+            id: 'evt-life',
+            title: 'Dentist',
+            account_email: 'me@gmail.com',
+          }),
+        ],
+        {
+          list_calendar_accounts: [
+            account('me@work.com', { display_name: 'Work' }),
+            account('me@gmail.com', { display_name: 'Personal' }),
+          ],
+        },
+      );
+      render(<MeetingsPage />);
+
+      expect(await screen.findByText('Work')).toBeInTheDocument();
+      expect(screen.getByText('Personal')).toBeInTheDocument();
+    });
+
+    test('one calendar needs no colour key', async () => {
+      withAgenda([calendarEvent(18)], {
+        list_calendar_accounts: [account('me@work.com', { display_name: 'Work' })],
+      });
+      render(<MeetingsPage />);
+      await screen.findByText('Scrum Call');
+      expect(screen.queryByText('Work')).not.toBeInTheDocument();
+    });
+
+    test("the invitation's own notes are readable without opening the calendar", async () => {
+      withAgenda([
+        calendarEvent(18, {
+          description: 'Agenda:\n• Budget\n• Hiring',
+          location: 'Room 4',
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /show details for scrum call/i }));
+      expect(await screen.findByText(/Agenda:/)).toBeInTheDocument();
+      expect(screen.getByText('Room 4')).toBeInTheDocument();
+    });
+
+    test('an invitation with nothing written on it offers nothing to expand', async () => {
+      withAgenda([calendarEvent(18)]);
+      render(<MeetingsPage />);
+      await screen.findByText('Scrum Call');
+      expect(screen.queryByRole('button', { name: /show details/i })).not.toBeInTheDocument();
+    });
+
+    test('the calendar can be re-synced from the meetings page', async () => {
+      // Noticing a meeting is missing happens here, not in Settings.
+      withAgenda([calendarEvent(18)]);
+      render(<MeetingsPage />);
+
+      await screen.findByText('Scrum Call');
+      vi.mocked(invoke).mockClear();
+      fireEvent.click(screen.getByRole('button', { name: /^sync$/i }));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('sync_calendars'),
+      );
+    });
+
+    test('the week can be opened from the banner, with every account in it', async () => {
+      withAgenda(
+        [
+          calendarEvent(18, { title: 'Work sync', account_email: 'me@work.com' }),
+          calendarEvent(19, {
+            id: 'evt-life',
+            title: 'Dentist',
+            account_email: 'me@gmail.com',
+          }),
+        ],
+        {
+          list_calendar_accounts: [
+            account('me@work.com', { display_name: 'Work' }),
+            account('me@gmail.com', { display_name: 'Personal' }),
+          ],
+        },
+      );
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^calendar$/i }));
+      const week = within(await screen.findByRole('dialog'));
+      expect(week.getByText('Work sync')).toBeInTheDocument();
+      expect(week.getByText('Dentist')).toBeInTheDocument();
+      // The key is what makes the colours mean anything.
+      expect(week.getByText('Work')).toBeInTheDocument();
+      expect(week.getByText('Personal')).toBeInTheDocument();
+      expect(week.getByRole('button', { name: /previous week/i })).toBeInTheDocument();
+    });
+
+    test('a week with nothing in it is still a week, not an error', async () => {
+      withAgenda([calendarEvent(18)]);
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^calendar$/i }));
+      const week = within(await screen.findByRole('dialog'));
+      fireEvent.click(week.getByRole('button', { name: /next week/i }));
+      expect(week.queryByText('Scrum Call')).not.toBeInTheDocument();
+      fireEvent.click(week.getByRole('button', { name: /this week/i }));
+      expect(week.getByText('Scrum Call')).toBeInTheDocument();
+    });
+
+    test('no connected calendar means no calendar button', async () => {
+      mockBackend({ get_calendar_agenda: [], list_calendar_accounts: [] });
+      render(<MeetingsPage />);
+      await screen.findByText('Weekly sync');
+      expect(screen.queryByRole('button', { name: /^calendar$/i })).not.toBeInTheDocument();
+    });
+
+    test('with no calendar connected there is nothing to sync', async () => {
+      mockBackend({ get_calendar_agenda: [], list_calendar_accounts: [] });
+      render(<MeetingsPage />);
+      await screen.findByText('Weekly sync');
+      expect(screen.queryByRole('button', { name: /^sync$/i })).not.toBeInTheDocument();
+    });
   });
 });

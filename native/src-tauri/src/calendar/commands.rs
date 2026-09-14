@@ -13,6 +13,7 @@ use crate::oauth::{start_desktop_oauth_flow, OAuthTokens, SCOPE_CALENDAR_READONL
 use super::agenda::{self, RecordingWindow};
 use super::google::{self, CalendarApiError, CalendarSummary};
 use super::model::{CalendarAccount, DayAgenda};
+use super::parse;
 use super::store::CalendarStore;
 
 /// Days of history and of future a sync asks Google for.
@@ -328,6 +329,47 @@ fn recording_windows(state: &State<'_, AppState>) -> Vec<RecordingWindow> {
             })
         })
         .collect()
+}
+
+/// Opens a link that came off the calendar, in whatever the OS uses for links.
+///
+/// Two guards, and they are not the same guard. The scheme check
+/// ([`parse::is_web_url`]) is what stops the opener — which hands what it is
+/// given to the shell — from being asked to run a local file. The cache lookup
+/// is what makes the command unable to open a URL that is not on one of the
+/// user's own events: the frontend passes a string, and a command that opens
+/// any string it is handed is a command the rest of the app can be tricked
+/// into calling.
+#[tauri::command]
+pub fn open_calendar_link(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(), CommandError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let url = url.trim().to_string();
+    if !parse::is_web_url(&url) {
+        return Err(CommandError::new(
+            "CALENDAR_LINK_REFUSED",
+            "That link is not a web address, so Vox will not open it.",
+        ));
+    }
+
+    let known = calendar_store(&state).load_events().into_iter().any(|event| {
+        event.conference_url.as_deref() == Some(url.as_str())
+            || event.html_link.as_deref() == Some(url.as_str())
+    });
+    if !known {
+        return Err(CommandError::new(
+            "CALENDAR_LINK_REFUSED",
+            "That link is not on any event in your calendar. Sync and try again.",
+        ));
+    }
+
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|err| CommandError::new("CALENDAR_LINK_FAILED", &err.to_string()))
 }
 
 /// The OAuth client Vox signs in with.

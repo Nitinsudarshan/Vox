@@ -501,6 +501,7 @@ pub fn run() {
             calendar::commands::set_account_calendars,
             calendar::commands::sync_calendars,
             calendar::commands::get_calendar_agenda,
+            calendar::commands::open_calendar_link,
             meetings::commands::detect_meeting_speakers,
             meetings::commands::rename_meeting_speaker,
             meetings::commands::cancel_meeting_import,

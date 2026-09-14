@@ -1,6 +1,6 @@
 import React from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Radio } from 'lucide-react';
+import { CalendarDays, Radio } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/common/PageHeader';
@@ -9,10 +9,11 @@ import { MeetingModelGate } from './MeetingModelGate';
 import { MeetingIndex } from './MeetingIndex';
 import { MeetingView } from './MeetingView';
 import { RetranscribeDialog } from './RetranscribeDialog';
+import { CalendarDialog } from './calendar/CalendarDialog';
 import * as meetings from '@/lib/meetings';
 import { meetingErrorMessage, type RetranscribeOverrides } from '@/lib/meetings';
 import * as calendar from '@/lib/calendar';
-import type { DayAgenda } from '@/types/calendar';
+import type { CalendarAccount, CalendarEvent, DayAgenda } from '@/types/calendar';
 import {
   MEETING_EVENTS,
   type MeetingDetail as MeetingDetailData,
@@ -79,12 +80,14 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [translatingTranscript, setTranslatingTranscript] = React.useState(false);
   const [detectingSpeakers, setDetectingSpeakers] = React.useState(false);
   const [retranscribeOpen, setRetranscribeOpen] = React.useState(false);
+  const [calendarOpen, setCalendarOpen] = React.useState(false);
   const [retranscribing, setRetranscribing] = React.useState(false);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
   /** The saved microphone/output choice. Empty means "let Vox decide". */
   const [devices, setDevices] = React.useState<MeetingDevices>({});
   const [agenda, setAgenda] = React.useState<DayAgenda[]>([]);
+  const [accounts, setAccounts] = React.useState<CalendarAccount[]>([]);
   const [agendaSyncing, setAgendaSyncing] = React.useState(false);
   const [message, setMessage] = React.useState<{ kind: 'info' | 'error'; text: string } | null>(
     null,
@@ -129,7 +132,30 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       // page. Settings › Calendar is where the failure belongs.
       setAgenda([]);
     }
+    try {
+      // The accounts are what colour the agenda's rows, so they are read
+      // alongside it rather than once at mount: connecting a second account in
+      // Settings and coming back must not leave both calendars the same shade.
+      setAccounts((await calendar.listCalendarAccounts()) ?? []);
+    } catch {
+      setAccounts([]);
+    }
   }, []);
+
+  /** Re-reads every connected calendar, from the meetings page itself. */
+  const syncCalendars = React.useCallback(async () => {
+    setAgendaSyncing(true);
+    try {
+      await calendar.syncCalendars();
+      await refreshAgenda();
+    } catch {
+      // Per-account failures are recorded against the account and shown in
+      // Settings › Calendar; a sync that fails entirely leaves the cached
+      // agenda on screen, which is the useful thing to do with it.
+    } finally {
+      setAgendaSyncing(false);
+    }
+  }, [refreshAgenda]);
 
   React.useEffect(() => {
     void refreshList();
@@ -152,15 +178,9 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       .then((saved) => setDevices(saved ?? {}))
       .catch(() => undefined);
 
-    // Sync in the background and refresh once it lands. The agenda above has
-    // already rendered from the cache, so a slow or failing sync costs nothing
-    // the user is waiting on.
-    setAgendaSyncing(true);
-    void calendar
-      .syncCalendars()
-      .then(() => refreshAgenda())
-      .catch(() => undefined)
-      .finally(() => setAgendaSyncing(false));
+    // Sync in the background. The agenda above has already rendered from the
+    // cache, so a slow or failing sync costs nothing the user is waiting on.
+    void syncCalendars();
     // Templates and the initial list are read once; everything after is driven
     // by events and by explicit refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -371,6 +391,13 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       await Promise.all([refreshDetail(selectedId), refreshList()]);
     });
 
+  /** Opens an invitation's video link in the browser. */
+  const handleJoin = (event: CalendarEvent) =>
+    run(async () => {
+      if (!event.conference_url) return;
+      await calendar.openCalendarLink(event.conference_url);
+    });
+
   const handlePromote = () =>
     run(async () => {
       if (!selectedId) return;
@@ -401,43 +428,64 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <PageHeader
-        title="Meetings &"
-        highlightText="Calls"
-        description="Record both sides of a call, transcribe locally on device, and turn conversations into reports."
-        glowColor="emerald"
-        compact
-      >
-        <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
-          <MeetingModelGate
-            mode="status-only"
-            key={`status-${modelGateNonce}`}
-            onOpenSpeechSettings={onOpenSpeechSettings}
-          />
-          {status.active ? (
-            <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-              </span>
-              <span className="text-xs font-mono font-medium text-red-500 dark:text-red-400">
-                Recording in progress
-              </span>
-            </div>
-          ) : (
-            <Button
-              onClick={handleStart}
-              disabled={busy}
-              className="h-8 px-3.5 gap-2 shrink-0 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-xs transition-all active:scale-[0.98]"
-            >
-              <Radio className="w-3.5 h-3.5 text-white" />
-              <span>Start recording</span>
-            </Button>
-          )}
-        </div>
-      </PageHeader>
+      {/* The banner belongs to whatever is on screen. On the index it is the
+          meetings surface and the way into a new one; inside a meeting it is
+          that meeting, because offering to start a second one from inside the
+          first is an invitation to a mistake. */}
+      {!detail && (
+        <PageHeader
+          title="Meetings &"
+          highlightText="Calls"
+          description="Join, record and transcribe your calls on this device, and turn them into reports."
+          glowColor="emerald"
+          compact
+        >
+          <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
+            <MeetingModelGate
+              mode="status-only"
+              key={`status-${modelGateNonce}`}
+              onOpenSpeechSettings={onOpenSpeechSettings}
+            />
+            {accounts.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCalendarOpen(true)}
+                className="h-8 px-3 gap-2 shrink-0 text-xs font-medium"
+              >
+                <CalendarDays className="w-3.5 h-3.5" />
+                <span>Calendar</span>
+              </Button>
+            )}
+            {status.active ? (
+              <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+                </span>
+                <span className="text-xs font-mono font-medium text-red-500 dark:text-red-400">
+                  Meeting in progress
+                </span>
+              </div>
+            ) : (
+              <Button
+                onClick={handleStart}
+                disabled={busy}
+                className="h-8 px-3.5 gap-2 shrink-0 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-xs transition-all active:scale-[0.98]"
+              >
+                <Radio className="w-3.5 h-3.5 text-white" />
+                <span>Start meeting</span>
+              </Button>
+            )}
+          </div>
+        </PageHeader>
+      )}
 
-      <div className="shrink-0 space-y-3">
+      <div className="shrink-0 space-y-3 empty:hidden">
+        {/* Rendered whatever is on screen: it is the live meeting's own
+            controls, and a recording you cannot stop from the meeting you are
+            watching it produce is not a control surface. It draws nothing when
+            no meeting is running. */}
         <MeetingRecorder
           status={status}
           busy={busy}
@@ -454,12 +502,14 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
           }}
           onStop={handleStop}
         />
-        <MeetingModelGate
-          mode="card-only"
-          key={`card-${modelGateNonce}`}
-          onOpenSpeechSettings={onOpenSpeechSettings}
-          onModelInstalled={() => notify('info', 'Speech model installed. Recording is ready.')}
-        />
+        {!detail && (
+          <MeetingModelGate
+            mode="card-only"
+            key={`card-${modelGateNonce}`}
+            onOpenSpeechSettings={onOpenSpeechSettings}
+            onModelInstalled={() => notify('info', 'Speech model installed. Meetings are ready.')}
+          />
+        )}
         {message && (
           <p
             role="status"
@@ -472,7 +522,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         )}
       </div>
 
-      <div className="flex-1 min-h-0 mt-4">
+      <div className="flex-1 min-h-0 mt-3">
         {detail ? (
           <MeetingView
             detail={detail}
@@ -518,11 +568,28 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
             onImport={handleImport}
             busy={busy}
             agenda={agenda}
+            accounts={accounts}
             agendaSyncing={agendaSyncing}
+            onSyncCalendars={() => void syncCalendars()}
+            onJoin={handleJoin}
             onConnectCalendar={onOpenCalendarSettings}
           />
         )}
       </div>
+
+      <CalendarDialog
+        open={calendarOpen}
+        onOpenChange={setCalendarOpen}
+        agenda={agenda}
+        accounts={accounts}
+        syncing={agendaSyncing}
+        onSync={() => void syncCalendars()}
+        onOpenNotes={(meetingId) => {
+          setCalendarOpen(false);
+          setSelectedId(meetingId);
+        }}
+        onJoin={handleJoin}
+      />
 
       <RetranscribeDialog
         open={retranscribeOpen}
