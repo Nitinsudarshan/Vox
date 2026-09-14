@@ -119,15 +119,15 @@ pub async fn start_desktop_oauth_flow(
         let state_valid = state_opt.as_ref() == Some(&expected_state);
         let success = code_opt.is_some() && state_valid && error_opt.is_none();
 
-        // Render clean, modern, dark-themed response to browser
+        // Render clean, modern, responsive light/dark response with Vox logo to browser
         let (html_body, status_line) = if success {
             (
-                r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Relay Authorization</title></head><body style="font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#090d16;color:#f8fafc;"><div style="text-align:center;padding:36px;background:#131b2e;border:1px solid #1e293b;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,0.6);max-width:400px;"><h2 style="color:#10b981;margin:0 0 12px 0;font-size:22px;">✓ Connected to Relay</h2><p style="color:#94a3b8;font-size:14px;line-height:1.5;margin:0 0 20px 0;">Google authorization was successful. You can close this browser tab and return to the Relay desktop application.</p><div style="font-size:12px;color:#64748b;font-family:monospace;">RELAY SECURE OAUTH</div></div></body></html>"#,
+                super::page::render_success_page(),
                 "HTTP/1.1 200 OK",
             )
         } else {
             (
-                r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Relay Authorization</title></head><body style="font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#090d16;color:#f8fafc;"><div style="text-align:center;padding:36px;background:#131b2e;border:1px solid #1e293b;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,0.6);max-width:400px;"><h2 style="color:#ef4444;margin:0 0 12px 0;font-size:22px;">✗ Authorization Failed</h2><p style="color:#94a3b8;font-size:14px;line-height:1.5;margin:0 0 20px 0;">Google sign-in was canceled, or the OAuth security state was invalid. Please try again in Relay.</p></div></body></html>"#,
+                super::page::render_error_page(None),
                 "HTTP/1.1 400 Bad Request",
             )
         };
