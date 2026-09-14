@@ -43,6 +43,16 @@ export const syncCalendars = (): Promise<CalendarAccount[]> => invoke('sync_cale
 /** The cached agenda, with recordings already matched to events. */
 export const getCalendarAgenda = (): Promise<DayAgenda[]> => invoke('get_calendar_agenda');
 
+/**
+ * Opens a join link, or an event in Google Calendar, in the default browser.
+ *
+ * The backend refuses anything that is not `http(s)` and anything that is not
+ * on one of the user's own cached events, so this cannot be used to open an
+ * arbitrary URL — which is why it is a command rather than an `<a href>`.
+ */
+export const openCalendarLink = (url: string): Promise<void> =>
+  invoke('open_calendar_link', { url });
+
 // --- formatting ---------------------------------------------------------
 
 /** `HH:MM` for a timed event; nothing for an all-day one. */

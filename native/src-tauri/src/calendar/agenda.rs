@@ -238,6 +238,7 @@ mod tests {
             location: None,
             conference_url: None,
             html_link: None,
+            description: None,
             attendees: Vec::new(),
             attendance: Attendance::Unknown,
             meeting_id: None,

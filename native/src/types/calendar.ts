@@ -54,6 +54,13 @@ export interface CalendarEvent {
   location?: string | null;
   conference_url?: string | null;
   html_link?: string | null;
+  /**
+   * The invitation's own notes — agenda, dial-in, links — as plain text.
+   *
+   * Google stores this as HTML; the Rust side flattens it, so this is text to
+   * render as text and never as markup.
+   */
+  description?: string | null;
   attendees: EventAttendee[];
   attendance: Attendance;
   /** A recording Vox made that covers this event's time, once one exists. */
