@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { MeetingsPage } from './MeetingsPage';
 import { MeetingSettingsView } from '../settings/MeetingSettingsView';
 import type { MeetingListItem, MeetingRecordingStatus } from '@/types/meetings';
+import type { CalendarAccount, CalendarEvent } from '@/types/calendar';
 
 const idleStatus: MeetingRecordingStatus = {
   active: false,
@@ -37,6 +38,46 @@ const meeting = (overrides: Partial<MeetingListItem> = {}): MeetingListItem => (
   preview: 'we agreed to ship the migration',
   ...overrides,
 });
+
+/** A connected Google account, as `list_calendar_accounts` returns one. */
+const account = (email: string, overrides: Partial<CalendarAccount> = {}): CalendarAccount => ({
+  email,
+  display_name: null,
+  enabled: true,
+  calendar_ids: [],
+  last_synced_at: null,
+  last_error: null,
+  ...overrides,
+});
+
+/** An event on the fixed test clock's own day, at `hour` local. */
+const calendarEvent = (
+  hour: number,
+  overrides: Partial<CalendarEvent> = {},
+): CalendarEvent => {
+  const start = new Date(2026, 8, 14, hour, 0);
+  return {
+    id: `evt-${hour}`,
+    account_email: 'me@work.com',
+    calendar_id: 'primary',
+    title: 'Scrum Call',
+    start: start.toISOString(),
+    end: new Date(start.getTime() + 30 * 60_000).toISOString(),
+    all_day: false,
+    conference_url: 'https://meet.google.com/abc-defg-hij',
+    attendees: [],
+    attendance: 'accepted',
+    ...overrides,
+  };
+};
+
+/** `YYYY-MM-DD` for an event, the way the backend groups days. */
+const dayOf = (event: CalendarEvent): string => {
+  const start = new Date(event.start);
+  return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(
+    start.getDate(),
+  ).padStart(2, '0')}`;
+};
 
 /** Routes each command to a canned answer, so a test only states what differs. */
 function mockBackend(overrides: Record<string, unknown> = {}) {
@@ -831,5 +872,166 @@ describe('MeetingsPage', () => {
     render(<MeetingsPage />);
     await screen.findByText('Weekly sync');
     expect(screen.queryByText('Coming up')).not.toBeInTheDocument();
+  });
+
+  describe('the agenda', () => {
+    // A fixed clock. Every one of these tests turns on what day an event is
+    // on relative to now, which is not a thing to leave to whatever time the
+    // suite happens to run at.
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date(2026, 8, 14, 16, 0, 0));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Puts `events` on the agenda, each under its own day. */
+    const withAgenda = (events: CalendarEvent[], overrides: Record<string, unknown> = {}) => {
+      const days = new Map<string, CalendarEvent[]>();
+      for (const event of events) {
+        const date = dayOf(event);
+        days.set(date, [...(days.get(date) ?? []), event]);
+      }
+      mockBackend({
+        get_calendar_agenda: [...days.entries()].map(([date, items]) => ({
+          date,
+          events: items,
+        })),
+        list_calendar_accounts: [account('me@work.com')],
+        ...overrides,
+      });
+    };
+
+    test('a meeting on today can be joined without leaving Vox', async () => {
+      withAgenda([calendarEvent(18, { title: 'Campus Learning Weekly Check-in' })]);
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^join$/i }));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('open_calendar_link', {
+          url: 'https://meet.google.com/abc-defg-hij',
+        }),
+      );
+    });
+
+    test('a meeting earlier today is still joinable, because a call can resume', async () => {
+      withAgenda([
+        calendarEvent(10, {
+          title: 'Morning standup',
+          // Still running at 16:00, so it is on the agenda at all.
+          end: new Date(2026, 8, 14, 17, 0).toISOString(),
+        }),
+      ]);
+      render(<MeetingsPage />);
+      expect(await screen.findByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test("a meeting on another day shows it has a link but does not offer to open it", async () => {
+      const tomorrow = new Date(2026, 8, 15, 10, 0);
+      withAgenda([
+        calendarEvent(10, {
+          id: 'evt-tomorrow',
+          title: 'Tomorrow sync',
+          start: tomorrow.toISOString(),
+          end: new Date(tomorrow.getTime() + 30 * 60_000).toISOString(),
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      await screen.findByText('Tomorrow sync');
+      expect(screen.queryByRole('button', { name: /^join$/i })).not.toBeInTheDocument();
+      expect(screen.getByTitle(/opens on the day/i)).toBeInTheDocument();
+    });
+
+    test('a meeting the user declined is struck through and stays joinable', async () => {
+      // Declining a series and dropping into one of its meetings is normal, so
+      // the strike-through is a statement about the invitation, not a lock.
+      withAgenda([
+        calendarEvent(18, {
+          title: 'Campus Learning Weekly Check-in',
+          attendance: 'declined',
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      const title = await screen.findByText('Campus Learning Weekly Check-in');
+      expect(title.className).toMatch(/line-through/);
+      expect(screen.getByText('Declined')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test('two connected calendars are named in a key, so a row can be placed', async () => {
+      withAgenda(
+        [
+          calendarEvent(18, { title: 'Work sync', account_email: 'me@work.com' }),
+          calendarEvent(19, {
+            id: 'evt-life',
+            title: 'Dentist',
+            account_email: 'me@gmail.com',
+          }),
+        ],
+        {
+          list_calendar_accounts: [
+            account('me@work.com', { display_name: 'Work' }),
+            account('me@gmail.com', { display_name: 'Personal' }),
+          ],
+        },
+      );
+      render(<MeetingsPage />);
+
+      expect(await screen.findByText('Work')).toBeInTheDocument();
+      expect(screen.getByText('Personal')).toBeInTheDocument();
+    });
+
+    test('one calendar needs no colour key', async () => {
+      withAgenda([calendarEvent(18)], {
+        list_calendar_accounts: [account('me@work.com', { display_name: 'Work' })],
+      });
+      render(<MeetingsPage />);
+      await screen.findByText('Scrum Call');
+      expect(screen.queryByText('Work')).not.toBeInTheDocument();
+    });
+
+    test("the invitation's own notes are readable without opening the calendar", async () => {
+      withAgenda([
+        calendarEvent(18, {
+          description: 'Agenda:\n• Budget\n• Hiring',
+          location: 'Room 4',
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /show details for scrum call/i }));
+      expect(await screen.findByText(/Agenda:/)).toBeInTheDocument();
+      expect(screen.getByText('Room 4')).toBeInTheDocument();
+    });
+
+    test('an invitation with nothing written on it offers nothing to expand', async () => {
+      withAgenda([calendarEvent(18)]);
+      render(<MeetingsPage />);
+      await screen.findByText('Scrum Call');
+      expect(screen.queryByRole('button', { name: /show details/i })).not.toBeInTheDocument();
+    });
+
+    test('the calendar can be re-synced from the meetings page', async () => {
+      // Noticing a meeting is missing happens here, not in Settings.
+      withAgenda([calendarEvent(18)]);
+      render(<MeetingsPage />);
+
+      await screen.findByText('Scrum Call');
+      vi.mocked(invoke).mockClear();
+      fireEvent.click(screen.getByRole('button', { name: /^sync$/i }));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('sync_calendars'),
+      );
+    });
+
+    test('with no calendar connected there is nothing to sync', async () => {
+      mockBackend({ get_calendar_agenda: [], list_calendar_accounts: [] });
+      render(<MeetingsPage />);
+      await screen.findByText('Weekly sync');
+      expect(screen.queryByRole('button', { name: /^sync$/i })).not.toBeInTheDocument();
+    });
   });
 });

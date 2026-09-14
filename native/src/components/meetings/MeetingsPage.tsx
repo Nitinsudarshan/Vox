@@ -12,7 +12,7 @@ import { RetranscribeDialog } from './RetranscribeDialog';
 import * as meetings from '@/lib/meetings';
 import { meetingErrorMessage, type RetranscribeOverrides } from '@/lib/meetings';
 import * as calendar from '@/lib/calendar';
-import type { DayAgenda } from '@/types/calendar';
+import type { CalendarAccount, CalendarEvent, DayAgenda } from '@/types/calendar';
 import {
   MEETING_EVENTS,
   type MeetingDetail as MeetingDetailData,
@@ -85,6 +85,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   /** The saved microphone/output choice. Empty means "let Vox decide". */
   const [devices, setDevices] = React.useState<MeetingDevices>({});
   const [agenda, setAgenda] = React.useState<DayAgenda[]>([]);
+  const [accounts, setAccounts] = React.useState<CalendarAccount[]>([]);
   const [agendaSyncing, setAgendaSyncing] = React.useState(false);
   const [message, setMessage] = React.useState<{ kind: 'info' | 'error'; text: string } | null>(
     null,
@@ -129,7 +130,30 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       // page. Settings › Calendar is where the failure belongs.
       setAgenda([]);
     }
+    try {
+      // The accounts are what colour the agenda's rows, so they are read
+      // alongside it rather than once at mount: connecting a second account in
+      // Settings and coming back must not leave both calendars the same shade.
+      setAccounts((await calendar.listCalendarAccounts()) ?? []);
+    } catch {
+      setAccounts([]);
+    }
   }, []);
+
+  /** Re-reads every connected calendar, from the meetings page itself. */
+  const syncCalendars = React.useCallback(async () => {
+    setAgendaSyncing(true);
+    try {
+      await calendar.syncCalendars();
+      await refreshAgenda();
+    } catch {
+      // Per-account failures are recorded against the account and shown in
+      // Settings › Calendar; a sync that fails entirely leaves the cached
+      // agenda on screen, which is the useful thing to do with it.
+    } finally {
+      setAgendaSyncing(false);
+    }
+  }, [refreshAgenda]);
 
   React.useEffect(() => {
     void refreshList();
@@ -152,15 +176,9 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       .then((saved) => setDevices(saved ?? {}))
       .catch(() => undefined);
 
-    // Sync in the background and refresh once it lands. The agenda above has
-    // already rendered from the cache, so a slow or failing sync costs nothing
-    // the user is waiting on.
-    setAgendaSyncing(true);
-    void calendar
-      .syncCalendars()
-      .then(() => refreshAgenda())
-      .catch(() => undefined)
-      .finally(() => setAgendaSyncing(false));
+    // Sync in the background. The agenda above has already rendered from the
+    // cache, so a slow or failing sync costs nothing the user is waiting on.
+    void syncCalendars();
     // Templates and the initial list are read once; everything after is driven
     // by events and by explicit refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -371,6 +389,13 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       await Promise.all([refreshDetail(selectedId), refreshList()]);
     });
 
+  /** Opens an invitation's video link in the browser. */
+  const handleJoin = (event: CalendarEvent) =>
+    run(async () => {
+      if (!event.conference_url) return;
+      await calendar.openCalendarLink(event.conference_url);
+    });
+
   const handlePromote = () =>
     run(async () => {
       if (!selectedId) return;
@@ -518,7 +543,10 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
             onImport={handleImport}
             busy={busy}
             agenda={agenda}
+            accounts={accounts}
             agendaSyncing={agendaSyncing}
+            onSyncCalendars={() => void syncCalendars()}
+            onJoin={handleJoin}
             onConnectCalendar={onOpenCalendarSettings}
           />
         )}

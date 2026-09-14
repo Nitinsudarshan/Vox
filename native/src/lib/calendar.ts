@@ -130,3 +130,137 @@ export function agendaDayLabel(date: string, now: Date = new Date()): string {
     ...(parsed.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
   });
 }
+
+// --- joining ------------------------------------------------------------
+
+/**
+ * How long before its own day a join link becomes live, in minutes.
+ *
+ * Exists for one case: a meeting at 00:15 that everybody thinks of as
+ * tonight's. Without the lead it becomes reachable fifteen minutes after it
+ * started.
+ */
+export const JOIN_LEAD_MINUTES = 30;
+
+/** Midnight at the start of the local day `when` falls on. */
+function startOfLocalDay(when: Date): number {
+  return new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+}
+
+/** Midnight at the end of the local day `when` falls on. */
+function endOfLocalDay(when: Date): number {
+  return new Date(when.getFullYear(), when.getMonth(), when.getDate() + 1).getTime();
+}
+
+/**
+ * Whether an event's join link should be pressable right now.
+ *
+ * Live for the whole of the event's own day, rather than for the meeting's own
+ * hour. Two things pushed the window out that far: a call that breaks and
+ * resumes on the same link an hour later, and a meeting that runs long — both
+ * of which a tight window turns into a trip to the calendar. Two things keep
+ * it from being every event Vox has synced: a link ten days out is one you
+ * only ever press by accident, and a link from last Tuesday opens a room
+ * nobody is in.
+ */
+export function canJoinEvent(event: CalendarEvent, now: Date = new Date()): boolean {
+  if (!event.conference_url) return false;
+  const start = new Date(event.start);
+  if (Number.isNaN(start.getTime())) return false;
+  const opensAt = startOfLocalDay(start) - JOIN_LEAD_MINUTES * 60_000;
+  return now.getTime() >= opensAt && now.getTime() < endOfLocalDay(start);
+}
+
+/** Why a join link is not pressable yet, for the control's tooltip. */
+export function joinUnavailableReason(event: CalendarEvent, now: Date = new Date()): string {
+  if (!event.conference_url) return 'No video link on this invitation.';
+  const start = new Date(event.start);
+  if (Number.isNaN(start.getTime())) return 'This event has no usable start time.';
+  if (now.getTime() >= endOfLocalDay(start)) return 'This meeting was on an earlier day.';
+  return 'Opens on the day of the meeting.';
+}
+
+/** Whether the user said no to this invitation. */
+export function isDeclined(event: CalendarEvent): boolean {
+  return event.attendance === 'declined';
+}
+
+// --- telling the accounts apart -----------------------------------------
+
+/**
+ * The colours accounts are distinguished by, in the order they are handed out.
+ *
+ * Six, because nobody keeps seven Google accounts, and hue rather than shade
+ * because two accounts have to be told apart at a glance in a list where every
+ * other row is also grey. Tailwind palette classes rather than tokens: these
+ * are identity colours with no semantic meaning, and the theme's own
+ * foreground/accent tokens have exactly one of each.
+ */
+export const ACCOUNT_COLORS = [
+  {
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-700 dark:text-emerald-400',
+    soft: 'bg-emerald-500/10',
+    border: 'border-l-emerald-500',
+  },
+  {
+    dot: 'bg-sky-500',
+    text: 'text-sky-700 dark:text-sky-400',
+    soft: 'bg-sky-500/10',
+    border: 'border-l-sky-500',
+  },
+  {
+    dot: 'bg-violet-500',
+    text: 'text-violet-700 dark:text-violet-400',
+    soft: 'bg-violet-500/10',
+    border: 'border-l-violet-500',
+  },
+  {
+    dot: 'bg-amber-500',
+    text: 'text-amber-700 dark:text-amber-400',
+    soft: 'bg-amber-500/10',
+    border: 'border-l-amber-500',
+  },
+  {
+    dot: 'bg-rose-500',
+    text: 'text-rose-700 dark:text-rose-400',
+    soft: 'bg-rose-500/10',
+    border: 'border-l-rose-500',
+  },
+  {
+    dot: 'bg-teal-500',
+    text: 'text-teal-700 dark:text-teal-400',
+    soft: 'bg-teal-500/10',
+    border: 'border-l-teal-500',
+  },
+] as const;
+
+export type AccountColor = (typeof ACCOUNT_COLORS)[number];
+
+/**
+ * The colour one account's events wear.
+ *
+ * Keyed on the account's position in the connected list, so the colours stay
+ * put as long as the accounts do — a colour that moves when an unrelated
+ * account syncs teaches the user nothing. An address that is not in the list
+ * (an event cached from an account since disconnected) falls back to a hash,
+ * which is stable for the same reason.
+ */
+export function accountColor(email: string, connected: string[]): AccountColor {
+  const lowered = email.trim().toLowerCase();
+  const position = connected.findIndex(
+    (candidate) => candidate.trim().toLowerCase() === lowered,
+  );
+  if (position >= 0) return ACCOUNT_COLORS[position % ACCOUNT_COLORS.length];
+
+  let hash = 0;
+  for (let index = 0; index < lowered.length; index += 1) {
+    hash = (hash * 31 + lowered.charCodeAt(index)) % 100_003;
+  }
+  return ACCOUNT_COLORS[hash % ACCOUNT_COLORS.length];
+}
+
+/** The short name an account is known by in the legend: the local part. */
+export function accountLabel(account: CalendarAccount): string {
+  return account.display_name?.trim() || account.email;
+}
