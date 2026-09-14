@@ -1,6 +1,6 @@
 import React from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Radio } from 'lucide-react';
+import { CalendarDays, Radio } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/common/PageHeader';
@@ -9,6 +9,7 @@ import { MeetingModelGate } from './MeetingModelGate';
 import { MeetingIndex } from './MeetingIndex';
 import { MeetingView } from './MeetingView';
 import { RetranscribeDialog } from './RetranscribeDialog';
+import { CalendarDialog } from './calendar/CalendarDialog';
 import * as meetings from '@/lib/meetings';
 import { meetingErrorMessage, type RetranscribeOverrides } from '@/lib/meetings';
 import * as calendar from '@/lib/calendar';
@@ -79,6 +80,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [translatingTranscript, setTranslatingTranscript] = React.useState(false);
   const [detectingSpeakers, setDetectingSpeakers] = React.useState(false);
   const [retranscribeOpen, setRetranscribeOpen] = React.useState(false);
+  const [calendarOpen, setCalendarOpen] = React.useState(false);
   const [retranscribing, setRetranscribing] = React.useState(false);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
@@ -439,6 +441,17 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
             key={`status-${modelGateNonce}`}
             onOpenSpeechSettings={onOpenSpeechSettings}
           />
+          {accounts.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCalendarOpen(true)}
+              className="h-8 px-3 gap-2 shrink-0 text-xs font-medium"
+            >
+              <CalendarDays className="w-3.5 h-3.5" />
+              <span>Calendar</span>
+            </Button>
+          )}
           {status.active ? (
             <div className="flex items-center gap-2 shrink-0 bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-lg">
               <span className="flex h-2 w-2 relative">
@@ -551,6 +564,20 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
           />
         )}
       </div>
+
+      <CalendarDialog
+        open={calendarOpen}
+        onOpenChange={setCalendarOpen}
+        agenda={agenda}
+        accounts={accounts}
+        syncing={agendaSyncing}
+        onSync={() => void syncCalendars()}
+        onOpenNotes={(meetingId) => {
+          setCalendarOpen(false);
+          setSelectedId(meetingId);
+        }}
+        onJoin={handleJoin}
+      />
 
       <RetranscribeDialog
         open={retranscribeOpen}

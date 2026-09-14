@@ -1027,6 +1027,54 @@ describe('MeetingsPage', () => {
       );
     });
 
+    test('the week can be opened from the banner, with every account in it', async () => {
+      withAgenda(
+        [
+          calendarEvent(18, { title: 'Work sync', account_email: 'me@work.com' }),
+          calendarEvent(19, {
+            id: 'evt-life',
+            title: 'Dentist',
+            account_email: 'me@gmail.com',
+          }),
+        ],
+        {
+          list_calendar_accounts: [
+            account('me@work.com', { display_name: 'Work' }),
+            account('me@gmail.com', { display_name: 'Personal' }),
+          ],
+        },
+      );
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^calendar$/i }));
+      const week = within(await screen.findByRole('dialog'));
+      expect(week.getByText('Work sync')).toBeInTheDocument();
+      expect(week.getByText('Dentist')).toBeInTheDocument();
+      // The key is what makes the colours mean anything.
+      expect(week.getByText('Work')).toBeInTheDocument();
+      expect(week.getByText('Personal')).toBeInTheDocument();
+      expect(week.getByRole('button', { name: /previous week/i })).toBeInTheDocument();
+    });
+
+    test('a week with nothing in it is still a week, not an error', async () => {
+      withAgenda([calendarEvent(18)]);
+      render(<MeetingsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^calendar$/i }));
+      const week = within(await screen.findByRole('dialog'));
+      fireEvent.click(week.getByRole('button', { name: /next week/i }));
+      expect(week.queryByText('Scrum Call')).not.toBeInTheDocument();
+      fireEvent.click(week.getByRole('button', { name: /this week/i }));
+      expect(week.getByText('Scrum Call')).toBeInTheDocument();
+    });
+
+    test('no connected calendar means no calendar button', async () => {
+      mockBackend({ get_calendar_agenda: [], list_calendar_accounts: [] });
+      render(<MeetingsPage />);
+      await screen.findByText('Weekly sync');
+      expect(screen.queryByRole('button', { name: /^calendar$/i })).not.toBeInTheDocument();
+    });
+
     test('with no calendar connected there is nothing to sync', async () => {
       mockBackend({ get_calendar_agenda: [], list_calendar_accounts: [] });
       render(<MeetingsPage />);
