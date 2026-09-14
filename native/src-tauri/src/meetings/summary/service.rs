@@ -42,7 +42,7 @@ use crate::sync::MutexExt;
 
 use super::super::model::{MeetingSummary, SummaryStatus};
 use super::super::store::{MeetingStore, MeetingStoreError};
-use super::super::transcription::{render_transcript, render_transcript_prefer_translated};
+use super::super::transcription::render_transcript_with_speakers;
 use super::processor::{self, LanguageAction, MeetingContext};
 use super::templates::{Template, TemplateLibrary, DEFAULT_TEMPLATE_ID};
 
@@ -249,16 +249,24 @@ impl SummaryService {
     ) -> Result<(), SummaryError> {
         let started = Instant::now();
         let meeting = self.store.load_meeting(meeting_id)?;
-        let segments = self.store.load_transcript(meeting_id)?;
-        let prefer_english = match options.language.as_deref() {
-            Some(l) => l.trim().is_empty() || l.trim().eq_ignore_ascii_case("english") || l.trim().eq_ignore_ascii_case("en"),
-            None => true,
-        };
-        let transcript = if prefer_english {
-            render_transcript_prefer_translated(&segments)
-        } else {
-            render_transcript(&segments)
-        };
+        let mut segments = self.store.load_transcript(meeting_id)?;
+
+        // Every report is *written* in English and translated afterwards
+        // (`processor::ENGLISH_BASE_INSTRUCTION`), whatever the configured
+        // report language — so the English rendering of a line is the better
+        // input regardless of where the report ends up. The version this
+        // replaces consulted `options.language` here and fed a report bound
+        // for Hindi the Hindi transcript, which asked the model to translate
+        // into English and back again inside one pass.
+        //
+        // Where no English exists yet, it is produced first, as its own
+        // visible step: a transcript the user can check beats a report they
+        // cannot. The whisper translate pass usually got there first; this
+        // fills what it missed.
+        self.ensure_english(&app, meeting_id, &mut segments, &provider, cancel)
+            .await;
+        let speakers = self.store.load_speakers(meeting_id).unwrap_or_default();
+        let transcript = render_transcript_with_speakers(&segments, &speakers);
         let template = templates.get_or_default(Some(&options.template_id));
 
         // Back up before touching anything: from here on, every exit path
@@ -380,6 +388,73 @@ impl SummaryService {
                 );
                 Err(err)
             }
+        }
+    }
+
+    /// Fills in any missing English before a report is written from it.
+    ///
+    /// Best-effort by design. A meeting whose English cannot be produced is
+    /// still worth summarising from what it has — a report from a Hindi
+    /// transcript is worse than one from an English transcript and far better
+    /// than no report — so this logs and returns rather than failing the run.
+    /// The provider check that *can* fail the run happens on the way past
+    /// here, in `run`, and reports the same underlying problem with the
+    /// sentence that names the fix.
+    async fn ensure_english(
+        &self,
+        app: &Option<AppHandle>,
+        meeting_id: &str,
+        segments: &mut [super::super::model::TranscriptSegment],
+        provider: &ProviderConfig,
+        cancel: &Arc<AtomicBool>,
+    ) {
+        use super::super::variants;
+
+        variants::ensure_romanized(segments);
+        if !variants::needs_english_track(segments) {
+            return;
+        }
+        let missing = variants::lines_missing_english(segments);
+        if missing.is_empty() {
+            return;
+        }
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        if crate::providers::check_ready(provider).await.is_err() {
+            return;
+        }
+
+        emit(
+            app,
+            meeting_id,
+            SummaryStatus::Processing,
+            "Translating the transcript",
+            Some(0.1),
+        );
+        let client = LLMClient::new(provider.clone());
+        let outcome =
+            variants::translate_missing(&client, segments, "English", Some(&missing), |_, _| {}).await;
+
+        if outcome.translated > 0 {
+            if let Err(err) = self.store.save_transcript(meeting_id, segments) {
+                // The report can still be written from what is in memory; the
+                // cost is doing the translation again next time.
+                tracing::warn!(
+                    "meeting {}: could not save the translated transcript: {}",
+                    meeting_id,
+                    err
+                );
+            }
+        }
+        if !outcome.failures.is_empty() {
+            tracing::warn!(
+                "meeting {}: {} of {} translation batches failed before summarising ({})",
+                meeting_id,
+                outcome.failures.len(),
+                outcome.batches,
+                outcome.failures.join(", ")
+            );
         }
     }
 

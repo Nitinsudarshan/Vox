@@ -34,6 +34,7 @@ import {
   Sparkles,
   BookOpen,
   Users,
+  CalendarDays,
   Volume2,
   Terminal,
   Check,
@@ -60,6 +61,7 @@ import { DeveloperSettingsView } from './DeveloperSettingsView';
 import { DictionarySnippetsSettings } from './DictionarySnippetsSettings';
 import { CaptureSettingsView } from './CaptureSettingsView';
 import { MeetingSettingsView } from './MeetingSettingsView';
+import { CalendarSettingsView } from './CalendarSettingsView';
 import { SpeechModelsView } from './SpeechModelsView';
 import { CloudProviderSettings } from './CloudProviderSettings';
 import { OllamaInstallCard } from './OllamaInstallCard';
@@ -73,6 +75,7 @@ export type SettingsSection =
   | 'dictionary'
   | 'capture'
   | 'meetings'
+  | 'calendar'
   | 'languages'
   | 'advanced'
   | 'about'
@@ -104,6 +107,7 @@ const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'dictionary', label: 'Dictionary & Snippets', icon: BookOpen },
   { id: 'capture', label: 'Web Capture', icon: Globe },
   { id: 'meetings', label: 'Meetings', icon: Users },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'languages', label: 'Languages & Script', icon: Languages },
   { id: 'about', label: 'About Vox', icon: Info },
   { id: 'trash', label: 'Trash & Deleted', icon: Trash2, accent: 'text-amber-500' },
@@ -2028,6 +2032,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         {activeSection === 'capture' && <CaptureSettingsView />}
 
         {activeSection === 'meetings' && <MeetingSettingsView />}
+        {activeSection === 'calendar' && <CalendarSettingsView />}
 
         {activeSection === 'trash' && <TrashSettings />}
 

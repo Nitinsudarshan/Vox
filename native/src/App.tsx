@@ -397,6 +397,7 @@ export const App: React.FC = () => {
             <MeetingsPage
               onOpenSpeechSettings={() => navigateTo('settings', { section: 'speech' })}
               onOpenProviderSettings={() => navigateTo('settings', { section: 'advanced' })}
+              onOpenCalendarSettings={() => navigateTo('settings', { section: 'calendar' })}
             />
           )}
 

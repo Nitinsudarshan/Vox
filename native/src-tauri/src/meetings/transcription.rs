@@ -41,7 +41,7 @@ use tauri::{AppHandle, Emitter};
 use crate::capture::speech_health::{self, DecodeEvidence};
 use crate::capture::stt::{join_utterance_text, SttEngine, SttLanguageConfig, WhisperDecodingConfig};
 
-use super::model::{SegmentChannel, TranscriptSegment};
+use super::model::TranscriptSegment;
 use super::segmenter::{SpeechSegment, SEGMENT_SAMPLE_RATE};
 use super::store::MeetingStore;
 
@@ -822,6 +822,7 @@ fn decode_segment(
             original_text,
             romanized_text,
             translated_text: None,
+            speaker_id: None,
         }),
         timing,
     )
@@ -861,19 +862,38 @@ fn emit_warning(app: &Option<AppHandle>, meeting_id: &str, kind: &str, message: 
 /// model has to guess who proposed something and who agreed to it, and it
 /// guesses wrong.
 pub fn render_transcript(segments: &[TranscriptSegment]) -> String {
-    render_transcript_internal(segments, false)
+    render_transcript_internal(segments, false, &[])
 }
 
 /// Renders a transcript preferring translated or romanized text over raw non-Latin text.
 ///
 /// Useful when feeding the transcript into a summarizer generating an English report.
 pub fn render_transcript_prefer_translated(segments: &[TranscriptSegment]) -> String {
-    render_transcript_internal(segments, true)
+    render_transcript_internal(segments, true, &[])
 }
 
-fn render_transcript_internal(segments: &[TranscriptSegment], prefer_translated: bool) -> String {
+/// As [`render_transcript_prefer_translated`], naming speakers where detection
+/// has found them.
+///
+/// This is what lets a report say "Payal committed to sending the deck" rather
+/// than "Others committed to sending the deck". Two remote participants are
+/// both `Others` on the channel alone, so a summary built from channel labels
+/// cannot attribute anything on a call with more than two people — it can only
+/// report that somebody said something.
+pub fn render_transcript_with_speakers(
+    segments: &[TranscriptSegment],
+    speakers: &[crate::meetings::model::Speaker],
+) -> String {
+    render_transcript_internal(segments, true, speakers)
+}
+
+fn render_transcript_internal(
+    segments: &[TranscriptSegment],
+    prefer_translated: bool,
+    speakers: &[crate::meetings::model::Speaker],
+) -> String {
     let mut out = String::new();
-    let mut last_channel: Option<SegmentChannel> = None;
+    let mut last_label: Option<String> = None;
     for segment in segments {
         let text_source = if prefer_translated {
             segment
@@ -893,14 +913,15 @@ fn render_transcript_internal(segments: &[TranscriptSegment], prefer_translated:
         }
         // Repeat the speaker label only when it changes, the way a transcript
         // reads rather than the way a log does.
-        if last_channel != Some(segment.channel) {
+        let label = crate::meetings::speakers::label_for(segment, speakers);
+        if last_label.as_deref() != Some(label.as_str()) {
             out.push_str(&format!(
                 "[{}] {}: {}",
                 format_timestamp(segment.start_seconds),
-                segment.channel.label(),
+                label,
                 text
             ));
-            last_channel = Some(segment.channel);
+            last_label = Some(label);
         } else {
             out.push_str(&format!(
                 "[{}] {}",
@@ -928,6 +949,7 @@ pub fn format_timestamp(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::model::SegmentChannel;
 
     /// The whole reason the summary reports `pipeline_RTF` rather than only
     /// the decode speed: a decoder can be slower than real time against the
@@ -1010,6 +1032,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
+            speaker_id: None,
         }
     }
 

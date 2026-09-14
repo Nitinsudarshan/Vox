@@ -43,6 +43,7 @@ const MEETING_FILE: &str = "meeting.json";
 const TRANSCRIPT_FILE: &str = "transcript.json";
 const SUMMARY_FILE: &str = "summary.json";
 const NOTES_FILE: &str = "notes.md";
+const SPEAKERS_FILE: &str = "speakers.json";
 const AUDIO_DIR: &str = "audio";
 
 /// Characters in the preview shown on a meeting list row.
@@ -272,6 +273,40 @@ impl MeetingStore {
     }
 
     /// Free-text notes the user typed against a meeting.
+    /// The speakers a detection run proposed, and the names the user gave them.
+    ///
+    /// Its own file rather than a field on `meeting.json`: a detection run
+    /// rewrites this wholesale and must not be able to lose the meeting's
+    /// metadata by failing halfway.
+    pub fn save_speakers(
+        &self,
+        id: &str,
+        speakers: &[crate::meetings::model::Speaker],
+    ) -> Result<(), MeetingStoreError> {
+        let dir = self.meeting_dir(id)?;
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(SPEAKERS_FILE),
+            &serde_json::to_vec_pretty(speakers)?,
+        )
+    }
+
+    /// A meeting's speakers, or none where detection has never run.
+    ///
+    /// A file that cannot be parsed reads as "no speakers" rather than as an
+    /// error: the transcript is the product, and a meeting must still open
+    /// when a detection run left a half-written file behind.
+    pub fn load_speakers(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::meetings::model::Speaker>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(SPEAKERS_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        Ok(serde_json::from_slice(&fs::read(&path)?).unwrap_or_default())
+    }
+
     pub fn load_notes(&self, id: &str) -> Result<String, MeetingStoreError> {
         let path = self.meeting_dir(id)?.join(NOTES_FILE);
         if !path.exists() {
@@ -539,6 +574,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
+            speaker_id: None,
         }
     }
 

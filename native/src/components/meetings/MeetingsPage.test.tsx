@@ -1,6 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { invoke } from '@tauri-apps/api/core';
 
 import { MeetingsPage } from './MeetingsPage';
@@ -61,6 +62,7 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
       ],
       summary: null,
       notes: '',
+      speakers: [],
     },
     get_meeting_devices: { microphone: null, system_audio: null },
     get_audio_devices: [
@@ -99,6 +101,49 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
     }
     return undefined;
   });
+}
+
+/**
+ * A meeting with a recording on disk.
+ *
+ * Several actions genuinely need one — transcribing again has nothing to read
+ * without it, and a voice sample has nothing to play — and the menu disables
+ * them when it is missing. A fixture without `audio_path` therefore tests the
+ * disabled path, which is not what these tests are about.
+ */
+function recordedMeetingDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    meeting: meeting({ audio_path: '/vault/meetings/meeting-1/audio.wav' }),
+    segments: [
+      {
+        sequence: 0,
+        text: 'shall we start',
+        start_seconds: 0,
+        end_seconds: 2,
+        channel: 'microphone',
+        no_speech_prob: 0.01,
+        recorded_at: '2026-09-10T09:00:00Z',
+      },
+    ],
+    summary: null,
+    notes: '',
+    speakers: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Opens the overflow menu and chooses one item.
+ *
+ * `userEvent` rather than `fireEvent` because Radix menus are driven by
+ * pointer events rather than by `click`, and a bare `fireEvent.click` leaves
+ * the menu shut — which reads in a failure as a missing feature rather than as
+ * a missing event.
+ */
+async function chooseFromMenu(name: RegExp) {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: /more actions/i }));
+  await user.click(await screen.findByRole('menuitem', { name }));
 }
 
 describe('MeetingsPage', () => {
@@ -523,5 +568,268 @@ describe('MeetingsPage', () => {
     fireEvent.click(await screen.findByText('Weekly sync'));
     expect(await screen.findByText(/the model returned nothing/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /open settings/i })).not.toBeInTheDocument();
+  });
+
+  test('the index is one column: opening a meeting replaces the list', async () => {
+    // The whole point of the rework. The version this replaces rendered the
+    // list and the meeting side by side, so a transcript was read through a
+    // 320-pixel column with six list rows beside it.
+    mockBackend();
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    expect(await screen.findByRole('button', { name: /all meetings/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('textbox', { name: /search meetings/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test('going back returns to the list', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    fireEvent.click(await screen.findByRole('button', { name: /all meetings/i }));
+    expect(
+      await screen.findByRole('textbox', { name: /search meetings/i }),
+    ).toBeInTheDocument();
+  });
+
+  test('meetings are grouped under the day they happened on', async () => {
+    const today = new Date();
+    mockBackend({
+      list_meetings: [meeting({ id: 'm-today', title: 'Today call', created_at: today.toISOString() })],
+    });
+    render(<MeetingsPage />);
+    expect(await screen.findByText('Today')).toBeInTheDocument();
+  });
+
+  test('secondary actions live in the overflow menu rather than a row of icons', async () => {
+    mockBackend({ get_meeting: recordedMeetingDetail() });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    // Nothing destructive is one stray click away from a reader.
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /more actions/i }));
+    expect(await screen.findByRole('menuitem', { name: /transcribe again/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /find speakers/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /delete/i })).toBeInTheDocument();
+  });
+
+  test('transcribing again asks what to change instead of repeating the settings that failed', async () => {
+    mockBackend({ get_meeting: recordedMeetingDetail() });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    await chooseFromMenu(/transcribe again/i);
+
+    // Scoped to the dialog: "speech model" also names a control on the page
+    // behind it, and an unscoped query would pass on the wrong one.
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByLabelText(/transcription language/i)).toBeInTheDocument();
+    expect(dialog.getByLabelText(/speech model/i)).toBeInTheDocument();
+    // Nothing has run yet: opening the dialog is not the action.
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('retranscribe_meeting', expect.anything());
+  });
+
+  test('a re-transcription carries the choices the dialog collected', async () => {
+    mockBackend({ get_meeting: recordedMeetingDetail() });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    await chooseFromMenu(/transcribe again/i);
+
+    fireEvent.change(await screen.findByLabelText(/transcription language/i), {
+      target: { value: 'hi' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^transcribe again$/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('retranscribe_meeting', {
+        meetingId: 'meeting-1',
+        overrides: { language: 'hi', modelId: '', preset: 'quality' },
+      }),
+    );
+  });
+
+  test('a transcript in another script offers the English view without being asked twice', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'क्या आप सुन सकते हैं',
+            romanized_text: 'kya aap sun sakate hain',
+            translated_text: 'can you hear me',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'microphone',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+          },
+        ],
+        summary: null,
+        notes: '',
+        speakers: [],
+      },
+    });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    // It opens on English, because that is the view the reader can read.
+    expect(await screen.findByText('can you hear me')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^romanized$/i }));
+    expect(await screen.findByText('kya aap sun sakate hain')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^original$/i }));
+    expect(await screen.findByText('क्या आप सुन सकते हैं')).toBeInTheDocument();
+  });
+
+  test('an all-English transcript is not cluttered with script views it has no use for', async () => {
+    mockBackend();
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    expect(await screen.findByText('shall we start')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^romanized$/i })).not.toBeInTheDocument();
+  });
+
+  test('detected speakers name the lines they said', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting(),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'system',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+            speaker_id: 'speaker-1',
+          },
+        ],
+        summary: null,
+        notes: '',
+        speakers: [
+          {
+            id: 'speaker-1',
+            label: 'Payal',
+            named_by_user: true,
+            channel: 'system',
+            sample_start_seconds: 4,
+            sample_end_seconds: 12,
+            segment_count: 1,
+            speaking_seconds: 2,
+          },
+        ],
+      },
+    });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+
+    expect(await screen.findByText('Payal')).toBeInTheDocument();
+    expect(screen.queryByText('Others')).not.toBeInTheDocument();
+  });
+
+  test('a speaker can be played back and renamed', async () => {
+    mockBackend({
+      get_meeting: {
+        meeting: meeting({ audio_path: '/vault/meetings/meeting-1/audio.wav' }),
+        segments: [
+          {
+            sequence: 0,
+            text: 'shall we start',
+            start_seconds: 0,
+            end_seconds: 2,
+            channel: 'system',
+            no_speech_prob: 0.01,
+            recorded_at: '2026-09-10T09:00:00Z',
+            speaker_id: 'speaker-1',
+          },
+        ],
+        summary: null,
+        notes: '',
+        speakers: [
+          {
+            id: 'speaker-1',
+            label: 'Speaker 1',
+            named_by_user: false,
+            channel: 'system',
+            sample_start_seconds: 4,
+            sample_end_seconds: 12,
+            segment_count: 1,
+            speaking_seconds: 2,
+          },
+        ],
+      },
+    });
+    render(<MeetingsPage />);
+    fireEvent.click(await screen.findByText('Weekly sync'));
+    fireEvent.click(await screen.findByRole('button', { name: /^speakers$/i }));
+
+    // A sample to hear is what makes a wrong grouping cost one rename.
+    expect(await screen.findByRole('button', { name: /play speaker 1 at/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Rename this speaker'));
+    const field = await screen.findByLabelText(/name for speaker 1/i);
+    fireEvent.change(field, { target: { value: 'Soni' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('rename_meeting_speaker', {
+        meetingId: 'meeting-1',
+        speakerId: 'speaker-1',
+        label: 'Soni',
+      }),
+    );
+  });
+
+  test('the calendar shows what is coming up and links to notes already recorded', async () => {
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    const date = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+    mockBackend({
+      get_calendar_agenda: [
+        {
+          date,
+          events: [
+            {
+              id: 'evt-1',
+              account_email: 'me@work.com',
+              calendar_id: 'primary',
+              title: 'Alumna Growth Team Daily Sync',
+              start: `${date}T10:45:00.000Z`,
+              end: `${date}T11:00:00.000Z`,
+              all_day: false,
+              attendees: [
+                { email: 'payal@navgurukul.org', display_name: 'Payal', response: 'accepted', is_self: false, organizer: true },
+              ],
+              attendance: 'accepted',
+              meeting_id: 'meeting-1',
+            },
+          ],
+        },
+      ],
+    });
+    render(<MeetingsPage />);
+
+    expect(await screen.findByText('Coming up')).toBeInTheDocument();
+    expect(screen.getByText('Alumna Growth Team Daily Sync')).toBeInTheDocument();
+    expect(screen.getByText('Payal')).toBeInTheDocument();
+
+    // A recorded meeting is reachable from the calendar row that produced it.
+    fireEvent.click(screen.getByRole('button', { name: /^notes$/i }));
+    expect(await screen.findByRole('button', { name: /all meetings/i })).toBeInTheDocument();
+  });
+
+  test('no connected calendar leaves the index with no calendar chrome at all', async () => {
+    mockBackend({ get_calendar_agenda: [] });
+    render(<MeetingsPage />);
+    await screen.findByText('Weekly sync');
+    expect(screen.queryByText('Coming up')).not.toBeInTheDocument();
   });
 });

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::{AppState, CommandError};
 use crate::sync::MutexExt;
@@ -32,6 +32,11 @@ pub struct MeetingDetail {
     pub segments: Vec<TranscriptSegment>,
     pub summary: Option<MeetingSummary>,
     pub notes: String,
+    /// Whoever detection has found so far. Empty until it runs, which is not
+    /// an error — a transcript labelled "You" and "Others" is still a
+    /// transcript.
+    #[serde(default)]
+    pub speakers: Vec<crate::meetings::model::Speaker>,
 }
 
 /// In-flight import and re-transcription runs, so they can be cancelled.
@@ -278,30 +283,63 @@ pub fn get_meeting(
         .reconcile_orphaned(&meeting_id)
         .map_err(CommandError::from)?;
     let mut segments = store.load_transcript(&meeting_id)?;
-    for seg in &mut segments {
-        if crate::capture::romanize::contains_devanagari(&seg.text) {
-            if seg.original_text.is_none() {
-                seg.original_text = Some(seg.text.clone());
-            }
-            if seg.romanized_text.is_none() {
-                seg.romanized_text = Some(crate::capture::romanize::to_latin(&seg.text));
-            }
-        }
-    }
+    // Filled in on the way out rather than written back: a read command that
+    // writes is a surprise, and the projection is cheap enough to redo. The
+    // explicit `romanize_meeting_transcript` is what persists it.
+    crate::meetings::variants::ensure_romanized(&mut segments);
     Ok(MeetingDetail {
         meeting: store.load_meeting(&meeting_id)?,
         segments,
         summary,
         notes: store.load_notes(&meeting_id)?,
+        speakers: store.load_speakers(&meeting_id)?,
     })
 }
 
+/// Fills in every transcript variant that needs no model.
+///
+/// Separate from [`translate_meeting_transcript`] because it is a different
+/// kind of operation and the difference is the point: this is a deterministic
+/// projection of the same words into the Latin alphabet, it runs offline in
+/// microseconds, and it cannot fail on a machine with no provider configured.
+/// Translation is none of those things. Fusing them is what produced a
+/// Romanized view containing English.
+#[tauri::command]
+pub fn romanize_meeting_transcript(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Vec<TranscriptSegment>, CommandError> {
+    let mut segments = state.meeting_store.load_transcript(&meeting_id)?;
+    if crate::meetings::variants::ensure_romanized(&mut segments) > 0 {
+        state.meeting_store.save_transcript(&meeting_id, &segments)?;
+    }
+    Ok(segments)
+}
+
+/// Translates a transcript, one batch of lines at a time.
+///
+/// Three things this does that its predecessor did not, each one a failure
+/// that reached a user:
+///
+/// - **It batches.** One request carried the whole meeting against a 4096-token
+///   output cap, so anything past a few minutes came back truncated.
+/// - **It checks what it stores.** [`accept_translation`] refuses a reply that
+///   is still in the source script, or that is the romanization handed back —
+///   which is what a local model produced when asked for a translation and a
+///   romanization in the same object.
+/// - **It reports failure.** The parse was `if let Ok(parsed)`, so a model that
+///   answered with prose left the transcript saved back unchanged and the UI
+///   saying the translation had succeeded.
+///
+/// [`accept_translation`]: crate::meetings::variants::accept_translation
 #[tauri::command]
 pub async fn translate_meeting_transcript(
     app: AppHandle,
     meeting_id: String,
     target_language: Option<String>,
 ) -> Result<Vec<TranscriptSegment>, CommandError> {
+    use crate::meetings::variants;
+
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
@@ -313,85 +351,95 @@ pub async fn translate_meeting_transcript(
             ));
         }
 
-        let provider = state.settings.lock_or_recover().provider.clone();
-        let client = crate::providers::LLMClient::new(provider);
+        // The romanized view never depends on a model answering, so it is
+        // filled in before one is asked. A translation that fails outright
+        // still leaves the user better off than they started.
+        variants::ensure_romanized(&mut segments);
 
         let lang_name = target_language
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .unwrap_or("English");
+            .unwrap_or("English")
+            .to_string();
 
-        let items: Vec<serde_json::Value> = segments
-            .iter()
-            .map(|s| {
-                let text_to_translate = s.original_text.as_deref().unwrap_or(&s.text);
-                serde_json::json!({
-                    "sequence": s.sequence,
-                    "text": text_to_translate
-                })
-            })
-            .collect();
-
-        let system = format!(
-            "You are a professional multilingual translator and language specialist. For each transcript segment in the JSON array:\n\
-             1. 'translated_text': Faithful, clean, complete translation into natural {lang_name}. Translate all non-English words into English meaning. Never return untranslated non-English script in translated_text.\n\
-             2. 'romanized_text': If the original text is in a non-Latin script (such as Hindi/Devanagari), provide clear, conversational Romanized Latin script (Hinglish). If already Latin script, keep it as is.\n\
-             Return ONLY a JSON array of objects with keys: sequence, translated_text, romanized_text.\n\
-             Preserve the sequence numbers exactly. Do not output markdown or explanatory text."
-        );
-        let user = serde_json::to_string_pretty(&items).unwrap_or_default();
-
+        let provider = state.settings.lock_or_recover().provider.clone();
         let rt = tokio::runtime::Handle::current();
-        let options = crate::providers::CompletionOptions {
-            temperature: 0.2,
-            max_output_tokens: 4096,
-            context_tokens: client.context_tokens(),
-            ..Default::default()
-        };
-
-        let response = rt.block_on(async {
-            client.complete_verified(&user, Some(&system), options).await
-        }).map_err(|e| CommandError::new("MEETING_TRANSLATION_FAILED", &e.to_string()))?;
-
-        let json_str = crate::meetings::summary::processor::clean_markdown(&response.text);
-        let start = json_str.find('[');
-        let end = json_str.rfind(']');
-        if let (Some(s), Some(e)) = (start, end) {
-            if s <= e {
-                if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str[s..=e]) {
-                    for obj in parsed {
-                        if let (Some(seq), Some(trans)) = (
-                            obj.get("sequence").and_then(|v| v.as_u64()),
-                            obj.get("translated_text").and_then(|v| v.as_str()),
-                        ) {
-                            if let Some(seg) = segments.iter_mut().find(|s| s.sequence == seq) {
-                                if seg.original_text.is_none() && crate::capture::romanize::contains_devanagari(&seg.text) {
-                                    seg.original_text = Some(seg.text.clone());
-                                }
-                                if let Some(rom) = obj.get("romanized_text").and_then(|v| v.as_str()) {
-                                    let trimmed = rom.trim();
-                                    if !trimmed.is_empty() && !crate::capture::romanize::contains_devanagari(trimmed) {
-                                        seg.romanized_text = Some(trimmed.to_string());
-                                    }
-                                }
-                                if seg.romanized_text.is_none() && crate::capture::romanize::contains_devanagari(&seg.text) {
-                                    seg.romanized_text = Some(crate::capture::romanize::to_latin(&seg.text));
-                                }
-                                seg.translated_text = Some(trans.trim().to_string());
-                            }
-                        }
-                    }
-                }
-            }
+        if let Err(reason) = rt.block_on(crate::providers::check_ready(&provider)) {
+            // Checked before any work is queued, so a machine with no provider
+            // gets the sentence naming the fix rather than a transport error
+            // per batch.
+            state.meeting_store.save_transcript(&meeting_id, &segments)?;
+            return Err(CommandError::new(
+                "MEETING_TRANSLATION_UNAVAILABLE",
+                &reason.to_string(),
+            ));
         }
+        let client = crate::providers::LLMClient::new(provider);
+
+        // Asking for English fills the gaps a whisper translate pass left,
+        // because that pass produces better English than a small local model
+        // and re-translating over it is a downgrade. Asking for any other
+        // language translates everything: the stored track is English, which
+        // is not the language that was requested.
+        let english_requested =
+            lang_name.eq_ignore_ascii_case("english") || lang_name.eq_ignore_ascii_case("en");
+        let missing = variants::lines_missing_english(&segments);
+        let outcome = rt.block_on(variants::translate_missing(
+            &client,
+            &mut segments,
+            &lang_name,
+            english_requested.then_some(missing.as_slice()),
+            |done, total| emit_translation_progress(&handle, &meeting_id, done, total),
+        ));
 
         state.meeting_store.save_transcript(&meeting_id, &segments)?;
+
+        if outcome.is_total_failure() {
+            return Err(CommandError::new(
+                "MEETING_TRANSLATION_FAILED",
+                &format!(
+                    "Nothing could be translated into {lang_name}: {}. The Original and \
+                     Romanized views are unaffected.",
+                    outcome.failure_detail()
+                ),
+            ));
+        }
+        if !outcome.failures.is_empty() {
+            tracing::warn!(
+                "meeting {}: {} of {} translation batches failed ({})",
+                meeting_id,
+                outcome.failures.len(),
+                outcome.batches,
+                outcome.failures.join(", ")
+            );
+        }
         Ok(segments)
     })
     .await
     .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
 }
+
+/// Progress for a translation run, so a long transcript is not a dead spinner.
+fn emit_translation_progress(app: &AppHandle, meeting_id: &str, done: usize, total: usize) {
+    let fraction = if total == 0 {
+        1.0
+    } else {
+        (done as f32 / total as f32).clamp(0.0, 1.0)
+    };
+    let _ = app.emit(
+        TRANSLATION_PROGRESS_EVENT,
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "completed": done,
+            "total": total,
+            "fraction": fraction,
+        }),
+    );
+}
+
+/// How far a translation run has got.
+pub const TRANSLATION_PROGRESS_EVENT: &str = "meeting-translation-progress";
 
 #[tauri::command]
 pub fn search_meetings(
@@ -653,7 +701,7 @@ pub async fn import_meeting_audio(
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
-        let config = batch_config(&state)?;
+        let config = batch_config(&state, &BatchOverrides::default())?;
         let key = format!("import:{path}");
         let cancel = state.meeting_imports.register(&key);
         let result = import::import_audio(
@@ -672,15 +720,31 @@ pub async fn import_meeting_audio(
     .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
 }
 
+/// Transcribes a meeting's saved recording again.
+///
+/// `overrides` is what makes this worth pressing twice. The first attempt
+/// already used the user's settings; if it came back wrong, running it again
+/// with the same settings produces the same wrong transcript. The dialog
+/// behind this passes a language to pin, a bigger model, or a slower preset.
 #[tauri::command]
 pub async fn retranscribe_meeting(
     app: AppHandle,
     meeting_id: String,
+    overrides: Option<BatchOverrides>,
 ) -> Result<Meeting, CommandError> {
+    let overrides = overrides.unwrap_or_default();
+    if let Some(preset) = overrides.preset.as_deref() {
+        if !known_preset(preset) {
+            return Err(CommandError::new(
+                "MEETING_UNKNOWN_PRESET",
+                "That is not a decode quality Vox knows. Choose fast, balanced or quality.",
+            ));
+        }
+    }
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
-        let config = batch_config(&state)?;
+        let config = batch_config(&state, &overrides)?;
         let cancel = state.meeting_imports.register(&meeting_id);
         let result = import::retranscribe(
             Some(handle.clone()),
@@ -697,18 +761,178 @@ pub async fn retranscribe_meeting(
     .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
 }
 
+/// Produces the English view of a meeting by decoding its audio again.
+///
+/// Separate from [`retranscribe_meeting`] because it leaves the transcript
+/// alone: someone who is happy with their Hindi transcript and only wants to
+/// be able to read it should not have to risk replacing it.
+#[tauri::command]
+pub async fn generate_meeting_english_track(
+    app: AppHandle,
+    meeting_id: String,
+    overrides: Option<BatchOverrides>,
+) -> Result<usize, CommandError> {
+    let overrides = overrides.unwrap_or_default();
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let config = batch_config(&state, &overrides)?;
+        let key = format!("english:{meeting_id}");
+        let cancel = state.meeting_imports.register(&key);
+        let result = import::generate_english_track(
+            Some(handle.clone()),
+            &state.meeting_store,
+            &state.stt,
+            &meeting_id,
+            config,
+            cancel,
+        );
+        state.meeting_imports.finish(&key);
+        result.map_err(CommandError::from)
+    })
+    .await
+    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
+}
+
+/// Works out who spoke, and offers a sample of each voice to put a name to.
+///
+/// The grouping is a proposal, not an assertion — see
+/// [`crate::meetings::voiceprint`] for what the technique underneath can and
+/// cannot do. Every speaker comes back with a span of the recording where that
+/// voice is talking alone, which is what makes a wrong proposal cost one
+/// rename rather than an argument with the software.
+#[tauri::command]
+pub async fn detect_meeting_speakers(
+    app: AppHandle,
+    meeting_id: String,
+) -> Result<crate::meetings::speakers::SpeakerReport, CommandError> {
+    use crate::meetings::speakers;
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let store = &state.meeting_store;
+        let mut segments = store.load_transcript(&meeting_id)?;
+        if segments.is_empty() {
+            return Err(CommandError::new(
+                "MEETING_EMPTY_TRANSCRIPT",
+                "This meeting has no transcript to attribute.",
+            ));
+        }
+
+        let key = format!("speakers:{meeting_id}");
+        let cancel = state.meeting_imports.register(&key);
+        let prints = import::fingerprint_segments(store, &meeting_id, &segments, &cancel);
+        state.meeting_imports.finish(&key);
+        let prints = prints.map_err(CommandError::from)?;
+
+        // Names the user typed survive the re-run; Vox's own placeholders do
+        // not, because a re-run is entitled to renumber its own guesses.
+        let previous = store.load_speakers(&meeting_id)?;
+        let report = speakers::assign_speakers(
+            &mut segments,
+            &prints,
+            &speakers::DetectionSettings::default(),
+            &previous,
+        );
+
+        store.save_transcript(&meeting_id, &segments)?;
+        store.save_speakers(&meeting_id, &report.speakers)?;
+        Ok(report)
+    })
+    .await
+    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
+}
+
+/// Puts a name to one of the voices detection found.
+#[tauri::command]
+pub fn rename_meeting_speaker(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    speaker_id: String,
+    label: String,
+) -> Result<Vec<crate::meetings::model::Speaker>, CommandError> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err(CommandError::new(
+            "MEETING_INVALID_SPEAKER_NAME",
+            "A speaker needs a name.",
+        ));
+    }
+    if label.chars().count() > 80 {
+        return Err(CommandError::new(
+            "MEETING_INVALID_SPEAKER_NAME",
+            "That name is too long.",
+        ));
+    }
+
+    let store = &state.meeting_store;
+    let mut speakers = store.load_speakers(&meeting_id)?;
+    let Some(speaker) = speakers.iter_mut().find(|s| s.id == speaker_id) else {
+        return Err(CommandError::new(
+            "MEETING_UNKNOWN_SPEAKER",
+            "That speaker is not part of this meeting.",
+        ));
+    };
+    speaker.label = label;
+    // Marked as the user's word, which is what stops the next detection run
+    // renumbering it back to "Speaker 3".
+    speaker.named_by_user = true;
+    store.save_speakers(&meeting_id, &speakers)?;
+    Ok(speakers)
+}
+
 #[tauri::command]
 pub fn cancel_meeting_import(state: State<'_, AppState>, key: String) -> bool {
     state.meeting_imports.cancel(&key)
 }
 
+/// What one batch run may override about the user's saved settings.
+///
+/// A re-transcription is what someone reaches for when the transcript they
+/// have is wrong, so it is the one place where the settings that produced it
+/// are the least trustworthy thing to reuse. Every field is `None` by default
+/// and falls back to settings, so an import — which has no transcript to
+/// disbelieve yet — passes `Default::default()` and behaves exactly as before.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchOverrides {
+    /// An ISO code to pin, or `"auto"` to force detection. Empty/absent means
+    /// whatever settings resolve to.
+    pub language: Option<String>,
+    /// A speech-model catalogue id to decode with, overriding the configured
+    /// meeting model for this run only.
+    pub model_id: Option<String>,
+    /// `"fast"`, `"balanced"` or `"quality"`. Absent means the batch default,
+    /// which is `quality`.
+    pub preset: Option<String>,
+    /// Whether the run also decodes an English rendering of every segment.
+    /// Roughly doubles the time, and is what makes a meeting held in another
+    /// language readable without a model call.
+    pub english_track: Option<bool>,
+}
+
 /// Batch decoding configuration from the user's current settings.
-fn batch_config(state: &State<'_, AppState>) -> Result<BatchConfig, CommandError> {
+fn batch_config(
+    state: &State<'_, AppState>,
+    overrides: &BatchOverrides,
+) -> Result<BatchConfig, CommandError> {
     use crate::capture::stt::{
-        resolve_meeting_model_path, SttLanguageConfig, SttPreset, SttWindow, WhisperDecodingConfig,
+        resolve_meeting_model_path, SttLanguageConfig, SttWindow, WhisperDecodingConfig,
     };
 
-    let settings = state.settings.lock_or_recover().clone();
+    let mut settings = state.settings.lock_or_recover().clone();
+    if let Some(model_id) = overrides.model_id.as_deref().map(str::trim) {
+        if !model_id.is_empty() {
+            settings.stt.meeting_model_id = Some(model_id.to_string());
+        }
+    }
+    if let Some(preset) = overrides.preset.as_deref().map(str::trim) {
+        if !preset.is_empty() {
+            settings.stt.preset = preset.to_string();
+        }
+    }
+
     let models_dir = state.config_dir.join("models");
     let model_path = resolve_meeting_model_path(&models_dir, &settings.stt).ok_or_else(|| {
         CommandError::new(
@@ -717,17 +941,44 @@ fn batch_config(state: &State<'_, AppState>) -> Result<BatchConfig, CommandError
         )
     })?;
 
+    // An explicit choice for this run wins over the standing setting, which
+    // wins over the language profile's own resolution.
+    let language_override = overrides
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .unwrap_or(settings.meetings.transcription_language.as_str());
+
     Ok(BatchConfig {
         model_path: model_path.to_string_lossy().to_string(),
-        language: SttLanguageConfig::from_settings(&settings.language, SttWindow::LongForm),
-        decoding: WhisperDecodingConfig::for_meetings(&settings.stt, SttPreset::Balanced),
-        decoding_expensive_script: WhisperDecodingConfig::for_meetings(
-            &settings.stt,
-            SttPreset::Balanced,
-        )
-        .for_expensive_script(),
+        language: SttLanguageConfig::from_settings_with_override(
+            &settings.language,
+            SttWindow::LongForm,
+            language_override,
+        ),
+        // `for_meeting_batch`, not `for_meetings`: nothing is racing a file on
+        // disk, so the encoder clamp and the fast preset both come off. The
+        // absent `decoding_expensive_script` is the other half of that — see
+        // [`BatchConfig`].
+        decoding: WhisperDecodingConfig::for_meeting_batch(&settings.stt),
         glossary: settings.dictionary.clone(),
+        english_track: overrides.english_track.unwrap_or(false),
     })
+}
+
+/// Whether `preset` names a decode preset Vox knows.
+///
+/// `SttPreset::from_setting` defaults an unknown value to `Fast`, which is the
+/// safe thing for a settings file written by an older build and the wrong
+/// thing for an argument the user just chose: silently decoding at the
+/// *lowest* quality is indistinguishable from the bug this whole path exists
+/// to fix.
+fn known_preset(preset: &str) -> bool {
+    matches!(
+        preset.trim().to_lowercase().as_str(),
+        "" | "fast" | "balanced" | "quality"
+    )
 }
 
 #[cfg(test)]

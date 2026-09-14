@@ -716,6 +716,43 @@ impl SttLanguageConfig {
             translate: false,
         }
     }
+
+    /// As [`from_settings`], with an explicit language override on top.
+    ///
+    /// The override exists because auto-detection is per *chunk*, not per
+    /// meeting. Whisper re-decides the language every thirty seconds, so a
+    /// bilingual profile over code-switched speech — the Hinglish case
+    /// [`from_settings`] deliberately leaves unpinned — can be detected as
+    /// Hindi on one chunk and English on the next. A chunk decoded under the
+    /// wrong language does not fail; it comes back as fluent nonsense in the
+    /// wrong language's phonology, which is far worse than a weak transcript
+    /// because nothing about it looks broken.
+    ///
+    /// So the setting is not "pin or auto" in the abstract. It is: when the
+    /// detector is demonstrably wrong about *this* recording, say what the
+    /// recording is and stop asking.
+    ///
+    /// - `""` (empty) defers entirely to [`from_settings`]. The default, so
+    ///   nobody who has not hit this gets a behaviour change.
+    /// - [`AUTO_LANGUAGE`] forces detection on, even where the language
+    ///   profile would have pinned.
+    /// - Anything else pins that language for every chunk.
+    ///
+    /// [`from_settings`]: Self::from_settings
+    pub fn from_settings_with_override(
+        settings: &LanguageSettings,
+        window: SttWindow,
+        override_language: &str,
+    ) -> Self {
+        let chosen = override_language.trim().to_lowercase();
+        if chosen.is_empty() {
+            return Self::from_settings(settings, window);
+        }
+        Self {
+            whisper_language: (chosen != AUTO_LANGUAGE).then_some(chosen),
+            translate: false,
+        }
+    }
 }
 
 /// Sampling strategies supported by Whisper decoding.
@@ -1066,6 +1103,42 @@ impl WhisperDecodingConfig {
     pub fn for_expensive_script(&self) -> Self {
         let mut cfg = self.clone().with_preset(SttPreset::Fast);
         cfg.temperature_inc = 0.0;
+        cfg
+    }
+
+    /// The profile for a batch run: an import, or a re-transcription.
+    ///
+    /// Everything [`for_meetings`] trades away is bought back here, because
+    /// the thing it was bought for does not exist. A live meeting decodes
+    /// against a clock — audio keeps arriving whether or not the decoder kept
+    /// up, and a decoder slower than real time eventually drops speech. A
+    /// batch run reads a file that is already on disk. Nothing arrives, so
+    /// nothing can be lost by being slow, and every millisecond spent is spent
+    /// on a transcript the user asked to be *better* than the one they have.
+    ///
+    /// Two differences from the live profile, both in that direction:
+    ///
+    /// - [`SttPreset::Quality`] rather than [`SttPreset::Balanced`] as the
+    ///   default — its own doc says "for audio that is recorded once and read
+    ///   later", which is exactly a file on disk. An explicit preset in
+    ///   settings still wins.
+    /// - The encoder clamp is off. [`trim_audio_context`] buys latency on a
+    ///   short segment and costs accuracy on a long one; with no latency worth
+    ///   buying, it is a loss with no matching gain.
+    ///
+    /// Note what is *not* here: a wound-back profile for non-Latin script.
+    /// [`for_expensive_script`] exists to keep a live decoder ahead of
+    /// arriving audio, and a batch run has nothing to keep ahead of — so
+    /// [`crate::meetings::import::BatchConfig`] carries one profile and not
+    /// two, and a re-transcription of Hindi audio structurally cannot be
+    /// decoded more cheaply than the same audio in English.
+    ///
+    /// [`for_meetings`]: Self::for_meetings
+    /// [`trim_audio_context`]: Self::trim_audio_context
+    /// [`for_expensive_script`]: Self::for_expensive_script
+    pub fn for_meeting_batch(stt_settings: &crate::settings::SttSettings) -> Self {
+        let mut cfg = Self::from_settings_defaulting(stt_settings, SttPreset::Quality);
+        cfg.trim_audio_context = false;
         cfg
     }
 

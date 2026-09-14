@@ -42,6 +42,34 @@ export interface TranscriptSegment {
   original_text?: string | null;
   romanized_text?: string | null;
   translated_text?: string | null;
+  /** Which `Speaker` this line was attributed to, if any. */
+  speaker_id?: string | null;
+}
+
+/**
+ * One person Vox believes spoke during a meeting.
+ *
+ * A proposal, not an assertion: the grouping comes from acoustic statistics,
+ * not a trained speaker model, so every speaker carries a span of the
+ * recording the user can play in order to put a name to the voice.
+ */
+export interface Speaker {
+  id: string;
+  label: string;
+  /** Whether `label` is the user's word or Vox's placeholder. */
+  named_by_user: boolean;
+  channel: SegmentChannel;
+  sample_start_seconds: number;
+  sample_end_seconds: number;
+  segment_count: number;
+  speaking_seconds: number;
+}
+
+/** What a speaker-detection run found. */
+export interface SpeakerReport {
+  speakers: Speaker[];
+  attributed: number;
+  unattributed: number;
 }
 
 export interface Meeting {
@@ -95,6 +123,12 @@ export interface MeetingDetail {
   segments: TranscriptSegment[];
   summary?: MeetingSummary | null;
   notes: string;
+  /**
+   * Empty until detection runs, which is not an error — and absent entirely
+   * for a meeting stored before speakers existed, which is why this is
+   * optional rather than merely empty.
+   */
+  speakers?: Speaker[];
 }
 
 export interface MeetingSearchHit {
@@ -209,4 +243,13 @@ export const MEETING_EVENTS = {
   transcriptionWarning: 'meeting-transcription-warning',
   summaryProgress: 'meeting-summary-progress',
   importProgress: 'meeting-import-progress',
+  translationProgress: 'meeting-translation-progress',
 } as const;
+
+/** How far a transcript translation has got. */
+export interface TranslationProgress {
+  meeting_id: string;
+  completed: number;
+  total: number;
+  fraction: number;
+}

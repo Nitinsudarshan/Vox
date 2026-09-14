@@ -17,9 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-
-use crate::sync::MutexExt;
+use std::sync::Arc;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -94,15 +92,55 @@ pub struct ImportProgress {
 }
 
 /// Everything a batch transcription run needs.
+///
+/// One decode profile, not two. The live worker carries a second, cheaper one
+/// for scripts whisper writes expensively (see
+/// [`WhisperDecodingConfig::for_expensive_script`]) because a live decoder
+/// that falls behind arriving audio eventually drops speech outright — a
+/// worse transcript than a less careful one. A batch run reads a file that is
+/// already on disk and cannot fall behind anything, so the trade has nothing
+/// to buy and the field is simply absent: re-transcribing Hindi audio
+/// structurally cannot decode more cheaply than the same audio in English.
 pub struct BatchConfig {
     pub model_path: String,
     pub language: SttLanguageConfig,
     pub decoding: WhisperDecodingConfig,
-    /// Used from the first segment that comes back in a script whisper writes
-    /// expensively. An imported recording pays the same tokenizer cost a live
-    /// meeting does, so it gets the same escape.
-    pub decoding_expensive_script: WhisperDecodingConfig,
     pub glossary: Vec<String>,
+    /// Whether each segment is decoded a second time, in whisper's translate
+    /// mode, to produce an English rendering alongside the native one.
+    ///
+    /// Two decodes rather than one model call over the finished transcript,
+    /// because whisper is markedly better at speech-to-English than a small
+    /// local model is at Hindi-to-English: the translation task had far more
+    /// training data than Hindi transcription did, and the second decode reads
+    /// the *audio* rather than a transcript that may already be wrong. A local
+    /// model translating a garbled Hindi line can only produce a garbled
+    /// English one.
+    ///
+    /// Costs roughly twice the decode time, which is why it belongs to batch
+    /// runs: nothing is racing a file on disk. Ignored when the decode is
+    /// already pinned to English — translating English to English is a second
+    /// pass to produce the text just produced.
+    pub english_track: bool,
+}
+
+impl BatchConfig {
+    /// Whether this run should spend a second decode on an English rendering.
+    fn wants_english_track(&self) -> bool {
+        self.english_track
+            && !matches!(
+                self.language.whisper_language.as_deref(),
+                Some("en") | Some("english")
+            )
+    }
+
+    /// The language configuration for the English pass.
+    fn english_language(&self) -> SttLanguageConfig {
+        SttLanguageConfig {
+            whisper_language: self.language.whisper_language.clone(),
+            translate: true,
+        }
+    }
 }
 
 /// Whether Vox will attempt this file.
@@ -191,20 +229,7 @@ pub fn retranscribe(
     if config.model_path.trim().is_empty() {
         return Err(ImportError::NoSpeechModel);
     }
-    let meeting = store.load_meeting(meeting_id)?;
-    let audio_path = meeting
-        .audio_path
-        .as_deref()
-        .map(PathBuf::from)
-        .filter(|path| path.exists())
-        .or_else(|| {
-            let candidate = store
-                .audio_dir(meeting_id)
-                .ok()?
-                .join(checkpoint::MERGED_AUDIO_FILE);
-            candidate.exists().then_some(candidate)
-        })
-        .ok_or(ImportError::NoRecording)?;
+    let audio_path = resolve_audio_path(store, meeting_id)?;
 
     // Keep the old transcript until the new one is written: a re-transcription
     // that fails halfway must not leave the meeting with nothing.
@@ -236,6 +261,209 @@ pub fn retranscribe(
         }
     }
     finish(store, meeting_id, result, app)
+}
+
+/// Decodes a meeting's saved recording into English, leaving the transcript
+/// it already has alone.
+///
+/// The primary route to an English view, and deliberately not a model call
+/// over the finished transcript. Whisper's translate task reads the *audio*:
+/// it saw far more speech-to-English data than Hindi transcription data, so it
+/// produces better English than a small local model translating a Hindi
+/// transcript that may itself be wrong — and a model handed a garbled line can
+/// only produce a garbled translation of it.
+///
+/// The native transcript is never touched. Only `translated_text` is written,
+/// and only on lines the English pass actually covers, matched by time rather
+/// than by sequence number — see [`super::variants::align_english_spans`] for
+/// why that distinction is not pedantry.
+pub fn generate_english_track(
+    app: Option<AppHandle>,
+    store: &Arc<MeetingStore>,
+    engine: &SttEngine,
+    meeting_id: &str,
+    config: BatchConfig,
+    cancel: Arc<AtomicBool>,
+) -> Result<usize, ImportError> {
+    if config.model_path.trim().is_empty() {
+        return Err(ImportError::NoSpeechModel);
+    }
+    let mut segments = store.load_transcript(meeting_id)?;
+    if segments.is_empty() {
+        return Ok(0);
+    }
+    let audio_path = resolve_audio_path(store, meeting_id)?;
+    let english_language = config.english_language();
+
+    let mut segmenter = Segmenter::new();
+    let mut spans: Vec<super::variants::EnglishSpan> = Vec::new();
+    let mut decoded = 0usize;
+    let mut last_emit = std::time::Instant::now();
+
+    {
+        let decode_span = |segment: &super::segmenter::SpeechSegment,
+                               spans: &mut Vec<super::variants::EnglishSpan>| {
+            let Ok((utterances, _)) = engine.transcribe_utterances_with_config(
+                Some(&config.model_path),
+                &segment.samples,
+                &english_language,
+                &config.decoding,
+            ) else {
+                return;
+            };
+            let text = join_utterance_text(&utterances);
+            if text.trim().is_empty() {
+                return;
+            }
+            spans.push(super::variants::EnglishSpan {
+                start_seconds: segment.start_seconds,
+                end_seconds: segment.end_seconds,
+                text,
+            });
+        };
+
+        let mut sink = |chunk: &[f32], declared_total: Option<f64>| -> Result<(), ImportError> {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ImportError::Cancelled);
+            }
+            for segment in segmenter.push(chunk, &[], &[]) {
+                decode_span(&segment, &mut spans);
+                decoded += 1;
+            }
+            if last_emit.elapsed() >= std::time::Duration::from_millis(500) {
+                last_emit = std::time::Instant::now();
+                emit(
+                    &app,
+                    meeting_id,
+                    "Translating",
+                    segmenter.position_seconds(),
+                    declared_total,
+                    decoded,
+                );
+            }
+            Ok(())
+        };
+        decode_streaming(&audio_path, &mut sink)?;
+
+        for segment in segmenter.flush() {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ImportError::Cancelled);
+            }
+            decode_span(&segment, &mut spans);
+            decoded += 1;
+        }
+    }
+
+    let filled = super::variants::align_english_spans(&mut segments, &spans);
+    tracing::info!(
+        "meeting {}: English pass decoded {} span(s) from {} segment(s) and filled {} line(s)",
+        meeting_id,
+        spans.len(),
+        decoded,
+        filled
+    );
+    store.save_transcript(meeting_id, &segments)?;
+    emit(
+        &app,
+        meeting_id,
+        "Done",
+        segmenter.position_seconds(),
+        Some(segmenter.position_seconds()),
+        filled,
+    );
+    Ok(filled)
+}
+
+/// Fingerprints the audio behind each transcript line, for speaker detection.
+///
+/// Decoded in one streaming pass, keeping only the spans asked for. The
+/// alternative — seeking the file once per line — re-decodes the container
+/// from the start every time, because a compressed stream has no cheap seek to
+/// an arbitrary second.
+///
+/// A line shorter than [`voiceprint::MIN_VOICEPRINT_SECONDS`] is skipped
+/// before its samples are ever collected, so a meeting of short exchanges
+/// costs almost nothing here.
+pub fn fingerprint_segments(
+    store: &Arc<MeetingStore>,
+    meeting_id: &str,
+    segments: &[TranscriptSegment],
+    cancel: &Arc<AtomicBool>,
+) -> Result<Vec<super::voiceprint::TurnPrint>, ImportError> {
+    use super::voiceprint;
+
+    let audio_path = resolve_audio_path(store, meeting_id)?;
+
+    // Only the lines worth fingerprinting, in time order.
+    let mut wanted: Vec<(u64, f64, f64)> = segments
+        .iter()
+        .filter(|segment| {
+            segment.duration_seconds() >= voiceprint::MIN_VOICEPRINT_SECONDS as f64
+        })
+        .map(|segment| (segment.sequence, segment.start_seconds, segment.end_seconds))
+        .collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    wanted.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    let mut collected: Vec<(u64, Vec<f32>)> =
+        wanted.iter().map(|(seq, _, _)| (*seq, Vec::new())).collect();
+    let mut position_samples: usize = 0;
+
+    {
+        let mut sink = |chunk: &[f32], _total: Option<f64>| -> Result<(), ImportError> {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ImportError::Cancelled);
+            }
+            let chunk_start = position_samples;
+            let chunk_end = chunk_start + chunk.len();
+            for (index, (_, start_s, end_s)) in wanted.iter().enumerate() {
+                let want_start = (*start_s * SEGMENT_SAMPLE_RATE as f64).max(0.0) as usize;
+                let want_end = (*end_s * SEGMENT_SAMPLE_RATE as f64).max(0.0) as usize;
+                if want_end <= chunk_start || want_start >= chunk_end {
+                    continue;
+                }
+                let from = want_start.max(chunk_start) - chunk_start;
+                let to = want_end.min(chunk_end) - chunk_start;
+                collected[index].1.extend_from_slice(&chunk[from..to]);
+            }
+            position_samples = chunk_end;
+            Ok(())
+        };
+        decode_streaming(&audio_path, &mut sink)?;
+    }
+
+    Ok(collected
+        .into_iter()
+        .filter_map(|(sequence, samples)| {
+            voiceprint::voiceprint(&samples)
+                .map(|print| voiceprint::TurnPrint { sequence, print })
+        })
+        .collect())
+}
+
+/// A meeting's recording on disk, wherever it ended up.
+///
+/// A recorded meeting names its own file; one that crashed before the merge
+/// still has the checkpointed audio under its directory. Shared by
+/// re-transcription and by the English pass so the two never disagree about
+/// which file a meeting *has*.
+fn resolve_audio_path(store: &Arc<MeetingStore>, meeting_id: &str) -> Result<PathBuf, ImportError> {
+    let meeting = store.load_meeting(meeting_id)?;
+    meeting
+        .audio_path
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .or_else(|| {
+            let candidate = store
+                .audio_dir(meeting_id)
+                .ok()?
+                .join(checkpoint::MERGED_AUDIO_FILE);
+            candidate.exists().then_some(candidate)
+        })
+        .ok_or(ImportError::NoRecording)
 }
 
 /// Writes the final record for a batch run, whichever way it went.
@@ -323,9 +551,6 @@ fn run_batch(
     let mut segmenter = Segmenter::new();
     let mut sequence: u64 = 0;
     let mut kept = 0usize;
-    // Shared rather than a local because the decode happens inside the
-    // streaming sink's closure as well as in the flush that follows it.
-    let script = Mutex::new(crate::capture::stt::ScriptTracker::new());
     let mut total_seconds: Option<f64> = None;
     let mut last_emit = std::time::Instant::now();
 
@@ -341,9 +566,7 @@ fn run_batch(
                 writer.push(chunk).map_err(|err| ImportError::Decode(err.to_string()))?;
             }
             for segment in segmenter.push(chunk, &[], &[]) {
-                if let Some(transcript) =
-                    decode_one(engine, config, &segment, sequence, &script)
-                {
+                if let Some(transcript) = decode_one(engine, config, &segment, sequence) {
                     store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
                     kept += 1;
                 }
@@ -375,7 +598,7 @@ fn run_batch(
         if cancel.load(Ordering::SeqCst) {
             return Err(ImportError::Cancelled);
         }
-        if let Some(transcript) = decode_one(engine, config, &segment, sequence, &script) {
+        if let Some(transcript) = decode_one(engine, config, &segment, sequence) {
             store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
             kept += 1;
         }
@@ -412,20 +635,14 @@ fn decode_one(
     config: &BatchConfig,
     segment: &super::segmenter::SpeechSegment,
     sequence: u64,
-    script: &Mutex<crate::capture::stt::ScriptTracker>,
 ) -> Option<TranscriptSegment> {
     let profile = speech_health::profile_speech(&segment.samples, SEGMENT_SAMPLE_RATE);
-    let decoding = if script.lock_or_recover().is_expensive() {
-        &config.decoding_expensive_script
-    } else {
-        &config.decoding
-    };
     let (utterances, _) = engine
         .transcribe_utterances_with_config(
             Some(&config.model_path),
             &segment.samples,
             &config.language,
-            decoding,
+            &config.decoding,
         )
         .map_err(|err| {
             tracing::warn!("imported segment {} failed to decode: {}", sequence, err);
@@ -437,19 +654,24 @@ fn decode_one(
     if text.trim().is_empty() {
         return None;
     }
-    // Same tracking the live worker does, for the same reason: what has been
-    // written decides how the rest of the file is decoded, and a file that
-    // changes language partway through changes back with it.
-    {
-        let mut script = script.lock_or_recover();
-        if script.observe(&text) {
-            tracing::info!(
-                "imported file: switching to the {} decode profile from segment {}",
-                if script.is_expensive() { "faster" } else { "careful" },
-                sequence + 1
-            );
-        }
-    }
+    // The English pass runs only where there is speech to translate, so a
+    // segment screened out below never costs a second decode.
+    let english = config.wants_english_track().then(|| {
+        engine
+            .transcribe_utterances_with_config(
+                Some(&config.model_path),
+                &segment.samples,
+                &config.english_language(),
+                &config.decoding,
+            )
+            .map(|(utterances, _)| join_utterance_text(&utterances))
+            .unwrap_or_else(|err| {
+                // A failed English pass costs the English view for one line.
+                // It must not cost the line itself, which decoded fine.
+                tracing::warn!("segment {}: English pass failed: {}", sequence, err);
+                String::new()
+            })
+    });
     let mean_no_speech_prob = if utterances.is_empty() {
         1.0
     } else {
@@ -488,7 +710,14 @@ fn decode_one(
         recorded_at: chrono::Utc::now().to_rfc3339(),
         original_text,
         romanized_text,
-        translated_text: None,
+        // The English pass decoded the same samples, so it needs no
+        // time alignment: this *is* the line it belongs to. Alignment
+        // (`variants::align_english_spans`) is for the other case, where an
+        // English track is produced for a transcript somebody else segmented.
+        translated_text: english
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty()),
+        speaker_id: None,
     })
 }
 
@@ -673,6 +902,57 @@ fn emit(
 mod tests {
     use super::*;
 
+    fn batch_config(language: Option<&str>, english_track: bool) -> BatchConfig {
+        BatchConfig {
+            model_path: "/models/ggml-large-v3-turbo.bin".into(),
+            language: SttLanguageConfig {
+                whisper_language: language.map(str::to_string),
+                translate: false,
+            },
+            decoding: WhisperDecodingConfig::default(),
+            glossary: Vec::new(),
+            english_track,
+        }
+    }
+
+    #[test]
+    fn an_english_track_is_skipped_when_the_decode_is_already_english() {
+        // A second pass translating English into English is decode time spent
+        // to produce the text the first pass just produced.
+        assert!(!batch_config(Some("en"), true).wants_english_track());
+        assert!(!batch_config(Some("english"), true).wants_english_track());
+    }
+
+    #[test]
+    fn an_english_track_runs_for_another_language_and_for_auto_detect() {
+        assert!(batch_config(Some("hi"), true).wants_english_track());
+        // Auto-detect is exactly the mixed-language case the track is for, so
+        // "we do not know yet" must not be read as "no translation needed".
+        assert!(batch_config(None, true).wants_english_track());
+    }
+
+    #[test]
+    fn no_english_track_is_produced_unless_one_was_asked_for() {
+        assert!(!batch_config(Some("hi"), false).wants_english_track());
+        assert!(!batch_config(None, false).wants_english_track());
+    }
+
+    #[test]
+    fn the_english_pass_asks_whisper_to_translate_in_the_same_language() {
+        let config = batch_config(Some("hi"), true);
+        let english = config.english_language();
+        assert!(english.translate, "the second pass is the translate task");
+        assert_eq!(
+            english.whisper_language.as_deref(),
+            Some("hi"),
+            "translate-to-English still needs the source language"
+        );
+        assert!(
+            !config.language.translate,
+            "the native transcript is never the translate task"
+        );
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "vox-import-{}-{}-{:?}",
@@ -803,8 +1083,8 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
+                english_track: false,
             },
             Arc::new(AtomicBool::new(false)),
         );
@@ -830,8 +1110,8 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
+                english_track: false,
             },
             Arc::new(AtomicBool::new(false)),
         );
@@ -859,8 +1139,8 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
+                english_track: false,
             },
             Arc::new(AtomicBool::new(false)),
         );
@@ -888,8 +1168,8 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
+                english_track: false,
             },
             Arc::new(AtomicBool::new(false)),
         );

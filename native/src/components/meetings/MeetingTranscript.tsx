@@ -3,15 +3,16 @@ import { Copy, Check, Languages, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { channelLabel, formatTimestamp, transcriptToText } from '@/lib/meetings';
-import type { TranscriptSegment } from '@/types/meetings';
+import { formatTimestamp, speakerLabel, transcriptToText } from '@/lib/meetings';
+import type { Speaker, TranscriptSegment } from '@/types/meetings';
 
 export type TranscriptViewMode = 'original' | 'romanized' | 'english';
 
 interface MeetingTranscriptProps {
   meetingId?: string;
-  meetingLanguage?: string | null;
   segments: TranscriptSegment[];
+  /** Detected speakers, so a line can carry a name rather than a channel. */
+  speakers?: Speaker[];
   /** Scrolls to the newest line as it arrives. On while recording. */
   follow?: boolean;
   emptyMessage?: string;
@@ -27,24 +28,36 @@ interface MeetingTranscriptProps {
   isTranslating?: boolean;
 }
 
-function hasScriptVariants(segments: TranscriptSegment[], meetingLanguage?: string | null): boolean {
-  const lang = (meetingLanguage || '').trim().toLowerCase();
-  const isExplicitlyEnglish = lang === 'en' || lang === 'english';
-  const hasNonLatinCharacters = segments.some((s) => /[\u0900-\u097F]/.test(s.text));
-  const hasDistinctVariants = segments.some(
-    (s) =>
-      Boolean(s.original_text && s.original_text !== s.text) ||
-      Boolean(s.romanized_text && s.romanized_text !== s.text) ||
-      Boolean(s.translated_text && s.translated_text !== s.text),
+/**
+ * Whether this transcript has more than one way to read it.
+ *
+ * Decided from the text, not from the meeting's declared language. A meeting
+ * tagged `hi` that turned out to be entirely in English has one view and
+ * should show one; a meeting tagged `en` that turned out to be half Hindi has
+ * three and must show three. The declared language is what somebody expected,
+ * and the whole reason these views exist is that expectation and outcome come
+ * apart.
+ */
+function hasScriptVariants(segments: TranscriptSegment[]): boolean {
+  return segments.some(
+    (segment) =>
+      NON_LATIN.test(segment.text) ||
+      Boolean(segment.original_text?.trim()) ||
+      Boolean(segment.romanized_text?.trim()) ||
+      Boolean(segment.translated_text?.trim()),
   );
-
-  // If the meeting is English and there are no non-Latin/variant texts, keep single view
-  if (isExplicitlyEnglish && !hasNonLatinCharacters && !hasDistinctVariants) {
-    return false;
-  }
-
-  return hasNonLatinCharacters || hasDistinctVariants || (lang !== '' && lang !== 'en' && lang !== 'auto');
 }
+
+/**
+ * Scripts the Romanized and English views exist for.
+ *
+ * Devanagari is what Vox can transliterate today
+ * (`native/src-tauri/src/capture/romanize.rs`); the others are here so a
+ * transcript in them still offers the English view rather than silently
+ * looking like an English meeting.
+ */
+const NON_LATIN =
+  /[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0600-\u06FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/;
 
 function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode): string {
   if (mode === 'original') {
@@ -54,14 +67,15 @@ function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode
     return segment.romanized_text || segment.text;
   }
   if (mode === 'english') {
-    if (segment.translated_text && segment.translated_text.trim()) {
-      return segment.translated_text;
-    }
-    // Never show Hindi Devanagari script when English mode is selected
-    if (/[\u0900-\u097F]/.test(segment.text)) {
+    const translated = segment.translated_text?.trim();
+    if (translated) return translated;
+    // Never show a script the reader chose this view to avoid. The romanized
+    // form at least carries the words; falling back to the original would put
+    // the very thing back that the English view exists to replace.
+    if (NON_LATIN.test(segment.text)) {
       return segment.romanized_text
-        ? `${segment.romanized_text} [Translation pending]`
-        : '[Translation pending — click Translate]';
+        ? `${segment.romanized_text} — not translated yet`
+        : '— not translated yet';
     }
     return segment.text;
   }
@@ -74,8 +88,8 @@ function resolveSegmentText(segment: TranscriptSegment, mode: TranscriptViewMode
  */
 export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
   meetingId: _meetingId,
-  meetingLanguage,
   segments,
+  speakers = [],
   follow = false,
   emptyMessage = 'Nothing has been transcribed yet.',
   playheadSeconds,
@@ -89,20 +103,28 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
   const endRef = React.useRef<HTMLDivElement>(null);
   const activeRef = React.useRef<HTMLDivElement>(null);
 
-  const showVariants = React.useMemo(() => hasScriptVariants(segments, meetingLanguage), [segments, meetingLanguage]);
+  const showVariants = React.useMemo(() => hasScriptVariants(segments), [segments]);
   const hasAnyEnglishTranslation = React.useMemo(
     () => segments.some((s) => Boolean(s.translated_text)),
     [segments],
   );
 
-  // Pick the most informative view mode by default when translations or romanization exist
+  // Open on the most readable view there is, once per meeting.
+  //
+  // Keyed on the meeting rather than on `segments`, which is what the version
+  // this replaces depended on: every arriving line during a live recording is
+  // a new `segments` array, so the effect re-ran and dragged the view back to
+  // its default every few seconds, undoing whatever the reader had chosen.
+  const chosenFor = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
-    if (segments.some((s) => Boolean(s.translated_text))) {
-      setViewMode('english');
-    } else if (segments.some((s) => Boolean(s.romanized_text))) {
-      setViewMode('romanized');
-    }
-  }, [segments]);
+    if (chosenFor.current === _meetingId) return;
+    if (segments.length === 0) return;
+    chosenFor.current = _meetingId;
+
+    if (segments.some((s) => Boolean(s.translated_text?.trim()))) setViewMode('english');
+    else if (segments.some((s) => Boolean(s.romanized_text?.trim()))) setViewMode('romanized');
+    else setViewMode('original');
+  }, [_meetingId, segments]);
 
   React.useEffect(() => {
     if (follow) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -246,7 +268,9 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
         ) : (
           visible.map((segment, index) => {
             const previous = visible[index - 1];
-            const showSpeaker = !previous || previous.channel !== segment.channel;
+            const label = speakerLabel(segment, speakers);
+            const showSpeaker =
+              !previous || speakerLabel(previous, speakers) !== label;
             const active = segment.sequence === activeSequence;
             const displayText = resolveSegmentText(segment, viewMode);
             return (
@@ -261,7 +285,7 @@ export const MeetingTranscript: React.FC<MeetingTranscriptProps> = ({
                           : 'text-muted-foreground'
                     }`}
                   >
-                    {channelLabel(segment.channel)}
+                    {label}
                   </p>
                 )}
                 <div

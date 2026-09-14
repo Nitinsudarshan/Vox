@@ -1,16 +1,18 @@
 import React from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Import, Radio, Search } from 'lucide-react';
+import { Radio } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/PageHeader';
 import { MeetingRecorder } from './MeetingRecorder';
 import { MeetingModelGate } from './MeetingModelGate';
-import { MeetingList } from './MeetingList';
-import { MeetingDetail } from './MeetingDetail';
+import { MeetingIndex } from './MeetingIndex';
+import { MeetingView } from './MeetingView';
+import { RetranscribeDialog } from './RetranscribeDialog';
 import * as meetings from '@/lib/meetings';
-import { meetingErrorMessage } from '@/lib/meetings';
+import { meetingErrorMessage, type RetranscribeOverrides } from '@/lib/meetings';
+import * as calendar from '@/lib/calendar';
+import type { DayAgenda } from '@/types/calendar';
 import {
   MEETING_EVENTS,
   type MeetingDetail as MeetingDetailData,
@@ -33,17 +35,26 @@ const STATUS_POLL_MS = 1000;
  * everything persistent — this component holds only what it is currently
  * displaying, and re-reads after every mutation rather than patching its own
  * copy.
+ *
+ * It renders one of two things, never both: the index, or one meeting. The
+ * version this replaces rendered both at once in a two-column layout, which is
+ * how a transcript came to be read in a half-width pane underneath a recorder
+ * card and a model-install card that were relevant to neither reading nor
+ * choosing.
  */
 interface MeetingsPageProps {
   /** Opens Settings › Speech, so a missing model can be installed from here. */
   onOpenSpeechSettings?: () => void;
   /** Opens Settings › AI Models & STT, for a report that has no provider. */
   onOpenProviderSettings?: () => void;
+  /** Opens Settings › Calendar, for connecting a Google account. */
+  onOpenCalendarSettings?: () => void;
 }
 
 export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   onOpenSpeechSettings,
   onOpenProviderSettings,
+  onOpenCalendarSettings,
 }) => {
   const [status, setStatus] = React.useState<MeetingRecordingStatus>({
     active: false,
@@ -66,10 +77,15 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [query, setQuery] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [translatingTranscript, setTranslatingTranscript] = React.useState(false);
+  const [detectingSpeakers, setDetectingSpeakers] = React.useState(false);
+  const [retranscribeOpen, setRetranscribeOpen] = React.useState(false);
+  const [retranscribing, setRetranscribing] = React.useState(false);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
   /** The saved microphone/output choice. Empty means "let Vox decide". */
   const [devices, setDevices] = React.useState<MeetingDevices>({});
+  const [agenda, setAgenda] = React.useState<DayAgenda[]>([]);
+  const [agendaSyncing, setAgendaSyncing] = React.useState(false);
   const [message, setMessage] = React.useState<{ kind: 'info' | 'error'; text: string } | null>(
     null,
   );
@@ -97,13 +113,27 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       const next = await meetings.getMeeting(meetingId);
       // Guard against a slow fetch landing after the user moved on.
       if (selectedIdRef.current === meetingId) setDetail(next);
-    } catch (error) {
+    } catch {
       if (selectedIdRef.current === meetingId) setDetail(null);
+    }
+  }, []);
+
+  const refreshAgenda = React.useCallback(async () => {
+    try {
+      // `?? []` for the same reason the device picker does it: a command that
+      // resolves to nothing must leave the agenda empty rather than hand the
+      // index an undefined to read through.
+      setAgenda((await calendar.getCalendarAgenda()) ?? []);
+    } catch {
+      // A calendar that cannot be read is not worth a banner on the meetings
+      // page. Settings › Calendar is where the failure belongs.
+      setAgenda([]);
     }
   }, []);
 
   React.useEffect(() => {
     void refreshList();
+    void refreshAgenda();
     void meetings
       .listTemplates()
       .then((available) => {
@@ -121,6 +151,16 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       .getMeetingDevices()
       .then((saved) => setDevices(saved ?? {}))
       .catch(() => undefined);
+
+    // Sync in the background and refresh once it lands. The agenda above has
+    // already rendered from the cache, so a slow or failing sync costs nothing
+    // the user is waiting on.
+    setAgendaSyncing(true);
+    void calendar
+      .syncCalendars()
+      .then(() => refreshAgenda())
+      .catch(() => undefined)
+      .finally(() => setAgendaSyncing(false));
     // Templates and the initial list are read once; everything after is driven
     // by events and by explicit refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -231,12 +271,29 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       await Promise.all([refreshList(), refreshDetail(meeting.id)]);
     });
 
-  const handleRetranscribe = () =>
+  const handleRetranscribe = (overrides: RetranscribeOverrides) =>
     run(async () => {
       if (!selectedId) return;
-      await meetings.retranscribeMeeting(selectedId);
-      await Promise.all([refreshList(), refreshDetail(selectedId)]);
-      notify('info', 'Transcribed again with the current speech model.');
+      setRetranscribing(true);
+      try {
+        // The English pass is its own command so it can be run without
+        // replacing a transcript. Here the two are one action, in order: the
+        // transcript first, then English over whatever it produced.
+        const { englishTrack, ...decode } = overrides;
+        await meetings.retranscribeMeeting(selectedId, decode);
+        await Promise.all([refreshList(), refreshDetail(selectedId)]);
+        if (englishTrack) {
+          notify('info', 'Transcribed. Now producing the English version…');
+          const filled = await meetings.generateEnglishTrack(selectedId, decode);
+          await refreshDetail(selectedId);
+          notify('info', `Transcribed, and English added to ${filled} line(s).`);
+        } else {
+          notify('info', 'Transcribed again.');
+        }
+        setRetranscribeOpen(false);
+      } finally {
+        setRetranscribing(false);
+      }
     });
 
   const handleTranslateTranscript = (targetLanguage?: string) =>
@@ -251,6 +308,31 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       } finally {
         setTranslatingTranscript(false);
       }
+    });
+
+  const handleDetectSpeakers = () =>
+    run(async () => {
+      if (!selectedId) return;
+      setDetectingSpeakers(true);
+      try {
+        const report = await meetings.detectSpeakers(selectedId);
+        await refreshDetail(selectedId);
+        notify(
+          'info',
+          report.speakers.length === 0
+            ? 'No voices were clear enough to group. Lines stay labelled by capture channel.'
+            : `Found ${report.speakers.length} speaker(s) across ${report.attributed} line(s). Play each one to put a name to it.`,
+        );
+      } finally {
+        setDetectingSpeakers(false);
+      }
+    });
+
+  const handleRenameSpeaker = (speakerId: string, label: string) =>
+    run(async () => {
+      if (!selectedId) return;
+      await meetings.renameSpeaker(selectedId, speakerId, label);
+      await refreshDetail(selectedId);
     });
 
   const handleDelete = () =>
@@ -306,6 +388,16 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
     : list;
 
   const live = status.active && status.meeting_id === selectedId;
+
+  /** Whether this meeting holds a script the English view exists for. */
+  const wantsEnglish = React.useMemo(
+    () =>
+      (detail?.segments ?? []).some(
+        (segment) =>
+          /[ऀ-ॿ]/.test(segment.text) || Boolean(segment.romanized_text?.trim()),
+      ),
+    [detail],
+  );
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -380,84 +472,65 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         )}
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 mt-4">
-        <aside className="flex flex-col min-h-0 border border-border rounded-xl p-3">
-          <div className="flex items-center gap-2 mb-3 shrink-0">
-            <div className="relative flex-1">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search meetings…"
-                aria-label="Search meetings"
-                className="h-8 text-xs pl-7"
-              />
-            </div>
-            <Button
-              size="icon"
-              variant="outline"
-              onClick={handleImport}
-              disabled={busy}
-              aria-label="Import a recording"
-              title="Import an existing recording"
-              className="h-8 w-8 shrink-0"
-            >
-              <Import className="w-4 h-4" />
-            </Button>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-            <MeetingList
-              meetings={visible}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              loading={listLoading}
-            />
-          </div>
-        </aside>
-
-        <section className="min-h-0 border border-border rounded-xl p-4">
-          {detail ? (
-            <MeetingDetail
-              detail={detail}
-              templates={templates}
-              templateId={templateId}
-              onTemplateChange={setTemplateId}
-              summaryProgress={summaryProgress}
-              live={live}
-              busy={busy}
-              onRename={(title) =>
-                run(async () => {
-                  if (!selectedId) return;
-                  await meetings.renameMeeting(selectedId, title);
-                  await Promise.all([refreshDetail(selectedId), refreshList()]);
-                })
-              }
-              onDelete={handleDelete}
-              onOpenFolder={() =>
-                run(async () => {
-                  if (selectedId) await meetings.openMeetingFolder(selectedId);
-                })
-              }
-              onRetranscribe={handleRetranscribe}
-              onGenerateSummary={handleGenerate}
-              onCancelSummary={handleCancelSummary}
-              onSaveSummary={handleSaveSummary}
-              onPromote={handlePromote}
-              onOpenProviderSettings={onOpenProviderSettings}
-              onTranslateTranscript={handleTranslateTranscript}
-              isTranslatingTranscript={translatingTranscript}
-            />
-          ) : (
-            <div className="h-full flex items-center justify-center">
-              <p className="text-xs text-muted-foreground">
-                {list.length === 0
-                  ? 'Record a meeting to get started.'
-                  : 'Select a meeting to read it.'}
-              </p>
-            </div>
-          )}
-        </section>
+      <div className="flex-1 min-h-0 mt-4">
+        {detail ? (
+          <MeetingView
+            detail={detail}
+            templates={templates}
+            templateId={templateId}
+            onTemplateChange={setTemplateId}
+            summaryProgress={summaryProgress}
+            live={live}
+            busy={busy}
+            onBack={() => setSelectedId(null)}
+            onRename={(title) =>
+              run(async () => {
+                if (!selectedId) return;
+                await meetings.renameMeeting(selectedId, title);
+                await Promise.all([refreshDetail(selectedId), refreshList()]);
+              })
+            }
+            onDelete={handleDelete}
+            onOpenFolder={() =>
+              run(async () => {
+                if (selectedId) await meetings.openMeetingFolder(selectedId);
+              })
+            }
+            onRetranscribe={() => setRetranscribeOpen(true)}
+            onGenerateSummary={handleGenerate}
+            onCancelSummary={handleCancelSummary}
+            onSaveSummary={handleSaveSummary}
+            onPromote={handlePromote}
+            onOpenProviderSettings={onOpenProviderSettings}
+            onTranslateTranscript={handleTranslateTranscript}
+            isTranslatingTranscript={translatingTranscript}
+            onDetectSpeakers={handleDetectSpeakers}
+            onRenameSpeaker={handleRenameSpeaker}
+            detectingSpeakers={detectingSpeakers}
+          />
+        ) : (
+          <MeetingIndex
+            meetings={visible}
+            loading={listLoading}
+            query={query}
+            onQueryChange={setQuery}
+            onSelect={setSelectedId}
+            onImport={handleImport}
+            busy={busy}
+            agenda={agenda}
+            agendaSyncing={agendaSyncing}
+            onConnectCalendar={onOpenCalendarSettings}
+          />
+        )}
       </div>
+
+      <RetranscribeDialog
+        open={retranscribeOpen}
+        onOpenChange={setRetranscribeOpen}
+        onRun={handleRetranscribe}
+        running={retranscribing}
+        suggestEnglishTrack={wantsEnglish}
+      />
     </div>
   );
 };
