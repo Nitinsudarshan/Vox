@@ -1,10 +1,11 @@
 import React from 'react';
-import { FileAudio, Mic, Search, Import, CalendarDays, RefreshCw, Loader2 } from 'lucide-react';
+import { Search, Import, CalendarDays, RefreshCw, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatDuration, formatClockTime, groupByDay } from '@/lib/meetings';
+import { groupByDay } from '@/lib/meetings';
 import { AgendaSection } from './calendar/AgendaSection';
+import { MeetingDayGroup } from './MeetingDayGroup';
 import type { MeetingListItem } from '@/types/meetings';
 import type { CalendarAccount, CalendarEvent, DayAgenda } from '@/types/calendar';
 
@@ -28,6 +29,15 @@ interface MeetingIndexProps {
   /** Opens Settings › Calendar, when nothing is connected yet. */
   onConnectCalendar?: () => void;
 }
+
+/**
+ * Days of recordings left open. Everything older is a heading and a count.
+ *
+ * Two, because "today and yesterday" is the span a person is still working
+ * inside. A list that renders every day it has ever recorded pushes today off
+ * the screen by the second week.
+ */
+const DAYS_EXPANDED = 2;
 
 /**
  * The meetings index: what is coming up, then what has been recorded.
@@ -118,62 +128,16 @@ export const MeetingIndex: React.FC<MeetingIndexProps> = ({
             onConnectCalendar={onConnectCalendar}
           />
         ) : (
-          days.map((day) => (
-            <section key={day.label} className="mb-6">
-              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
-                {day.label}
-              </h2>
-              <ul>
-                {day.items.map((meeting) => (
-                  <li key={meeting.id}>
-                    <button
-                      type="button"
-                      onClick={() => onSelect(meeting.id)}
-                      className="w-full text-left flex items-baseline gap-3 rounded-lg px-3 py-2.5 -mx-3 hover:bg-accent/60 transition-colors cursor-pointer"
-                    >
-                      <span className="shrink-0 pt-0.5">
-                        {meeting.source === 'imported' ? (
-                          <FileAudio className="w-3.5 h-3.5 text-muted-foreground" />
-                        ) : (
-                          <Mic className="w-3.5 h-3.5 text-muted-foreground" />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium text-foreground truncate">
-                          {meeting.title}
-                        </span>
-                        <span className="block text-[11px] text-muted-foreground truncate mt-0.5">
-                          {meeting.preview || `${meeting.segment_count} lines`}
-                        </span>
-                      </span>
-                      {/* The two states worth knowing before opening a
-                          meeting, and only those two: speech that was never
-                          transcribed, and a recording that caught one side of
-                          the call. Both are reasons the report will be wrong,
-                          which is not something to discover after reading it.
-                          Everything else that used to sit here — the report
-                          badge, the transcribing badge, the source icon
-                          repeated as a label — said nothing the row did not
-                          already show. */}
-                      <span className="shrink-0 flex items-baseline gap-2 text-[11px] tabular-nums">
-                        {meeting.dropped_segments > 0 && (
-                          <span className="text-amber-600 dark:text-amber-400">
-                            {meeting.dropped_segments} lost
-                          </span>
-                        )}
-                        {!meeting.system_audio_captured && meeting.source === 'recorded' && (
-                          <span className="text-muted-foreground/70">Mic only</span>
-                        )}
-                        <span className="text-muted-foreground">
-                          {formatClockTime(meeting.created_at)} ·{' '}
-                          {formatDuration(meeting.duration_seconds)}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
+          days.map((day, index) => (
+            <MeetingDayGroup
+              key={day.label}
+              label={day.label}
+              items={day.items}
+              // A search is already a filter; collapsing its results behind a
+              // heading would hide what the user just asked for.
+              defaultOpen={index < DAYS_EXPANDED || query.trim().length > 0}
+              onSelect={onSelect}
+            />
           ))
         )}
       </div>

@@ -645,6 +645,56 @@ describe('MeetingsPage', () => {
     expect(await screen.findByText('Today')).toBeInTheDocument();
   });
 
+  test('older days are a heading and a count until they are opened', async () => {
+    // A list that renders every day it has ever recorded pushes today off the
+    // screen by the second week.
+    const day = (offset: number) => {
+      const when = new Date();
+      when.setDate(when.getDate() - offset);
+      return when.toISOString();
+    };
+    mockBackend({
+      list_meetings: [
+        meeting({ id: 'm-0', title: 'Today call', created_at: day(0) }),
+        meeting({ id: 'm-1', title: 'Yesterday call', created_at: day(1) }),
+        meeting({ id: 'm-2a', title: 'Old call one', created_at: day(6) }),
+        meeting({ id: 'm-2b', title: 'Old call two', created_at: day(6) }),
+      ],
+    });
+    render(<MeetingsPage />);
+
+    // The two most recent days are open.
+    expect(await screen.findByText('Today call')).toBeInTheDocument();
+    expect(screen.getByText('Yesterday call')).toBeInTheDocument();
+
+    // The older one is a count, and opens on a click.
+    expect(screen.queryByText('Old call one')).not.toBeInTheDocument();
+    const older = screen.getByText('2 meetings');
+    expect(older).toBeInTheDocument();
+    fireEvent.click(older);
+    expect(await screen.findByText('Old call one')).toBeInTheDocument();
+    expect(screen.getByText('Old call two')).toBeInTheDocument();
+  });
+
+  test('a search shows what it found rather than hiding it behind a heading', async () => {
+    const when = new Date();
+    when.setDate(when.getDate() - 30);
+    mockBackend({
+      list_meetings: [
+        meeting({ id: 'm-0', title: 'Today call' }),
+        meeting({ id: 'm-1', title: 'Yesterday call' }),
+        meeting({ id: 'm-2', title: 'Budget review', created_at: when.toISOString() }),
+      ],
+    });
+    render(<MeetingsPage />);
+
+    await screen.findByText('Today call');
+    fireEvent.change(screen.getByRole('textbox', { name: /search meetings/i }), {
+      target: { value: 'budget' },
+    });
+    expect(await screen.findByText('Budget review')).toBeInTheDocument();
+  });
+
   test('secondary actions live in the overflow menu rather than a row of icons', async () => {
     mockBackend({ get_meeting: recordedMeetingDetail() });
     render(<MeetingsPage />);
