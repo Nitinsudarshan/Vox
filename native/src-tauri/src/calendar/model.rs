@@ -116,6 +116,16 @@ pub struct CalendarEvent {
     /// write.
     #[serde(default)]
     pub description: Option<String>,
+    /// The parent recurring event's id, when this is one occurrence of a
+    /// series.
+    ///
+    /// Google's own identity for "the weekly standup", stable across every
+    /// occurrence and across a rename, and the only trustworthy way to know
+    /// two meetings are the same meeting. Sent on every occurrence once
+    /// `singleEvents=true` expands the recurrence rule, which is what the sync
+    /// already asks for.
+    #[serde(default)]
+    pub recurring_event_id: Option<String>,
     #[serde(default)]
     pub attendees: Vec<EventAttendee>,
     pub attendance: Attendance,

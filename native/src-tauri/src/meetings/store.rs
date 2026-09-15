@@ -32,6 +32,7 @@ use thiserror::Error;
 
 use crate::sync::MutexExt;
 
+use super::series::MeetingSeries;
 use super::model::{
     Meeting, MeetingListItem, MeetingState, MeetingSummary, SummaryStatus, TranscriptSegment,
 };
@@ -45,6 +46,8 @@ const SUMMARY_FILE: &str = "summary.json";
 const NOTES_FILE: &str = "notes.md";
 const SPEAKERS_FILE: &str = "speakers.json";
 const AUDIO_DIR: &str = "audio";
+/// Where the recurring-meeting records live, beside the meetings themselves.
+const SERIES_FILE: &str = "series.json";
 
 /// Characters in the preview shown on a meeting list row.
 const PREVIEW_CHARS: usize = 200;
@@ -319,6 +322,83 @@ impl MeetingStore {
         let dir = self.meeting_dir(id)?;
         fs::create_dir_all(&dir)?;
         write_atomic(&dir.join(NOTES_FILE), notes.as_bytes())
+    }
+
+    // --- recurring meeting series ---------------------------------------
+
+    /// Every recurring meeting Vox knows about.
+    ///
+    /// A file that cannot be read means no series rather than an error, the
+    /// way the calendar's own cache behaves: a corrupt index must not make the
+    /// meetings underneath it unopenable.
+    pub fn load_series(&self) -> Vec<MeetingSeries> {
+        let path = self.meetings_dir().join(SERIES_FILE);
+        if !path.exists() {
+            return Vec::new();
+        }
+        fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_series(&self, series: &[MeetingSeries]) -> Result<(), MeetingStoreError> {
+        let dir = self.meetings_dir();
+        fs::create_dir_all(&dir)?;
+        write_atomic(&dir.join(SERIES_FILE), &serde_json::to_vec_pretty(series)?)
+    }
+
+    /// Adds a series, or refreshes the title of one already known.
+    ///
+    /// A title the user has set is left alone: the calendar renaming a
+    /// recurrence must not undo the name somebody chose for it here.
+    pub fn upsert_series(&self, entry: MeetingSeries) -> Result<Vec<MeetingSeries>, MeetingStoreError> {
+        let mut all = self.load_series();
+        match all.iter_mut().find(|existing| existing.id == entry.id) {
+            Some(existing) => {
+                if !existing.renamed_by_user && !entry.title.trim().is_empty() {
+                    existing.title = entry.title;
+                }
+            }
+            None => all.push(entry),
+        }
+        self.save_series(&all)?;
+        Ok(all)
+    }
+
+    /// Renames a series, and records that the name is the user's from now on.
+    pub fn rename_series(&self, id: &str, title: &str) -> Result<Vec<MeetingSeries>, MeetingStoreError> {
+        let mut all = self.load_series();
+        let Some(entry) = all.iter_mut().find(|existing| existing.id == id) else {
+            return Err(MeetingStoreError::NotFound(id.to_string()));
+        };
+        entry.title = title.trim().to_string();
+        entry.renamed_by_user = true;
+        self.save_series(&all)?;
+        Ok(all)
+    }
+
+    /// Forgets a series. Its meetings stay; they simply stop being in one.
+    pub fn delete_series(&self, id: &str) -> Result<(), MeetingStoreError> {
+        let mut all = self.load_series();
+        all.retain(|existing| existing.id != id);
+        self.save_series(&all)?;
+
+        for meeting in self.list_meetings().unwrap_or_default() {
+            if meeting.series_id.as_deref() == Some(id) {
+                let _ = self.update_meeting(&meeting.id, |record| record.series_id = None);
+            }
+        }
+        Ok(())
+    }
+
+    /// Puts one meeting in a series, or takes it out of the one it is in.
+    pub fn set_meeting_series(
+        &self,
+        meeting_id: &str,
+        series_id: Option<String>,
+    ) -> Result<Meeting, MeetingStoreError> {
+        self.update_meeting(meeting_id, |record| record.series_id = series_id.clone())
     }
 
     /// Deletes a meeting's entire directory, audio included.

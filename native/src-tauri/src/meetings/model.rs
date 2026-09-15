@@ -186,6 +186,16 @@ pub struct Meeting {
     pub error: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The recurring meeting this recording is one of, once it is known.
+    ///
+    /// Written during a sync, from the calendar event the recording matched,
+    /// and never cleared by one — the event cache is a rolling window, so a
+    /// membership derived fresh on every read would evaporate a month later.
+    /// A typed field rather than a tag: a series is one-to-many with an
+    /// identity that comes from outside Vox, and matching on tag text would
+    /// split a series silently the moment somebody renamed it.
+    #[serde(default)]
+    pub series_id: Option<String>,
 }
 
 impl Meeting {
@@ -209,6 +219,7 @@ impl Meeting {
             dropped_segments: 0,
             error: None,
             tags: Vec::new(),
+            series_id: None,
         }
     }
 

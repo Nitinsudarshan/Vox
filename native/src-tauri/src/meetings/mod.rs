@@ -50,6 +50,7 @@ pub mod engine;
 pub mod import;
 pub mod model;
 pub mod segmenter;
+pub mod series;
 pub mod store;
 pub mod summary;
 pub mod transcription;

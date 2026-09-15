@@ -15,6 +15,7 @@ use super::google::{self, CalendarApiError, CalendarSummary};
 use super::model::{CalendarAccount, DayAgenda};
 use super::parse;
 use super::store::CalendarStore;
+use crate::meetings::series::{self, MeetingSeries, SeriesSource};
 
 /// Days of history and of future a sync asks Google for.
 ///
@@ -229,7 +230,65 @@ pub async fn sync_calendars(app: AppHandle) -> Result<Vec<CalendarAccount>, Comm
 
     let state = app.state::<AppState>();
     calendar_store(&state).save_accounts(&updated)?;
+    stamp_recurring_series(&state);
     Ok(updated)
+}
+
+/// Records which recordings belong to which recurring meeting.
+///
+/// Runs at the end of a sync rather than on every agenda read, and writes the
+/// membership onto the meeting: the event cache is a rolling window, so a
+/// series derived fresh on each read would look right for a month and then
+/// quietly lose its older occurrences.
+///
+/// Never clears a membership, for the same reason. An occurrence that has
+/// aged out of the window, or whose event was deleted from the calendar, is
+/// still a recording of that series.
+///
+/// Best-effort throughout: a series that cannot be written is not a reason to
+/// fail a sync that fetched everything correctly.
+fn stamp_recurring_series(state: &State<'_, AppState>) {
+    let store = calendar_store(state);
+    let mut events = store.load_events();
+    agenda::match_recordings(&mut events, &recording_windows(state));
+
+    let assignments = series::assignments_from_events(&events);
+    if assignments.is_empty() {
+        return;
+    }
+
+    let meetings = state.meeting_store.list_meetings().unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    for assignment in assignments {
+        let Some(meeting) = meetings.iter().find(|m| m.id == assignment.meeting_id) else {
+            continue;
+        };
+
+        if let Err(err) = state.meeting_store.upsert_series(MeetingSeries {
+            id: assignment.series_id.clone(),
+            title: assignment.title.clone(),
+            source: SeriesSource::Google,
+            created_at: now.clone(),
+            renamed_by_user: false,
+        }) {
+            tracing::warn!("could not record meeting series: {}", err);
+            continue;
+        }
+
+        // A membership the user set by hand wins: they may have moved this
+        // recording into a series Google split, and a sync must not move it
+        // back out.
+        if meeting.series_id.is_some() {
+            continue;
+        }
+        if let Err(err) = state
+            .meeting_store
+            .set_meeting_series(&meeting.id, Some(assignment.series_id))
+        {
+            tracing::warn!("could not put {} in its series: {}", meeting.id, err);
+        }
+    }
 }
 
 async fn sync_one(

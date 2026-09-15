@@ -94,6 +94,12 @@ pub fn parse_event(
             .and_then(|d| d.as_str())
             .map(flatten_html)
             .filter(|d| !d.is_empty()),
+        recurring_event_id: item
+            .get("recurringEventId")
+            .and_then(|id| id.as_str())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string),
         attendees,
         attendance,
         meeting_id: None,
