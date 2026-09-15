@@ -231,11 +231,9 @@ and Gemini, and that is the one place provider choice belongs).
 - **Voices remembered across meetings.** A name given in one meeting does not
   carry to the next. That needs an embedding stable enough to store, which is
   the same gap as above.
-- **Reminder snooze.** A reminder fires once per kind and is dismissed or
-  ignored; there is no "remind me again in five minutes".
 - **A reminder for a meeting that is still being recorded after it ended.**
-  The mirror of the "nothing is being recorded" nudge, and the other way a
-  recording goes wrong unattended.
+  The mirror of the unrecorded reminder, and the other way a recording goes
+  wrong unattended.
 - **A summary across a whole series.** Recurring meetings are linked
   (`meetings::series`) and their occurrences read in order, but "what has
   changed in this standup over six weeks" is still six reports read by hand.

@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { DeveloperSettings } from '../../types';
 import { Terminal, RefreshCw, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import * as meetings from '@/lib/meetings';
 import type { ReminderKind } from '@/types/meetings';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
@@ -27,21 +26,21 @@ const REMINDER_KINDS: Array<{
     offset: 't−5',
     label: 'Before it starts',
     description:
-      'Fires at the closest chosen lead time — 15, 10, 5 or 1 minute out. Offers Join and Join and record.',
+      'A scheduled meeting is about to start. Raised five minutes ahead of anything on a connected calendar.',
   },
   {
-    kind: 'starting',
-    offset: 't',
-    label: 'Starting now',
-    description:
-      'At the start, and for up to five minutes after if Vox was closed through it. Same actions.',
-  },
-  {
-    kind: 'not_recording',
+    kind: 'unrecorded',
     offset: 't+5',
-    label: 'Under way, nothing being recorded',
+    label: 'Running unrecorded',
     description:
-      'Five minutes in, when no recording is running and Vox has none of this meeting. Leads with Record now.',
+      'A scheduled meeting has started and nothing is recording it — and the call is actually open on screen.',
+  },
+  {
+    kind: 'detected',
+    offset: 'ad-hoc',
+    label: 'Detected call',
+    description:
+      'A conferencing window is open that the calendar knows nothing about. Window detection is a Windows capability.',
   },
 ];
 
@@ -86,19 +85,20 @@ export const DeveloperSettingsView: React.FC = () => {
     }
   };
 
-  const handleTestReminder = async (kinds: ReminderKind[]) => {
+  /**
+   * Raises one mock reminder through `NotificationService::show` itself.
+   *
+   * The real path, not a preview of it: a shortcut here would prove nothing
+   * about the card users actually see.
+   */
+  const handleTestReminder = async (kind: ReminderKind) => {
     setReminderResult(null);
     try {
-      for (const kind of kinds) {
-        await meetings.sendTestReminder(kind);
-      }
-      setReminderResult(
-        kinds.length === 1
-          ? 'Sent. The reminder window should be in the corner of your screen.'
-          : 'Sent all three. They stack in the reminder window, newest at the bottom.',
-      );
+      await invoke('trigger_mock_meeting_reminder', { kind });
+      setReminderResult('Raised. The card is in the top-right corner of your screen.');
     } catch (err) {
-      setReminderResult(meetings.meetingErrorMessage(err));
+      console.error(`Failed to trigger a mock ${kind} reminder:`, err);
+      setReminderResult(String(err));
     }
     setTimeout(() => setReminderResult(null), 8000);
   };
@@ -159,7 +159,7 @@ export const DeveloperSettingsView: React.FC = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void handleTestReminder([entry.kind])}
+                onClick={() => void handleTestReminder(entry.kind)}
                 className="shrink-0 text-xs"
               >
                 Send
@@ -168,22 +168,11 @@ export const DeveloperSettingsView: React.FC = () => {
           ))}
         </ul>
 
-        <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleTestReminder(REMINDER_KINDS.map((entry) => entry.kind))}
-            className="gap-2 text-xs"
-          >
-            <Bell className="w-3.5 h-3.5" />
-            Send all three
-          </Button>
-          {reminderResult && (
-            <p role="status" className="text-[11px] text-muted-foreground">
-              {reminderResult}
-            </p>
-          )}
-        </div>
+        {reminderResult && (
+          <p role="status" className="text-[11px] text-muted-foreground">
+            {reminderResult}
+          </p>
+        )}
       </div>
 
       {/* Onboarding Replay Override Section */}

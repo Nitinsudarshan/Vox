@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "meeting-overlay-capability",
+  "description": "Minimal permissions for the floating meeting recording pill. It is a subscriber to recording state, never its owner: it listens for meeting-state-changed and meeting-audio-level, reconciles against get_meeting_recording_status, and reports pause/stop back as ordinary commands. Core invoke and event listening is the whole surface \u2014 no filesystem, shell, dialog or notification access.",
+  "windows": [
+    "meeting-overlay"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

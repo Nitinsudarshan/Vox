@@ -47,8 +47,6 @@ pub mod commands;
 pub mod google;
 pub mod model;
 pub mod parse;
-pub mod reminder_service;
-pub mod reminder_window;
 pub mod reminders;
 pub mod store;
 

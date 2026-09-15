@@ -17,8 +17,6 @@ import type {
   MeetingSeriesSummary,
   MeetingSummary,
   MeetingTemplate,
-  ReminderKind,
-  ReminderSettings,
   SeriesOccurrence,
   Speaker,
   SpeakerReport,
@@ -134,27 +132,6 @@ export const saveSummary = (
   meetingId: string,
   markdown: string,
 ): Promise<MeetingSummary> => invoke('save_meeting_summary', { meetingId, markdown });
-
-// --- reminders -----------------------------------------------------------
-
-/** When Vox announces that a meeting is about to start. */
-export const getReminderSettings = (): Promise<ReminderSettings> =>
-  invoke('get_meeting_reminder_settings');
-
-/**
- * Raises a sample reminder, through the real path.
- *
- * Reminders only fire in the last few minutes before a meeting, so the only
- * way to find out whether they work at all was to have a meeting and wait for
- * it — and one that never appears looks exactly like a day with nothing due.
- */
-export const sendTestReminder = (kind: ReminderKind): Promise<void> =>
-  invoke('send_test_meeting_reminder', { kind });
-
-/** Saves them. Unknown lead times are dropped rather than rejected. */
-export const saveReminderSettings = (
-  reminders: ReminderSettings,
-): Promise<ReminderSettings> => invoke('set_meeting_reminder_settings', { reminders });
 
 // --- recurring meeting series -------------------------------------------
 
