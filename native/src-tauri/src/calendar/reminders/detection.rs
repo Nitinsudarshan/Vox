@@ -37,10 +37,47 @@ pub struct WindowMatch {
     pub confidence: f32,
 }
 
+/// Dashes that turn up between an app's name and a meeting's in a window title.
+///
+/// Google Meet ships an en dash, not the ASCII hyphen everything here used to
+/// match on, so "Meet – abc-defg-hij" looked like no provider at all and a live
+/// Meet call registered as nothing on screen. The whole `detected` reminder
+/// rests on these titles, so it matches every dash a title might use rather
+/// than the one that happened to be tested.
+const DASHES: [&str; 3] = ["-", "\u{2013}", "\u{2014}"];
+
+/// A lowercase copy with every dash folded to an ASCII hyphen, so one pattern
+/// matches all of them.
+fn fold_dashes(text: &str) -> String {
+    let mut folded = text.to_lowercase();
+    for dash in &DASHES[1..] {
+        folded = folded.replace(dash, "-");
+    }
+    folded
+}
+
+/// `title` without a trailing ` <dash> <tail>`, whichever dash it uses.
+fn strip_dashed_suffix(title: &str, tail: &str) -> Option<String> {
+    DASHES.iter().find_map(|dash| {
+        title
+            .strip_suffix(&format!(" {dash} {tail}"))
+            .map(|rest| rest.trim().to_string())
+    })
+}
+
+/// `title` without a leading `<head> <dash> `, whichever dash it uses.
+fn strip_dashed_prefix(title: &str, head: &str) -> Option<String> {
+    DASHES.iter().find_map(|dash| {
+        title
+            .strip_prefix(&format!("{head} {dash} "))
+            .map(|rest| rest.trim().to_string())
+    })
+}
+
 /// A window title's provider, if any — the same matching the enumerator uses,
 /// exposed so a title from anywhere else can be classified the same way.
 pub fn identify_meeting_provider(text: &str) -> Option<&'static str> {
-    let lower = text.to_lowercase();
+    let lower = fold_dashes(text);
     if lower.contains("zoom meeting") || (lower.contains("zoom") && lower.contains("meeting id")) {
         Some(PROVIDER_ZOOM)
     } else if lower.contains("meet - ")
@@ -98,38 +135,37 @@ pub fn clean_meeting_window_title(raw_title: &str, provider: &str) -> String {
     let mut title = raw_title.trim().to_string();
 
     for browser in &[
-        " - Google Chrome",
-        " - Microsoft\u{200b} Edge",
-        " - Microsoft Edge",
-        " \u{2014} Mozilla Firefox",
-        " - Mozilla Firefox",
-        " - Brave",
-        " - Opera",
-        " - Vivaldi",
+        "Google Chrome",
+        "Microsoft\u{200b} Edge",
+        "Microsoft Edge",
+        "Mozilla Firefox",
+        "Brave",
+        "Opera",
+        "Vivaldi",
     ] {
-        if title.ends_with(browser) {
-            title = title[..title.len() - browser.len()].trim().to_string();
+        if let Some(rest) = strip_dashed_suffix(&title, browser) {
+            title = rest;
         }
     }
 
     match provider {
         PROVIDER_GOOGLE_MEET => {
-            if let Some(rest) = title.strip_prefix("Meet - ") {
-                title = rest.trim().to_string();
+            if let Some(rest) = strip_dashed_prefix(&title, "Meet") {
+                title = rest;
             }
-            if let Some(rest) = title.strip_suffix(" - Google Meet") {
-                title = rest.trim().to_string();
+            if let Some(rest) = strip_dashed_suffix(&title, "Google Meet") {
+                title = rest;
             }
             if title.is_empty() || title == "Meet" || title == "Google Meet" {
                 title = "Google Meet Session".to_string();
             }
         }
         PROVIDER_ZOOM => {
-            if let Some(rest) = title.strip_prefix("Zoom - ") {
-                title = rest.trim().to_string();
+            if let Some(rest) = strip_dashed_prefix(&title, "Zoom") {
+                title = rest;
             }
-            if let Some(rest) = title.strip_suffix(" - Zoom") {
-                title = rest.trim().to_string();
+            if let Some(rest) = strip_dashed_suffix(&title, "Zoom") {
+                title = rest;
             }
             if title.is_empty() || title == "Zoom" || title == "Zoom Meeting" {
                 title = "Zoom Meeting".to_string();
@@ -148,11 +184,11 @@ pub fn clean_meeting_window_title(raw_title: &str, provider: &str) -> String {
             }
         }
         PROVIDER_WEBEX => {
-            if let Some(rest) = title.strip_suffix(" - Cisco Webex Meetings") {
-                title = rest.trim().to_string();
+            if let Some(rest) = strip_dashed_suffix(&title, "Cisco Webex Meetings") {
+                title = rest;
             }
-            if let Some(rest) = title.strip_suffix(" - Webex") {
-                title = rest.trim().to_string();
+            if let Some(rest) = strip_dashed_suffix(&title, "Webex") {
+                title = rest;
             }
             if title.is_empty() || title == "Webex" {
                 title = "Webex Meeting".to_string();
@@ -267,6 +303,47 @@ mod tests {
             Some(PROVIDER_TEAMS)
         );
         assert_eq!(identify_meeting_provider("Inbox - Gmail"), None);
+    }
+
+    #[test]
+    fn an_en_dash_in_a_title_is_still_a_meeting() {
+        // Google Meet writes an en dash, and matching only the ASCII hyphen
+        // made a live Meet call look like nothing on screen — the `detected`
+        // reminder failing silently, which is the one failure mode it has.
+        assert_eq!(
+            identify_meeting_provider("Meet \u{2013} abc-defg-hij \u{2013} Google Chrome"),
+            Some(PROVIDER_GOOGLE_MEET)
+        );
+        assert_eq!(
+            clean_meeting_window_title(
+                "Meet \u{2013} Sprint Planning \u{2013} Google Chrome",
+                PROVIDER_GOOGLE_MEET
+            ),
+            "Sprint Planning"
+        );
+        assert_eq!(
+            clean_meeting_window_title(
+                "Placement sync \u{2014} Zoom \u{2014} Mozilla Firefox",
+                PROVIDER_ZOOM
+            ),
+            "Placement sync"
+        );
+    }
+
+    #[test]
+    fn every_reminder_kind_is_on_out_of_the_box() {
+        // A reminder nobody switched off must arrive. Detection was shipped
+        // defaulted off, which left the one call with no calendar entry —
+        // the only kind nothing else can catch — covered by nothing.
+        let settings = super::super::ReminderSettings::default();
+        assert!(settings.remind_before_meeting);
+        assert!(settings.remind_if_unrecorded);
+        assert!(settings.remind_on_detection);
+
+        // And an older settings file that predates the field reads the same
+        // way, rather than silently keeping the old default.
+        let restored: super::super::ReminderSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored, settings);
     }
 
     #[test]

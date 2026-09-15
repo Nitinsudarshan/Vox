@@ -23,7 +23,7 @@ interface ReminderShape {
 const DEFAULTS: ReminderShape = {
   remind_before_meeting: true,
   remind_if_unrecorded: true,
-  remind_on_detection: false,
+  remind_on_detection: true,
 };
 
 export const ReminderSettingsCard: React.FC = () => {
@@ -102,7 +102,7 @@ export const ReminderSettingsCard: React.FC = () => {
       <div className="h-px bg-border/60" />
       <ReminderToggle
         label="When a call is detected that is not in the calendar"
-        description="An ad-hoc call somebody pulled you into. Reads window titles, which is the most intrusive signal here and the one most likely to be wrong, so it is off unless you ask for it."
+        description="An ad-hoc call somebody pulled you into — the meeting with no calendar entry, which nothing else here can catch. Reads window titles, which never leave this machine, and a call with no topic in its title has to persist before it interrupts you."
         checked={settings.remind_on_detection}
         onChange={(remind_on_detection) => void update({ remind_on_detection })}
       />
