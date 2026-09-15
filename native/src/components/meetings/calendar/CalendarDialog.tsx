@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, Loader2, RefreshCw, Video } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Loader2, RefreshCw, Video } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -8,13 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  accountColor,
-  canJoinEvent,
-  eventTime,
-  isDeclined,
-  joinUnavailableReason,
-} from '@/lib/calendar';
+import { accountColor, eventTime, isDeclined } from '@/lib/calendar';
 import type { CalendarAccount, CalendarEvent, DayAgenda } from '@/types/calendar';
 import { AccountLegend } from './AccountLegend';
 
@@ -28,8 +22,8 @@ interface CalendarDialogProps {
   accounts: CalendarAccount[];
   syncing: boolean;
   onSync: () => void;
-  onOpenNotes: (meetingId: string) => void;
-  onJoin: (event: CalendarEvent) => void;
+  /** Opens one meeting in full, the same dialog the agenda opens. */
+  onOpenEvent: (event: CalendarEvent) => void;
   /** Fixed "now" for tests; the live clock otherwise. */
   now?: Date;
 }
@@ -54,8 +48,7 @@ export const CalendarDialog: React.FC<CalendarDialogProps> = ({
   accounts,
   syncing,
   onSync,
-  onOpenNotes,
-  onJoin,
+  onOpenEvent,
   now,
 }) => {
   const today = React.useMemo(() => startOfDay(now ?? new Date()), [now]);
@@ -179,9 +172,7 @@ export const CalendarDialog: React.FC<CalendarDialogProps> = ({
                       key={`${event.account_email}-${event.id}`}
                       event={event}
                       connectedAccounts={connectedAccounts}
-                      onOpenNotes={onOpenNotes}
-                      onJoin={onJoin}
-                      now={now}
+                      onOpen={onOpenEvent}
                     />
                   ))}
                 </ul>
@@ -197,69 +188,50 @@ export const CalendarDialog: React.FC<CalendarDialogProps> = ({
 interface CalendarDayEventProps {
   event: CalendarEvent;
   connectedAccounts: string[];
-  onOpenNotes: (meetingId: string) => void;
-  onJoin: (event: CalendarEvent) => void;
-  now?: Date;
+  onOpen: (event: CalendarEvent) => void;
 }
 
-/** One event, as a block in its day's column. */
+/**
+ * One event, as a block in its day's column.
+ *
+ * A single target, like the agenda row: the block is the meeting, and
+ * everything you can do with it is in the dialog behind it. A 120-pixel-wide
+ * column is no place for three competing buttons.
+ */
 const CalendarDayEvent: React.FC<CalendarDayEventProps> = ({
   event,
   connectedAccounts,
-  onOpenNotes,
-  onJoin,
-  now,
+  onOpen,
 }) => {
   const colour = accountColor(event.account_email, connectedAccounts);
   const declined = isDeclined(event);
-  const joinable = canJoinEvent(event, now);
 
   return (
-    <li
-      className={`rounded-md border-l-2 px-2 py-1.5 ${colour.border} ${colour.soft}`}
-      title={`${event.title} — ${event.account_email}`}
-    >
-      <p className="text-[10px] font-mono text-muted-foreground tabular-nums">
-        {eventTime(event)}
-      </p>
-      <p
-        className={`text-[11px] leading-snug ${
-          declined ? 'line-through text-muted-foreground' : 'text-foreground'
-        }`}
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(event)}
+        title={`${event.title} — ${event.account_email}`}
+        className={`w-full text-left rounded-md border-l-2 px-2 py-1.5 transition-opacity hover:opacity-80 cursor-pointer ${colour.border} ${colour.soft}`}
       >
-        {event.title}
-      </p>
-      <span className="sr-only">{`From ${event.account_email}.`}</span>
-
-      <div className="flex items-center gap-2 mt-1">
-        {event.meeting_id && (
-          <button
-            type="button"
-            onClick={() => onOpenNotes(event.meeting_id as string)}
-            className="text-[10px] text-primary hover:underline cursor-pointer"
-          >
-            Notes
-          </button>
+        <p className="text-[10px] font-mono text-muted-foreground tabular-nums">
+          {eventTime(event)}
+        </p>
+        <p
+          className={`text-[11px] leading-snug ${
+            declined ? 'line-through text-muted-foreground' : 'text-foreground'
+          }`}
+        >
+          {event.title}
+        </p>
+        <span className="sr-only">{`From ${event.account_email}.`}</span>
+        {(event.meeting_id || event.conference_url) && (
+          <span className="flex items-center gap-1.5 mt-1 text-muted-foreground/70">
+            {event.meeting_id && <FileText className="w-3 h-3" aria-label="Has notes" />}
+            {event.conference_url && <Video className="w-3 h-3" aria-label="Video call" />}
+          </span>
         )}
-        {event.conference_url &&
-          (joinable ? (
-            <button
-              type="button"
-              onClick={() => onJoin(event)}
-              className="inline-flex items-center gap-1 text-[10px] font-medium text-primary hover:underline cursor-pointer"
-            >
-              <Video className="w-3 h-3" />
-              Join
-            </button>
-          ) : (
-            <span
-              className="inline-flex items-center text-muted-foreground/70"
-              title={joinUnavailableReason(event, now)}
-            >
-              <Video className="w-3 h-3" />
-            </span>
-          ))}
-      </div>
+      </button>
     </li>
   );
 };
