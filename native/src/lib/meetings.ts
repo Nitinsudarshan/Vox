@@ -13,8 +13,11 @@ import type {
   MeetingListItem,
   MeetingRecordingStatus,
   MeetingSearchHit,
+  MeetingSeries,
+  MeetingSeriesSummary,
   MeetingSummary,
   MeetingTemplate,
+  SeriesOccurrence,
   Speaker,
   SpeakerReport,
   TranscriptSegment,
@@ -129,6 +132,36 @@ export const saveSummary = (
   meetingId: string,
   markdown: string,
 ): Promise<MeetingSummary> => invoke('save_meeting_summary', { meetingId, markdown });
+
+// --- recurring meeting series -------------------------------------------
+
+/** Every recurring meeting, most recently active first. */
+export const listMeetingSeries = (): Promise<MeetingSeriesSummary[]> =>
+  invoke('list_meeting_series');
+
+/** The recordings in one series, oldest first — a series reads forwards. */
+export const getMeetingSeries = (seriesId: string): Promise<SeriesOccurrence[]> =>
+  invoke('get_meeting_series', { seriesId });
+
+/** Creates a series by hand, for recordings no calendar event covers. */
+export const createMeetingSeries = (title: string): Promise<MeetingSeries> =>
+  invoke('create_meeting_series', { title });
+
+/** Renames a series. The name then survives every later sync. */
+export const renameMeetingSeries = (
+  seriesId: string,
+  title: string,
+): Promise<MeetingSeries[]> => invoke('rename_meeting_series', { seriesId, title });
+
+/** Forgets a series. Its recordings stay; they stop being in one. */
+export const deleteMeetingSeries = (seriesId: string): Promise<void> =>
+  invoke('delete_meeting_series', { seriesId });
+
+/** Puts a recording in a series, or `null` to take it out of the one it is in. */
+export const setMeetingSeries = (
+  meetingId: string,
+  seriesId: string | null,
+): Promise<Meeting> => invoke('set_meeting_series', { meetingId, seriesId });
 
 export const promoteToScribble = (meetingId: string): Promise<{ id: string }> =>
   invoke('promote_meeting_to_scribble', { meetingId });

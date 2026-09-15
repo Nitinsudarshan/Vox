@@ -91,6 +91,42 @@ export interface Meeting {
   dropped_segments: number;
   error?: string | null;
   tags: string[];
+  /**
+   * The recurring meeting this recording is one of, once it is known.
+   *
+   * Written during a calendar sync from the event the recording matched, or
+   * set by hand. `null` for a one-off.
+   */
+  series_id?: string | null;
+}
+
+/** Where a recurring meeting's identity came from. */
+export type SeriesSource = 'google' | 'manual';
+
+/** A recurring meeting. */
+export interface MeetingSeries {
+  /** `google:<recurringEventId>` or `manual:<slug>-<timestamp>`. */
+  id: string;
+  title: string;
+  source: SeriesSource;
+  created_at: string;
+  /** Whether the user named it, so a sync leaves the name alone. */
+  renamed_by_user: boolean;
+}
+
+/** A series as the picker lists one. */
+export interface MeetingSeriesSummary extends MeetingSeries {
+  occurrence_count: number;
+  latest_at?: string | null;
+}
+
+/** One recording's place in its series. */
+export interface SeriesOccurrence {
+  meeting_id: string;
+  title: string;
+  created_at: string;
+  duration_seconds: number;
+  has_summary: boolean;
 }
 
 /** A meeting as the list renders it: the record plus two derived fields. */

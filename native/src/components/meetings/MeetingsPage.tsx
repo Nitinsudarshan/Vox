@@ -10,6 +10,7 @@ import { MeetingIndex } from './MeetingIndex';
 import { MeetingView } from './MeetingView';
 import { RetranscribeDialog } from './RetranscribeDialog';
 import { CalendarDialog } from './calendar/CalendarDialog';
+import { SeriesDialog } from './series/SeriesDialog';
 import * as meetings from '@/lib/meetings';
 import { meetingErrorMessage, type RetranscribeOverrides } from '@/lib/meetings';
 import * as calendar from '@/lib/calendar';
@@ -20,7 +21,9 @@ import {
   type MeetingListItem,
   type MeetingDevices,
   type MeetingRecordingStatus,
+  type MeetingSeriesSummary,
   type MeetingTemplate,
+  type SeriesOccurrence,
   type SummaryProgress,
   type TranscriptSegment,
   type TranscriptionWarning,
@@ -81,6 +84,10 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [detectingSpeakers, setDetectingSpeakers] = React.useState(false);
   const [retranscribeOpen, setRetranscribeOpen] = React.useState(false);
   const [calendarOpen, setCalendarOpen] = React.useState(false);
+  const [seriesDialogOpen, setSeriesDialogOpen] = React.useState(false);
+  const [allSeries, setAllSeries] = React.useState<MeetingSeriesSummary[]>([]);
+  const [seriesOccurrences, setSeriesOccurrences] = React.useState<SeriesOccurrence[]>([]);
+  const [seriesLoading, setSeriesLoading] = React.useState(false);
   const [retranscribing, setRetranscribing] = React.useState(false);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
@@ -108,6 +115,13 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       notify('error', meetingErrorMessage(error));
     } finally {
       setListLoading(false);
+    }
+    try {
+      // The catalogue, not the membership: a meeting carries its series id, and
+      // this is what turns that id into a name.
+      setAllSeries((await meetings.listMeetingSeries()) ?? []);
+    } catch {
+      setAllSeries([]);
     }
   }, [notify]);
 
@@ -190,6 +204,32 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
     if (selectedId) void refreshDetail(selectedId);
     else setDetail(null);
   }, [selectedId, refreshDetail]);
+
+  /** The series the open meeting belongs to, as a record rather than an id. */
+  const currentSeries = React.useMemo(
+    () => allSeries.find((entry) => entry.id === detail?.meeting.series_id) ?? null,
+    [allSeries, detail?.meeting.series_id],
+  );
+
+  const refreshSeriesOccurrences = React.useCallback(async (seriesId: string) => {
+    setSeriesLoading(true);
+    try {
+      setSeriesOccurrences((await meetings.getMeetingSeries(seriesId)) ?? []);
+    } catch {
+      setSeriesOccurrences([]);
+    } finally {
+      setSeriesLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    const seriesId = detail?.meeting.series_id;
+    if (!seriesId) {
+      setSeriesOccurrences([]);
+      return;
+    }
+    void refreshSeriesOccurrences(seriesId);
+  }, [detail?.meeting.series_id, refreshSeriesOccurrences]);
 
   // A recording's clock is not event-driven, so the status is polled while one
   // is running and left alone when none is.
@@ -557,6 +597,11 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
             onDetectSpeakers={handleDetectSpeakers}
             onRenameSpeaker={handleRenameSpeaker}
             detectingSpeakers={detectingSpeakers}
+            seriesTitle={currentSeries?.title}
+            seriesOccurrences={seriesOccurrences}
+            seriesLoading={seriesLoading}
+            onOpenMeeting={setSelectedId}
+            onAddToSeries={() => setSeriesDialogOpen(true)}
           />
         ) : (
           <MeetingIndex
@@ -576,6 +621,20 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
           />
         )}
       </div>
+
+      {detail && (
+        <SeriesDialog
+          open={seriesDialogOpen}
+          onOpenChange={setSeriesDialogOpen}
+          meetingId={detail.meeting.id}
+          meetingTitle={detail.meeting.title}
+          currentSeriesId={detail.meeting.series_id}
+          onChanged={() => {
+            void refreshList();
+            if (selectedId) void refreshDetail(selectedId);
+          }}
+        />
+      )}
 
       <CalendarDialog
         open={calendarOpen}

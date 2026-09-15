@@ -243,87 +243,37 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
     one, and it should be designed as itself rather than smuggled in under this
     setting's name.
 
-### 14. Recurring Meetings as a Series
+### 14. A Summary Across a Whole Series
 
-- **Status**: Backlog — designed, not built. The signal it needs is already in
-  the API response and is currently discarded.
-- **Area**: Native backend (`native/src-tauri/src/calendar/parse.rs`,
-  `native/src-tauri/src/calendar/agenda.rs`,
-  `native/src-tauri/src/meetings/model.rs`), Native frontend
-  (`native/src/components/meetings/`)
+- **Status**: Backlog — the series object it needs now exists; this does not
+- **Area**: Native backend (`native/src-tauri/src/meetings/summary/processor.rs`,
+  `native/src-tauri/src/meetings/series.rs`)
 - **Original Context**:
-  - A weekly standup is twelve recordings with twelve near-identical names,
-    each one a separate row in a list ordered only by date. The question a
-    person actually has — *what has happened across this meeting* — cannot be
-    asked at all: there is no object that is "the weekly standup", only
-    twelve unrelated meetings that happen to share a title.
-  - Vox already fetches everything needed to know better. `singleEvents=true`
-    (`calendar::google::list_events`) is what expands a recurrence rule into
-    the occurrences a person attends, and every occurrence Google returns
-    carries `recurringEventId` — the parent series' id, stable across every
-    occurrence and across renames. `calendar::parse::parse_event` does not
-    read it.
-  - `meetings::model::Meeting` has a `tags: Vec<String>` field that no code
-    path writes or reads. It is the obvious-looking place to put this and it
-    is the wrong one — see the blueprint.
+  - Recurring meetings now have an identity (`meetings::series`): Google's
+    `recurringEventId` names the series, membership is stamped onto each
+    recording during a sync, and the occurrences can be read in order. That
+    answers "which meetings are the standup".
+  - It does not answer the question underneath it — *what has changed in this
+    standup over six weeks*. Reading six reports in order is the manual
+    version, and it is what a person does today.
 - **Concept & Implementation Blueprint**:
-  - **The series identity is Google's, not a heuristic.** Parse
-    `recurringEventId` into `CalendarEvent::recurring_event_id`. Do not infer
-    a series from title equality or from "same time each week": two teams both
-    running a "Weekly Sync" at 10:00 would merge into one, and the failure is
-    silent and unfixable by the user. An id Google assigns survives a rename,
-    a time change, and a single occurrence being moved.
-  - **Namespace the series id by the recurring event alone** — `google:<id>`,
-    not `google:<account>:<id>`. An invitation that reached two accounts is
-    de-duplicated by `agenda::deduplicate`, and which copy survives depends on
-    who answered; including the account in the key would split one series in
-    half the first time the surviving copy changed account.
-  - **Persist membership on the meeting, do not derive it on every read.** Add
-    `series_id: Option<String>` to `Meeting`. Stamp it during sync: after
-    `match_recordings` links a recording to an event that carries a
-    `recurring_event_id`, write the series id onto that meeting and never
-    clear it. Deriving it live instead would look identical for a month and
-    then quietly break, because the event cache is a rolling
-    `SYNC_DAYS_BACK`/`SYNC_DAYS_AHEAD` window (30 days each way) and an
-    occurrence outside it no longer exists to join against.
-  - **Store the series' own record separately** —
-    `vault/calendar/meeting-series.json`, `{ id, title, source: "google" |
-    "manual", created_at }` — so a series has a name a user can change without
-    that rename rewriting twelve meeting files, and so a series survives the
-    calendar being disconnected.
-  - **One meeting belongs to at most one series.** A recording is one
-    conversation; letting it sit in two series makes both of them wrong.
-  - **Why not `tags`.** A tag is many-to-many, free-form, and identified by
-    its own text, so "which meetings are in this series" becomes a string
-    match re-run on every read and a renamed series silently splits into two.
-    A series is one-to-many with an identity that comes from outside Vox.
-    Build the typed field; either delete the unused `tags` field in the same
-    change or leave it alone deliberately, but do not overload it.
-  - **Manual series for everything with no event.** Imported audio and
-    ad-hoc recordings have no calendar event and never will. The only honest
-    option is the user putting them in a series by hand — "Add to series…" on
-    the meeting's overflow menu, picking an existing series or naming a new
-    one. That same action is the escape hatch for a series Google split
-    (deleting and recreating a recurrence produces a new `recurringEventId`,
-    and the old meetings genuinely are a different series until somebody says
-    otherwise).
-  - **Surfaces, in order of what they are worth:**
-    1. A line in the meeting banner — "Weekly Sync · 9th of 12" — with
-       previous/next controls, so reading one occurrence and stepping to the
-       one before it is two clicks rather than a trip through the list.
-    2. A series page: the occurrences in date order, each with the first lines
-       of its report, which is the "understand the flow" view.
-    3. The meetings index groups a series under one collapsible heading
-       instead of twelve rows, reusing `MeetingDayGroup`'s collapse.
-  - **Edge cases to handle:** a declined occurrence is still in the series; an
-    occurrence moved to another day keeps its `recurringEventId` and so stays
-    in the series; a recording that matched no event stays series-less rather
-    than being guessed into one; deleting a series must not delete its
-    meetings.
-- **Deliberately out of scope, and a separate feature:** a summary *across* a
-  series ("what has changed in this standup over six weeks"). It is a real
-  thing to want and it is a different machine — `meetings::summary::processor`
-  would need to map-reduce over several transcripts with a template that
-  reasons about change over time, with its own cost and its own failure modes.
-  Build the series object first; a cross-series report has nothing to stand on
-  until one exists.
+  - A template that reasons about change over time rather than about one
+    conversation: what was decided and then reversed, what has been carried
+    forward without moving, who committed to what and whether it landed.
+    `summary::templates` is JSON-driven, so the template itself is cheap; the
+    prompt behind it is not the same prompt.
+  - Map-reduce across transcripts, not a concatenation. Six hour-long meetings
+    exceed any local model's context, so the shape is the existing chunked
+    processor applied a level up: summarise each occurrence (most already
+    have a report), then reduce the reports with the change-over-time
+    template.
+  - Cost and cancellation are the real design work. A local model summarising
+    six meetings is minutes, not seconds, and the existing per-meeting
+    progress events (`SummaryProgress`) are per-meeting — a series run needs
+    its own progress shape or it looks like a hang.
+  - Where it goes: the series panel already lists the occurrences, so the
+    report belongs at the top of it, cached against the set of meeting ids it
+    was generated from so adding a seventh occurrence visibly invalidates it
+    rather than silently showing a stale answer.
+- **Not blocked on anything.** It is a feature-sized piece of work, not a
+  dependency problem.
