@@ -1,19 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeveloperSettings } from '../../types';
-import { Terminal, RefreshCw, Bell } from 'lucide-react';
+import { Terminal, RefreshCw, Bell, SearchCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { ReminderKind } from '@/types/meetings';
+import type { ConferencingWindowMatch, ReminderKind } from '@/types/meetings';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 
 /**
- * Every kind of meeting reminder, with what each one is for.
+ * Every kind of meeting reminder, with when it fires and what it is for.
  *
- * The list is the point. Three separate messages is a design decision that is
- * otherwise invisible until one of them turns up, and the third — a meeting
- * running with nothing being captured — is the failure this app exists to
- * prevent and the only one that is silent by nature.
+ * The list is the point. Three separate messages, each with its own actions,
+ * is a design decision that stays invisible until one of them turns up — and
+ * the one that matters most, a meeting running with nothing being captured,
+ * is the failure this app exists to prevent and the only one that is silent
+ * by nature.
  */
 const REMINDER_KINDS: Array<{
   kind: ReminderKind;
@@ -52,6 +53,7 @@ export const DeveloperSettingsView: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [, setSavedFeedback] = useState(false);
   const [reminderResult, setReminderResult] = useState<string | null>(null);
+  const [detected, setDetected] = useState<ConferencingWindowMatch[] | null>(null);
 
   useEffect(() => {
     loadDevSettings();
@@ -103,6 +105,26 @@ export const DeveloperSettingsView: React.FC = () => {
     setTimeout(() => setReminderResult(null), 8000);
   };
 
+  /**
+   * What window detection can see right now.
+   *
+   * The `detected` reminder is the one kind no calendar can vouch for, so
+   * &ldquo;nothing is open&rdquo; and &ldquo;detection is blind on this
+   * machine&rdquo; are otherwise the same silence. Rendered in place rather
+   * than in a dialog: the result is read against what is actually on screen,
+   * and a modal would cover the very windows being counted.
+   */
+  const handleCheckDetection = async () => {
+    setReminderResult(null);
+    try {
+      setDetected(await invoke<ConferencingWindowMatch[]>('debug_detect_conferencing_windows'));
+    } catch (err) {
+      console.error('Failed to run window detection:', err);
+      setDetected(null);
+      setReminderResult(String(err));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="border-b border-border/40 pb-5">
@@ -131,13 +153,14 @@ export const DeveloperSettingsView: React.FC = () => {
           <p className="text-xs text-muted-foreground leading-relaxed max-w-2xl">
             There are three, and they are different messages with different actions rather than
             one message at three times. Each button raises its kind through the same path a real
-            one takes — the reminder window, not an in-app panel and not a Windows toast.
-            Reminders otherwise only fire in a few specific minutes around a meeting, which made
-            &ldquo;nothing appeared&rdquo; and &ldquo;nothing was due&rdquo; impossible to tell
-            apart.
+            one takes — a card in a window of its own, above whatever you are working in, never
+            an in-app panel and never a Windows toast. A real one fires only in the few specific
+            minutes around a meeting, which otherwise makes &ldquo;nothing appeared&rdquo; and
+            &ldquo;nothing was due&rdquo; impossible to tell apart.
           </p>
           <div className="pt-1 text-[11px] text-muted-foreground/80">
             Nothing is written and no calendar is read: the sample meeting is invented here.
+            Window detection, below, only lists what is already on screen.
           </div>
         </div>
 
@@ -168,10 +191,52 @@ export const DeveloperSettingsView: React.FC = () => {
           ))}
         </ul>
 
+        <div className="pt-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleCheckDetection()}
+            className="text-xs h-8 gap-1.5 border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-500"
+          >
+            <SearchCode className="w-3.5 h-3.5" />
+            Check window detection
+          </Button>
+        </div>
+
         {reminderResult && (
           <p role="status" className="text-[11px] text-muted-foreground">
             {reminderResult}
           </p>
+        )}
+
+        {detected && (
+          <div role="status" className="space-y-1.5">
+            <p className="text-[11px] font-medium text-foreground">
+              {detected.length === 0
+                ? 'No conferencing windows on screen.'
+                : `${detected.length} conferencing ${
+                    detected.length === 1 ? 'window' : 'windows'
+                  } on screen:`}
+            </p>
+            {detected.map((match) => (
+              <div
+                key={`${match.provider}:${match.raw_title}`}
+                className="flex items-center justify-between gap-3 p-2 rounded-md border border-border/60 bg-background/50"
+              >
+                <div className="min-w-0">
+                  {/* A window title is somebody else's text. Shown, never
+                      interpreted — `rules/untrusted-input.md`. */}
+                  <p className="text-[11px] font-medium text-foreground truncate">{match.title}</p>
+                  <p className="text-[10px] font-mono text-muted-foreground truncate">
+                    {match.raw_title}
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-[10px] shrink-0 font-mono">
+                  {match.provider} · {match.confidence.toFixed(2)}
+                </Badge>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

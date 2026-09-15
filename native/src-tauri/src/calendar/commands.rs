@@ -650,6 +650,16 @@ pub async fn trigger_mock_meeting_reminder(
     Ok(())
 }
 
+/// Testing only: what window detection can see right now.
+///
+/// The `detected` reminder is the one kind no calendar can explain, so the
+/// only way to tell "nothing is open" from "detection is blind on this
+/// machine" is to ask it what it sees. Reports, never acts.
+#[tauri::command]
+pub fn debug_detect_conferencing_windows() -> Vec<reminders::detection::WindowMatch> {
+    reminders::detection::detect_active_conferencing_windows()
+}
+
 /// Grows the meeting pill for its hovered state and shrinks it back.
 #[tauri::command]
 pub fn set_meeting_overlay_expanded(app: AppHandle, expanded: bool) {

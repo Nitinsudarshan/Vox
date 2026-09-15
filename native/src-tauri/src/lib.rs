@@ -525,6 +525,7 @@ pub fn run() {
             calendar::commands::join_meeting_from_reminder,
             calendar::commands::start_meeting_from_reminder,
             calendar::commands::trigger_mock_meeting_reminder,
+            calendar::commands::debug_detect_conferencing_windows,
             calendar::commands::set_meeting_overlay_expanded,
             meetings::commands::list_meeting_series,
             meetings::commands::get_meeting_series,

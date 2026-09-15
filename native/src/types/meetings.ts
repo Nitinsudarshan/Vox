@@ -305,6 +305,25 @@ export const MEETING_REMINDER_EVENT = 'meeting-reminder';
  */
 export type ReminderKind = 'upcoming' | 'unrecorded' | 'detected';
 
+/**
+ * One conferencing window detection can see on screen.
+ *
+ * Mirrors `calendar::reminders::detection::WindowMatch`. Only Settings ›
+ * Developer reads this: the reminder pipeline weighs these itself and hands
+ * the frontend a finished card, never the raw sightings.
+ */
+export interface ConferencingWindowMatch {
+  /** `google_meet`, `zoom`, `teams`, `webex` or `other`. */
+  provider: string;
+  /** The title with the app's own chrome stripped off. */
+  title: string;
+  /** Exactly what the window reported, for telling a bad match from a bad title. */
+  raw_title: string;
+  source: string;
+  /** How specific the match is, 0–1. A bare "Zoom Meeting" scores low. */
+  confidence: number;
+}
+
 /** What the reminder card is given. Sanitized in Rust; nothing else crosses. */
 export interface MeetingReminderPayload {
   /** `cal:<event id>` or `win:<provider>:<title>`. Never a recording's id. */
