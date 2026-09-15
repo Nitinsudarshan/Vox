@@ -4,7 +4,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-import { ReminderToasts } from './ReminderToasts';
+import { ReminderOverlay } from './ReminderOverlay';
 import { MEETING_REMINDER_EVENT, type MeetingReminder } from '@/types/meetings';
 
 /** The handler the component registered, so a test can fire a reminder at it. */
@@ -24,7 +24,7 @@ const reminder = (overrides: Partial<MeetingReminder> = {}): MeetingReminder => 
   ...overrides,
 });
 
-describe('ReminderToasts', () => {
+describe('ReminderOverlay', () => {
   beforeEach(() => {
     deliver = null;
     vi.mocked(invoke).mockReset();
@@ -42,12 +42,12 @@ describe('ReminderToasts', () => {
   });
 
   test('says nothing until a meeting is actually due', () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     expect(screen.queryByRole('region', { name: /meeting reminders/i })).not.toBeInTheDocument();
   });
 
   test('a due meeting is announced with how long is left and who is in it', async () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
     deliver?.({ payload: reminder() });
 
@@ -57,7 +57,7 @@ describe('ReminderToasts', () => {
   });
 
   test('a meeting that has already begun says so rather than counting down', async () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
     deliver?.({
       payload: reminder({
@@ -71,7 +71,7 @@ describe('ReminderToasts', () => {
   });
 
   test('joining opens the link through the backend, which validates it', async () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
     deliver?.({ payload: reminder() });
 
@@ -85,29 +85,66 @@ describe('ReminderToasts', () => {
     await waitFor(() => expect(screen.queryByText('Weekly Sync')).not.toBeInTheDocument());
   });
 
-  test('recording takes the user to Meetings and closes the reminder', async () => {
-    const onStartMeeting = vi.fn();
-    render(<ReminderToasts onStartMeeting={onStartMeeting} />);
+  test('join and record opens the call and starts recording it', async () => {
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
     deliver?.({ payload: reminder() });
 
-    fireEvent.click(await screen.findByRole('button', { name: /^record$/i }));
-    expect(onStartMeeting).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: /join and record/i }));
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('open_calendar_link', {
+        url: 'https://meet.google.com/abc-defg-hij',
+      }),
+    );
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'start_meeting',
+        expect.objectContaining({ title: 'Weekly Sync' }),
+      ),
+    );
     await waitFor(() => expect(screen.queryByText('Weekly Sync')).not.toBeInTheDocument());
   });
 
-  test('a meeting with no video link still offers to be recorded', async () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+  test('the window hides itself once the last reminder is gone', async () => {
+    // A transparent always-on-top window left up with nothing in it still
+    // swallows clicks meant for whatever is underneath.
+    render(<ReminderOverlay />);
+    await waitFor(() => expect(deliver).not.toBeNull());
+    deliver?.({ payload: reminder() });
+    await screen.findByText('Weekly Sync');
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss the reminder/i }));
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('dismiss_meeting_reminders'),
+    );
+  });
+
+  test('the window is sized from what was laid out rather than from a guess', async () => {
+    render(<ReminderOverlay />);
+    await waitFor(() => expect(deliver).not.toBeNull());
+    deliver?.({ payload: reminder() });
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'resize_meeting_reminders',
+        expect.objectContaining({ height: expect.any(Number) }),
+      ),
+    );
+  });
+
+  test('a meeting with no video link offers recording and nothing to join', async () => {
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
     deliver?.({ payload: reminder({ conference_url: null, location: 'Room 4' }) });
 
     expect(await screen.findByText('Room 4')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^join$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /join and record/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^record$/i })).toBeInTheDocument();
   });
 
   test('dismissing one is final for that reminder', async () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
     deliver?.({ payload: reminder() });
 
@@ -117,7 +154,7 @@ describe('ReminderToasts', () => {
 
   test('the same meeting announced again replaces its card rather than stacking', async () => {
     // A meeting legitimately arrives twice — at ten minutes and then at one.
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
 
     deliver?.({ payload: reminder({ key: 'me@work.com|evt-1|10', minutes_until: 9 }) });
@@ -134,7 +171,7 @@ describe('ReminderToasts', () => {
   });
 
   test('two different meetings both get a card', async () => {
-    render(<ReminderToasts onStartMeeting={() => undefined} />);
+    render(<ReminderOverlay />);
     await waitFor(() => expect(deliver).not.toBeNull());
 
     deliver?.({ payload: reminder() });

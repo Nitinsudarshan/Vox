@@ -24,8 +24,8 @@ interface MeetingIndexProps {
   agendaSyncing: boolean;
   /** Re-reads every connected calendar. */
   onSyncCalendars: () => void;
-  /** Opens an event's video link in the browser. */
-  onJoin: (event: CalendarEvent) => void;
+  /** Opens one calendar event in full. */
+  onOpenEvent: (event: CalendarEvent) => void;
   /** Opens Settings › Calendar, when nothing is connected yet. */
   onConnectCalendar?: () => void;
 }
@@ -60,7 +60,7 @@ export const MeetingIndex: React.FC<MeetingIndexProps> = ({
   accounts,
   agendaSyncing,
   onSyncCalendars,
-  onJoin,
+  onOpenEvent,
   onConnectCalendar,
 }) => {
   const days = React.useMemo(() => groupByDay(meetings), [meetings]);
@@ -115,8 +115,7 @@ export const MeetingIndex: React.FC<MeetingIndexProps> = ({
           agenda={agenda}
           accounts={accounts}
           syncing={agendaSyncing}
-          onOpenNotes={onSelect}
-          onJoin={onJoin}
+          onOpenEvent={onOpenEvent}
         />
 
         {loading ? (

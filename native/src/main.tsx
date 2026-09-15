@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { App } from './App';
 import { FloatingPill } from './components/capture/FloatingPill';
+import { ReminderOverlay } from './components/meetings/ReminderOverlay';
 import './index.css';
 
 let windowLabel = '';
@@ -23,6 +24,10 @@ interface RouteEntry {
 const ROUTE_MAP: Record<string, RouteEntry> = {
   'dictation-pill': {
     component: <FloatingPill />,
+    isOverlay: true,
+  },
+  'meeting-reminder': {
+    component: <ReminderOverlay />,
     isOverlay: true,
   },
 };

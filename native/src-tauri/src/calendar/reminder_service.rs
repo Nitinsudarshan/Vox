@@ -4,15 +4,13 @@
 //! where the answer goes. Both halves are needed and only one of them can be
 //! tested without a running app, which is why they are separate files.
 //!
-//! ## Two channels, on purpose
+//! ## Where a reminder goes
 //!
-//! Every reminder is emitted as a Tauri event, which the app renders itself,
-//! **and** — unless the user turns it off — as an OS toast. Neither alone is
-//! enough. A toast is what reaches somebody working in another window, which
-//! is where they are when they miss a meeting; the in-app surface is the one
-//! that can offer Join and Start meeting as buttons, survive a notification
-//! centre that swallowed the toast, and be styled like the rest of Vox
-//! instead of like whatever Windows decided this year.
+//! To its own window ([`super::reminder_window`]) and nowhere else. Not into
+//! the app — that only reaches somebody already looking at Vox, which is
+//! precisely not the person about to miss a meeting — and not to a Windows
+//! toast, which goes to the notification centre, cannot carry a working Join
+//! button, and is silenced by Focus Assist without telling anybody.
 //!
 //! ## Why a poll rather than a timer per meeting
 //!
@@ -21,17 +19,27 @@
 //! getting that wrong is a reminder that silently never fires. A tick that
 //! re-reads the cache has one moving part, costs a file read a minute, and is
 //! correct after a laptop sleeps through four of its own timers.
+//!
+//! ## Why the loop also syncs
+//!
+//! The calendar cache used to be refreshed only when the Meetings page was
+//! opened, so a user who launched Vox and worked somewhere else all day was
+//! reminded about nothing — the schedule Vox was reading was whatever it had
+//! last time somebody looked at it. Reminders cannot depend on a page being
+//! visited, so the loop keeps the cache fresh itself.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use std::time::Instant;
+
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::commands::AppState;
 use crate::sync::MutexExt;
 
+use super::reminder_window;
 use super::reminders::{self, MeetingReminder};
 use super::store::CalendarStore;
 
@@ -42,7 +50,22 @@ use super::store::CalendarStore;
 /// everything else the app does.
 const TICK: Duration = Duration::from_secs(30);
 
-/// The event the frontend listens on.
+/// How long after launch the first check runs.
+///
+/// Short, not zero: the window this draws into is built during the same
+/// startup, and a reminder fired before it exists has nowhere to go. Long
+/// enough to settle, short enough that launching Vox three minutes before a
+/// call still announces it.
+const SETTLE: Duration = Duration::from_secs(5);
+
+/// How often the loop refreshes the calendar itself.
+///
+/// The agenda's own sync runs when the Meetings page is opened, which is not
+/// a thing a reminder can depend on. Five minutes is well inside the tightest
+/// lead time Vox offers, so a meeting added on the phone still gets announced.
+const SYNC_EVERY: Duration = Duration::from_secs(5 * 60);
+
+/// The event the reminder window listens on.
 pub const REMINDER_EVENT: &str = "meeting-reminder";
 
 /// Starts the reminder loop. Runs for the life of the app.
@@ -53,9 +76,38 @@ pub const REMINDER_EVENT: &str = "meeting-reminder";
 pub fn spawn(app: AppHandle) {
     std::thread::spawn(move || {
         let sent: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let mut last_sync: Option<Instant> = None;
+
+        std::thread::sleep(SETTLE);
         loop {
-            std::thread::sleep(TICK);
+            // Gated on the attempt rather than on the result: a sync that
+            // keeps failing must not turn into a request every thirty
+            // seconds for as long as the app is open.
+            if last_sync.is_none_or(|at| at.elapsed() >= SYNC_EVERY) {
+                last_sync = Some(Instant::now());
+                refresh_calendar(&app);
+            }
             tick(&app, &sent);
+            std::thread::sleep(TICK);
+        }
+    });
+}
+
+/// Re-reads the connected calendars, in the background.
+///
+/// Fire-and-forget: this tick reports on the cache as it stands, and whatever
+/// the sync brings in is announced by the next one. Waiting for a network
+/// round trip before saying anything would make a reminder late for the sake
+/// of a meeting that is probably already in the cache.
+fn refresh_calendar(app: &AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match super::commands::sync_calendars(handle).await {
+            Ok(accounts) => tracing::debug!(
+                "reminder loop: synced {} calendar account(s)",
+                accounts.len()
+            ),
+            Err(err) => tracing::warn!("reminder loop: calendar sync failed: {}", err.message),
         }
     });
 }
@@ -91,6 +143,17 @@ fn tick(app: &AppHandle, sent: &Arc<Mutex<HashSet<String>>>) {
         .filter(|event| enabled.contains(&event.account_email.to_lowercase()))
         .collect();
 
+    // Logged because everything below it fails quietly by design. Without
+    // this line "no reminder appeared" and "no meeting was due" look
+    // identical from the outside, which is how a broken poller goes
+    // unnoticed for a week.
+    tracing::debug!(
+        "reminder loop: {} account(s), {} cached event(s), leads {:?}",
+        enabled.len(),
+        events.len(),
+        settings.buckets()
+    );
+
     let now = chrono::Utc::now();
     let due = {
         let mut guard = sent.lock_or_recover();
@@ -103,25 +166,24 @@ fn tick(app: &AppHandle, sent: &Arc<Mutex<HashSet<String>>>) {
     };
 
     for reminder in due {
-        announce(app, &reminder, settings.system_notification);
+        announce(app, &reminder);
     }
 }
 
-/// Sends one reminder down both channels.
-fn announce(app: &AppHandle, reminder: &MeetingReminder, system_notification: bool) {
+/// Raises the reminder window and hands it one reminder.
+///
+/// Shown before the event is emitted. The window is built hidden at startup
+/// and kept, so this is a show and a message rather than a construction; a
+/// listener that is not up yet would otherwise miss the only event it was
+/// ever going to get.
+pub fn announce(app: &AppHandle, reminder: &MeetingReminder) {
+    tracing::info!(
+        "meeting reminder: {} ({} minute(s) out)",
+        reminder.title,
+        reminder.minutes_until
+    );
+    reminder_window::show(app);
     if let Err(err) = app.emit(REMINDER_EVENT, reminder) {
-        tracing::warn!("could not deliver a meeting reminder to the window: {}", err);
+        tracing::warn!("could not deliver a meeting reminder to its window: {}", err);
     }
-
-    if !system_notification {
-        return;
-    }
-    // Best-effort. A user who denied notification permission at the OS level
-    // still gets the in-app one, which is the reason there are two.
-    let _ = app
-        .notification()
-        .builder()
-        .title(reminder.headline())
-        .body(reminder.detail())
-        .show();
 }

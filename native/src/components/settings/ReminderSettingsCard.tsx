@@ -21,7 +21,6 @@ const LEAD_LABELS: Record<number, string> = {
 const DEFAULTS: ReminderSettings = {
   enabled: true,
   lead_minutes: [5, 0],
-  system_notification: true,
   only_with_link: false,
   include_declined: false,
 };
@@ -87,8 +86,10 @@ export const ReminderSettingsCard: React.FC = () => {
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-xl">
             Vox says something before a meeting on a connected calendar starts. Each meeting is
             announced once, at the closest lead time it reaches — picking several does not mean
-            several notifications. All-day events, meetings already well under way, and ones
-            you have declined are never announced.
+            several notifications. The reminder appears in a small window of its own, above
+            whatever you are working in, so it reaches you without Vox being on screen. All-day
+            events, meetings already well under way, and ones you have declined are never
+            announced.
           </p>
         </div>
         <Switch
@@ -137,12 +138,6 @@ export const ReminderSettingsCard: React.FC = () => {
             )}
           </fieldset>
 
-          <ReminderToggle
-            label="Also send a desktop notification"
-            description="Reaches you when you are in another window. Vox's own reminder appears either way."
-            checked={settings.system_notification}
-            onChange={(system_notification) => void update({ system_notification })}
-          />
           <ReminderToggle
             label="Only meetings with a video link"
             description="Leaves out rooms and phone calls."

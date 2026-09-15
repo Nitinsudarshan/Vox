@@ -11,6 +11,7 @@ import { MeetingView } from './MeetingView';
 import { RetranscribeDialog } from './RetranscribeDialog';
 import { CalendarDialog } from './calendar/CalendarDialog';
 import { SeriesDialog } from './series/SeriesDialog';
+import { EventDetailsDialog } from './calendar/EventDetailsDialog';
 import * as meetings from '@/lib/meetings';
 import { meetingErrorMessage, type RetranscribeOverrides } from '@/lib/meetings';
 import * as calendar from '@/lib/calendar';
@@ -84,6 +85,8 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [detectingSpeakers, setDetectingSpeakers] = React.useState(false);
   const [retranscribeOpen, setRetranscribeOpen] = React.useState(false);
   const [calendarOpen, setCalendarOpen] = React.useState(false);
+  /** The meeting whose details are open. One dialog serves both surfaces. */
+  const [openEvent, setOpenEvent] = React.useState<CalendarEvent | null>(null);
   const [seriesDialogOpen, setSeriesDialogOpen] = React.useState(false);
   const [allSeries, setAllSeries] = React.useState<MeetingSeriesSummary[]>([]);
   const [seriesOccurrences, setSeriesOccurrences] = React.useState<SeriesOccurrence[]>([]);
@@ -434,8 +437,24 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   /** Opens an invitation's video link in the browser. */
   const handleJoin = (event: CalendarEvent) =>
     run(async () => {
+      setOpenEvent(null);
       if (!event.conference_url) return;
       await calendar.openCalendarLink(event.conference_url);
+    });
+
+  /** Opens the call and records it, in one press.
+   *
+   * The recording is named after the meeting rather than after the clock,
+   * which is the whole reason the calendar is connected. */
+  const handleJoinAndRecord = (event: CalendarEvent) =>
+    run(async () => {
+      setOpenEvent(null);
+      if (event.conference_url) {
+        await calendar.openCalendarLink(event.conference_url);
+      }
+      const meeting = await meetings.startMeeting(event.title, undefined, devices);
+      setSelectedId(meeting.id);
+      await refreshList();
     });
 
   const handlePromote = () =>
@@ -616,7 +635,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
             accounts={accounts}
             agendaSyncing={agendaSyncing}
             onSyncCalendars={() => void syncCalendars()}
-            onJoin={handleJoin}
+            onOpenEvent={setOpenEvent}
             onConnectCalendar={onOpenCalendarSettings}
           />
         )}
@@ -643,11 +662,24 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         accounts={accounts}
         syncing={agendaSyncing}
         onSync={() => void syncCalendars()}
+        onOpenEvent={setOpenEvent}
+      />
+
+      <EventDetailsDialog
+        event={openEvent}
+        onOpenChange={(open) => {
+          if (!open) setOpenEvent(null);
+        }}
+        connectedAccounts={accounts
+          .filter((account) => account.enabled)
+          .map((account) => account.email)}
+        onJoin={handleJoin}
+        onJoinAndRecord={handleJoinAndRecord}
         onOpenNotes={(meetingId) => {
+          setOpenEvent(null);
           setCalendarOpen(false);
           setSelectedId(meetingId);
         }}
-        onJoin={handleJoin}
       />
 
       <RetranscribeDialog

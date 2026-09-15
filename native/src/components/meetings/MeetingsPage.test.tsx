@@ -1137,7 +1137,9 @@ describe('MeetingsPage', () => {
     expect(screen.getByText('Payal')).toBeInTheDocument();
 
     // A recorded meeting is reachable from the calendar row that produced it.
-    fireEvent.click(screen.getByRole('button', { name: /^notes$/i }));
+    fireEvent.click(screen.getByText('Alumna Growth Team Daily Sync'));
+    const details = within(await screen.findByRole('dialog'));
+    fireEvent.click(details.getByRole('button', { name: /open notes/i }));
     expect(await screen.findByRole('button', { name: /all meetings/i })).toBeInTheDocument();
   });
 
@@ -1160,6 +1162,12 @@ describe('MeetingsPage', () => {
       vi.useRealTimers();
     });
 
+    /** Opens one agenda row's details dialog and returns it. */
+    const openEvent = async (title: string | RegExp) => {
+      fireEvent.click(await screen.findByText(title));
+      return within(await screen.findByRole('dialog'));
+    };
+
     /** Puts `events` on the agenda, each under its own day. */
     const withAgenda = (events: CalendarEvent[], overrides: Record<string, unknown> = {}) => {
       const days = new Map<string, CalendarEvent[]>();
@@ -1181,12 +1189,54 @@ describe('MeetingsPage', () => {
       withAgenda([calendarEvent(18, { title: 'Campus Learning Weekly Check-in' })]);
       render(<MeetingsPage />);
 
-      fireEvent.click(await screen.findByRole('button', { name: /^join$/i }));
+      const dialog = await openEvent('Campus Learning Weekly Check-in');
+      fireEvent.click(dialog.getByRole('button', { name: /^join$/i }));
       await waitFor(() =>
         expect(vi.mocked(invoke)).toHaveBeenCalledWith('open_calendar_link', {
           url: 'https://meet.google.com/abc-defg-hij',
         }),
       );
+    });
+
+    test('join and record opens the call and records it under the meeting name', async () => {
+      // The recording is named after the meeting rather than after the clock,
+      // which is most of why the calendar is connected at all.
+      withAgenda([calendarEvent(18, { title: 'Campus Learning Weekly Check-in' })]);
+      render(<MeetingsPage />);
+
+      const dialog = await openEvent('Campus Learning Weekly Check-in');
+      fireEvent.click(dialog.getByRole('button', { name: /join and record/i }));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('open_calendar_link', {
+          url: 'https://meet.google.com/abc-defg-hij',
+        }),
+      );
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+          'start_meeting',
+          expect.objectContaining({ title: 'Campus Learning Weekly Check-in' }),
+        ),
+      );
+    });
+
+    test('the guest list is a list, not a count, once the meeting is open', async () => {
+      withAgenda([
+        calendarEvent(18, {
+          attendees: [
+            { email: 'payal@navgurukul.org', display_name: 'Payal', response: 'accepted', is_self: false, organizer: true },
+            { email: 'nilam@navgurukul.org', display_name: 'Nilam', response: 'declined', is_self: false, organizer: false },
+            { email: 'me@work.com', display_name: null, response: 'accepted', is_self: true, organizer: false },
+          ],
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      const dialog = await openEvent('Scrum Call');
+      expect(dialog.getByText('Payal')).toBeInTheDocument();
+      expect(dialog.getByText('Nilam')).toBeInTheDocument();
+      expect(dialog.getByText('organiser')).toBeInTheDocument();
+      // The account holder is not one of their own guests.
+      expect(dialog.getByText(/2 guests/i)).toBeInTheDocument();
     });
 
     test('a meeting earlier today is still joinable, because a call can resume', async () => {
@@ -1198,7 +1248,8 @@ describe('MeetingsPage', () => {
         }),
       ]);
       render(<MeetingsPage />);
-      expect(await screen.findByRole('button', { name: /^join$/i })).toBeInTheDocument();
+      const dialog = await openEvent('Morning standup');
+      expect(dialog.getByRole('button', { name: /^join$/i })).toBeEnabled();
     });
 
     test('a meeting that has already finished stays on the day, dimmed', async () => {
@@ -1218,7 +1269,8 @@ describe('MeetingsPage', () => {
       // Dimmed, not struck through — that already means "declined".
       expect(screen.getByText('Morning standup').className).not.toMatch(/line-through/);
       // And still joinable, because a call can resume on the same link.
-      expect(screen.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
+      const dialog = await openEvent('Morning standup');
+      expect(dialog.getByRole('button', { name: /^join$/i })).toBeEnabled();
     });
 
     test('days before today are not the agenda, however much history is cached', async () => {
@@ -1250,9 +1302,9 @@ describe('MeetingsPage', () => {
       ]);
       render(<MeetingsPage />);
 
-      await screen.findByText('Tomorrow sync');
-      expect(screen.queryByRole('button', { name: /^join$/i })).not.toBeInTheDocument();
-      expect(screen.getByTitle(/opens on the day/i)).toBeInTheDocument();
+      const dialog = await openEvent('Tomorrow sync');
+      expect(dialog.getByRole('button', { name: /^join$/i })).toBeDisabled();
+      expect(dialog.getByText(/opens on the day/i)).toBeInTheDocument();
     });
 
     test('a meeting the user declined is struck through and stays joinable', async () => {
@@ -1269,7 +1321,10 @@ describe('MeetingsPage', () => {
       const title = await screen.findByText('Campus Learning Weekly Check-in');
       expect(title.className).toMatch(/line-through/);
       expect(screen.getByText('Declined')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
+
+      const dialog = await openEvent('Campus Learning Weekly Check-in');
+      expect(dialog.getByRole('button', { name: /^join$/i })).toBeEnabled();
+      expect(dialog.getByText('Not going')).toBeInTheDocument();
     });
 
     test('two connected calendars are named in a key, so a row can be placed', async () => {
@@ -1313,16 +1368,17 @@ describe('MeetingsPage', () => {
       ]);
       render(<MeetingsPage />);
 
-      fireEvent.click(await screen.findByRole('button', { name: /show details for scrum call/i }));
-      expect(await screen.findByText(/Agenda:/)).toBeInTheDocument();
-      expect(screen.getByText('Room 4')).toBeInTheDocument();
+      const dialog = await openEvent('Scrum Call');
+      expect(dialog.getByText(/Agenda:/)).toBeInTheDocument();
+      expect(dialog.getByText('Room 4')).toBeInTheDocument();
     });
 
-    test('an invitation with nothing written on it offers nothing to expand', async () => {
+    test('an invitation with nothing written on it still opens', async () => {
       withAgenda([calendarEvent(18)]);
       render(<MeetingsPage />);
-      await screen.findByText('Scrum Call');
-      expect(screen.queryByRole('button', { name: /show details/i })).not.toBeInTheDocument();
+      const dialog = await openEvent('Scrum Call');
+      expect(dialog.queryByText(/notes on the invitation/i)).not.toBeInTheDocument();
+      expect(dialog.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
     });
 
     test('the calendar can be re-synced from the meetings page', async () => {

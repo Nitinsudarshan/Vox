@@ -235,6 +235,38 @@ pub fn set_meeting_reminder_settings(
     Ok(cleaned)
 }
 
+/// Raises a sample reminder, through the real path.
+///
+/// Reminders fire in the last few minutes before a meeting, which means the
+/// only way to find out whether they work at all was to have a meeting and
+/// wait for it — and a reminder that never appears is indistinguishable from
+/// a day with nothing due. This goes through
+/// [`crate::calendar::reminder_service::announce`] itself rather than
+/// reproducing it, so a window that fails to show here fails to show for a
+/// real meeting too.
+#[tauri::command]
+pub fn send_test_meeting_reminder(app: AppHandle) -> Result<(), CommandError> {
+    let start = chrono::Utc::now() + chrono::Duration::minutes(5);
+    crate::calendar::reminder_service::announce(
+        &app,
+        &crate::calendar::reminders::MeetingReminder {
+            key: format!("test|{}", start.timestamp_millis()),
+            event_id: "test".to_string(),
+            account_email: "test@vox".to_string(),
+            title: "Test reminder".to_string(),
+            start: start.to_rfc3339(),
+            // No link: a test that opened a browser tab would be a surprise,
+            // and Join is the one button whose absence is obvious anyway.
+            conference_url: None,
+            location: Some("This is what a meeting reminder looks like".to_string()),
+            meeting_id: None,
+            minutes_until: 5,
+            guest_count: 2,
+        },
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub fn pause_meeting(app: AppHandle, state: State<'_, AppState>) -> Result<(), CommandError> {
     state.meeting_engine.pause(Some(app)).map_err(CommandError::from)

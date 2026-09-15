@@ -13,8 +13,8 @@ interface AgendaSectionProps {
   agenda: DayAgenda[];
   accounts: CalendarAccount[];
   syncing: boolean;
-  onOpenNotes: (meetingId: string) => void;
-  onJoin: (event: CalendarEvent) => void;
+  /** Opens one meeting in full. The row is a single target. */
+  onOpenEvent: (event: CalendarEvent) => void;
   /** Fixed "now" for tests; the live clock otherwise. */
   now?: Date;
 }
@@ -38,8 +38,7 @@ export const AgendaSection: React.FC<AgendaSectionProps> = ({
   agenda,
   accounts,
   syncing,
-  onOpenNotes,
-  onJoin,
+  onOpenEvent,
   now,
 }) => {
   const connectedAccounts = React.useMemo(
@@ -79,9 +78,7 @@ export const AgendaSection: React.FC<AgendaSectionProps> = ({
                   event={event}
                   connectedAccounts={connectedAccounts}
                   done={isPast(event, now ?? new Date())}
-                  onOpenNotes={onOpenNotes}
-                  onJoin={onJoin}
-                  now={now}
+                  onOpen={onOpenEvent}
                 />
               ))}
             </ul>
