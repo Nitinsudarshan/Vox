@@ -242,6 +242,7 @@ mod tests {
             conference_url: None,
             html_link: None,
             description: None,
+            recurring_event_id: None,
             attendees: Vec::new(),
             attendance: Attendance::Unknown,
             meeting_id: None,

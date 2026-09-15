@@ -15,6 +15,8 @@ interface AgendaEventRowProps {
   event: CalendarEvent;
   /** Connected account addresses, in order, so the colour is stable. */
   connectedAccounts: string[];
+  /** Whether this meeting has already finished. Dims the row rather than hiding it. */
+  done?: boolean;
   /** Opens the recording Vox already has for this event. */
   onOpenNotes: (meetingId: string) => void;
   /** Opens the video link in the browser. */
@@ -35,6 +37,9 @@ interface AgendaEventRowProps {
  * - **Whether you said no.** A declined invitation is struck through, the way
  *   Google Calendar draws it — and stays joinable, because declining a series
  *   and dropping into one of its meetings is a normal thing to do.
+ * - **Whether it has already happened.** A finished meeting stays on the day,
+ *   dimmed. Deleting it the moment it ends makes "did the 10:30 happen, and did
+ *   I record it?" unanswerable at 11, which is exactly when it is asked.
  * - **Whether you can join from here**, as a button that is only live when
  *   pressing it would take you somewhere real.
  * - **What the invitation actually says**, on demand.
@@ -42,6 +47,7 @@ interface AgendaEventRowProps {
 export const AgendaEventRow: React.FC<AgendaEventRowProps> = ({
   event,
   connectedAccounts,
+  done = false,
   onOpenNotes,
   onJoin,
   now,
@@ -56,7 +62,9 @@ export const AgendaEventRow: React.FC<AgendaEventRowProps> = ({
   const hasDetails = details.length > 0 || Boolean(event.location);
 
   return (
-    <li>
+    // Dimmed rather than hidden or struck through: a finished meeting is still
+    // a fact about the day, and the strike-through already means "declined".
+    <li className={done ? 'opacity-55' : undefined}>
       <div className="flex items-baseline gap-3">
         <span className="text-[11px] font-mono text-muted-foreground tabular-nums w-16 shrink-0">
           {eventTime(event)}

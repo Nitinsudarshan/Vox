@@ -939,6 +939,171 @@ describe('MeetingsPage', () => {
     expect(screen.getByRole('button', { name: /add to graph/i })).toBeInTheDocument();
   });
 
+  describe('recurring series', () => {
+    const seriesSummary = (overrides: Record<string, unknown> = {}) => ({
+      id: 'google:rec-abc',
+      title: 'Weekly Sync',
+      source: 'google',
+      created_at: '2026-09-01T10:00:00Z',
+      renamed_by_user: false,
+      occurrence_count: 3,
+      latest_at: '2026-09-28T10:00:00Z',
+      ...overrides,
+    });
+
+    const occurrence = (id: string, created_at: string, has_summary = true) => ({
+      meeting_id: id,
+      title: 'Weekly Sync',
+      created_at,
+      duration_seconds: 1_800,
+      has_summary,
+    });
+
+    test('a meeting in a series says which one, and where it sits in it', async () => {
+      mockBackend({
+        get_meeting: recordedMeetingDetail({
+          meeting: meeting({ series_id: 'google:rec-abc' }),
+        }),
+        list_meeting_series: [seriesSummary()],
+        get_meeting_series: [
+          occurrence('m-0', '2026-09-14T10:00:00Z'),
+          occurrence('meeting-1', '2026-09-21T10:00:00Z'),
+          occurrence('m-2', '2026-09-28T10:00:00Z'),
+        ],
+      });
+      render(<MeetingsPage />);
+      fireEvent.click(await screen.findByText('Weekly sync'));
+
+      const seriesButton = await screen.findByRole('button', { name: /weekly sync, 2 of 3/i });
+      expect(seriesButton).toBeInTheDocument();
+    });
+
+    test('the series opens forwards, so week one is first', async () => {
+      // The meetings list reads newest-first; a series reads the other way.
+      mockBackend({
+        get_meeting: recordedMeetingDetail({
+          meeting: meeting({ series_id: 'google:rec-abc' }),
+        }),
+        list_meeting_series: [seriesSummary()],
+        get_meeting_series: [
+          occurrence('m-0', '2026-09-14T10:00:00Z'),
+          occurrence('meeting-1', '2026-09-21T10:00:00Z'),
+        ],
+      });
+      render(<MeetingsPage />);
+      fireEvent.click(await screen.findByText('Weekly sync'));
+      fireEvent.click(await screen.findByRole('button', { name: /weekly sync, 2 of 2/i }));
+
+      const rows = await screen.findAllByRole('listitem');
+      // Locale-agnostic: the runner's locale decides "14 Sep" or "Sep 14".
+      const dates = rows
+        .map((row) => row.textContent ?? '')
+        .filter((text) => /Sep/.test(text));
+      expect(dates[0]).toMatch(/14/);
+      expect(dates[1]).toMatch(/21/);
+    });
+
+    test('another meeting in the series opens from the panel', async () => {
+      mockBackend({
+        get_meeting: recordedMeetingDetail({
+          meeting: meeting({ series_id: 'google:rec-abc' }),
+        }),
+        list_meeting_series: [seriesSummary()],
+        get_meeting_series: [
+          occurrence('m-0', '2026-09-14T10:00:00Z'),
+          occurrence('meeting-1', '2026-09-21T10:00:00Z'),
+        ],
+      });
+      render(<MeetingsPage />);
+      fireEvent.click(await screen.findByText('Weekly sync'));
+      fireEvent.click(await screen.findByRole('button', { name: /weekly sync, 2 of 2/i }));
+
+      vi.mocked(invoke).mockClear();
+      fireEvent.click(await screen.findByText(/(14 Sep|Sep 14)/));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('get_meeting', {
+          meetingId: 'm-0',
+        }),
+      );
+    });
+
+    test('a one-off meeting offers to be put in a series but claims none', async () => {
+      mockBackend({ get_meeting: recordedMeetingDetail(), list_meeting_series: [] });
+      render(<MeetingsPage />);
+      fireEvent.click(await screen.findByText('Weekly sync'));
+
+      expect(screen.queryByRole('button', { name: /weekly sync, \d+ of/i })).not.toBeInTheDocument();
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: /more actions/i }));
+      expect(await screen.findByRole('menuitem', { name: /add to series/i })).toBeInTheDocument();
+    });
+
+    test('a meeting with no calendar event can be put in a series by hand', async () => {
+      // Imported audio has no event and never will; somebody saying so is the
+      // only honest way to group it.
+      mockBackend({
+        get_meeting: recordedMeetingDetail(),
+        list_meeting_series: [],
+        create_meeting_series: {
+          id: 'manual:retro-1757000000000',
+          title: 'Retro',
+          source: 'manual',
+          created_at: '2026-09-14T10:00:00Z',
+          renamed_by_user: true,
+        },
+      });
+      render(<MeetingsPage />);
+      fireEvent.click(await screen.findByText('Weekly sync'));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: /more actions/i }));
+      await user.click(await screen.findByRole('menuitem', { name: /add to series/i }));
+
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.change(dialog.getByLabelText(/new series name/i), {
+        target: { value: 'Retro' },
+      });
+      fireEvent.click(dialog.getByRole('button', { name: /create/i }));
+
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('create_meeting_series', {
+          title: 'Retro',
+        }),
+      );
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('set_meeting_series', {
+          meetingId: 'meeting-1',
+          seriesId: 'manual:retro-1757000000000',
+        }),
+      );
+    });
+
+    test('a meeting can be taken back out of its series', async () => {
+      mockBackend({
+        get_meeting: recordedMeetingDetail({
+          meeting: meeting({ series_id: 'google:rec-abc' }),
+        }),
+        list_meeting_series: [seriesSummary()],
+        get_meeting_series: [occurrence('meeting-1', '2026-09-21T10:00:00Z')],
+      });
+      render(<MeetingsPage />);
+      fireEvent.click(await screen.findByText('Weekly sync'));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: /more actions/i }));
+      await user.click(await screen.findByRole('menuitem', { name: /change series/i }));
+
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.click(dialog.getByRole('button', { name: /remove from this series/i }));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('set_meeting_series', {
+          meetingId: 'meeting-1',
+          seriesId: null,
+        }),
+      );
+    });
+  });
+
   test('the calendar shows what is coming up and links to notes already recorded', async () => {
     const tomorrow = new Date(Date.now() + 86_400_000);
     const date = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
@@ -967,7 +1132,7 @@ describe('MeetingsPage', () => {
     });
     render(<MeetingsPage />);
 
-    expect(await screen.findByText('Coming up')).toBeInTheDocument();
+    expect(await screen.findByText('Your day')).toBeInTheDocument();
     expect(screen.getByText('Alumna Growth Team Daily Sync')).toBeInTheDocument();
     expect(screen.getByText('Payal')).toBeInTheDocument();
 
@@ -980,7 +1145,7 @@ describe('MeetingsPage', () => {
     mockBackend({ get_calendar_agenda: [] });
     render(<MeetingsPage />);
     await screen.findByText('Weekly sync');
-    expect(screen.queryByText('Coming up')).not.toBeInTheDocument();
+    expect(screen.queryByText('Your day')).not.toBeInTheDocument();
   });
 
   describe('the agenda', () => {
@@ -1034,6 +1199,43 @@ describe('MeetingsPage', () => {
       ]);
       render(<MeetingsPage />);
       expect(await screen.findByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test('a meeting that has already finished stays on the day, dimmed', async () => {
+      // "Did the 10:30 happen, and did I record it?" is asked at 11, and the
+      // row that answers it used to vanish the moment the meeting ended.
+      withAgenda([
+        calendarEvent(10, {
+          title: 'Morning standup',
+          end: new Date(2026, 8, 14, 10, 30).toISOString(),
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      const row = (await screen.findByText('Morning standup')).closest('li');
+      expect(row).not.toBeNull();
+      expect(row?.className).toMatch(/opacity/);
+      // Dimmed, not struck through — that already means "declined".
+      expect(screen.getByText('Morning standup').className).not.toMatch(/line-through/);
+      // And still joinable, because a call can resume on the same link.
+      expect(screen.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test('days before today are not the agenda, however much history is cached', async () => {
+      const yesterday = new Date(2026, 8, 13, 10, 0);
+      withAgenda([
+        calendarEvent(10, {
+          id: 'evt-yesterday',
+          title: 'Yesterday standup',
+          start: yesterday.toISOString(),
+          end: new Date(yesterday.getTime() + 30 * 60_000).toISOString(),
+        }),
+        calendarEvent(18, { title: 'Later today' }),
+      ]);
+      render(<MeetingsPage />);
+
+      expect(await screen.findByText('Later today')).toBeInTheDocument();
+      expect(screen.queryByText('Yesterday standup')).not.toBeInTheDocument();
     });
 
     test("a meeting on another day shows it has a link but does not offer to open it", async () => {

@@ -684,6 +684,12 @@ pub struct MeetingSettings {
     /// resolution, so this costs nothing until someone chooses.
     #[serde(default)]
     pub devices: crate::meetings::capture::MeetingDevices,
+    /// When Vox announces that a meeting is about to start.
+    ///
+    /// See [`crate::calendar::reminders`] for why the lead times are buckets
+    /// rather than alarms, and what is deliberately never announced.
+    #[serde(default)]
+    pub reminders: crate::calendar::reminders::ReminderSettings,
 }
 
 fn default_meeting_template() -> String {
@@ -699,6 +705,7 @@ impl Default for MeetingSettings {
             auto_summarize: false,
             transcription_language: String::new(),
             devices: crate::meetings::capture::MeetingDevices::default(),
+            reminders: crate::calendar::reminders::ReminderSettings::default(),
         }
     }
 }

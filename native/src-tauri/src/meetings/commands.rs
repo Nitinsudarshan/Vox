@@ -21,6 +21,7 @@ use crate::sync::MutexExt;
 use super::engine::{MeetingEngineError, MeetingRecordingStatus};
 use super::import::{self, BatchConfig, ImportError};
 use super::model::{Meeting, MeetingListItem, MeetingSummary, TranscriptSegment};
+use super::series::{self, MeetingSeries, MeetingSeriesSummary, SeriesOccurrence, SeriesSource};
 use super::store::{MeetingSearchHit, MeetingStoreError};
 use super::summary::service::{SummaryError, SummaryOptions};
 use super::summary::templates::{Template, TemplateLibrary, DEFAULT_TEMPLATE_ID};
@@ -196,6 +197,42 @@ pub fn set_meeting_devices(
         guard.clone()
     };
     crate::commands::persist_settings(&app, &state, settings)
+}
+
+/// When Vox announces that a meeting is about to start.
+#[tauri::command]
+pub fn get_meeting_reminder_settings(
+    state: State<'_, AppState>,
+) -> Result<crate::calendar::reminders::ReminderSettings, CommandError> {
+    Ok(state.settings.lock_or_recover().meetings.reminders.clone())
+}
+
+/// Saves the reminder settings.
+///
+/// Its own command rather than a whole-`AppSettings` round trip, for the
+/// reason [`set_meeting_devices`] gives: a stale copy of the document coming
+/// back from a checkbox would overwrite whatever else changed meanwhile.
+///
+/// Unknown lead times are dropped rather than rejected: the set of offered
+/// intervals is Vox's to change, and a settings file written by an older or
+/// newer build must not fail to save.
+#[tauri::command]
+pub fn set_meeting_reminder_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    reminders: crate::calendar::reminders::ReminderSettings,
+) -> Result<crate::calendar::reminders::ReminderSettings, CommandError> {
+    let cleaned = crate::calendar::reminders::ReminderSettings {
+        lead_minutes: reminders.buckets(),
+        ..reminders
+    };
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        guard.meetings.reminders = cleaned.clone();
+        guard.clone()
+    };
+    crate::commands::persist_settings(&app, &state, settings)?;
+    Ok(cleaned)
 }
 
 #[tauri::command]
@@ -511,6 +548,163 @@ pub fn delete_meeting(state: State<'_, AppState>, meeting_id: String) -> Result<
         .meeting_store
         .delete_meeting(&meeting_id)
         .map_err(CommandError::from)
+}
+
+// --- recurring meeting series -------------------------------------------
+
+/// Longest name a series may carry. Same bound as a meeting's title.
+const MAX_SERIES_TITLE: usize = 200;
+
+/// Every recurring meeting, with how many recordings are in each.
+///
+/// A series with no recordings is still listed: one created by hand before its
+/// first meeting is recorded is not an error, and hiding it would make it look
+/// as though creating it had failed.
+#[tauri::command]
+pub fn list_meeting_series(
+    state: State<'_, AppState>,
+) -> Result<Vec<MeetingSeriesSummary>, CommandError> {
+    let meetings = state.meeting_store.list_meetings()?;
+    let mut summaries: Vec<MeetingSeriesSummary> = state
+        .meeting_store
+        .load_series()
+        .into_iter()
+        .map(|entry| {
+            let members = series::occurrences(&meetings, &entry.id);
+            MeetingSeriesSummary {
+                occurrence_count: members.len(),
+                latest_at: members.last().map(|meeting| meeting.created_at.clone()),
+                series: entry,
+            }
+        })
+        .collect();
+
+    // Most recently active first: a series nobody has met about in six months
+    // is not what the picker should open on.
+    summaries.sort_by(|a, b| {
+        b.latest_at
+            .cmp(&a.latest_at)
+            .then_with(|| a.series.title.to_lowercase().cmp(&b.series.title.to_lowercase()))
+    });
+    Ok(summaries)
+}
+
+/// The recordings in one series, oldest first.
+#[tauri::command]
+pub fn get_meeting_series(
+    state: State<'_, AppState>,
+    series_id: String,
+) -> Result<Vec<SeriesOccurrence>, CommandError> {
+    let meetings = state.meeting_store.list_meetings()?;
+    Ok(series::occurrences(&meetings, series_id.trim())
+        .into_iter()
+        .map(|meeting| SeriesOccurrence {
+            meeting_id: meeting.id.clone(),
+            title: meeting.title.clone(),
+            created_at: meeting.created_at.clone(),
+            duration_seconds: meeting.duration_seconds,
+            has_summary: state
+                .meeting_store
+                .load_summary(&meeting.id)
+                .ok()
+                .flatten()
+                .and_then(|summary| summary.markdown)
+                .is_some_and(|markdown| !markdown.trim().is_empty()),
+        })
+        .collect())
+}
+
+/// Creates a series by hand, for meetings no calendar event covers.
+///
+/// Imported audio and ad-hoc recordings have no event and never will, so the
+/// only honest way to group them is the user saying so.
+#[tauri::command]
+pub fn create_meeting_series(
+    state: State<'_, AppState>,
+    title: String,
+) -> Result<MeetingSeries, CommandError> {
+    let title = validate_series_title(&title)?;
+    let entry = MeetingSeries {
+        id: series::manual_series_id(&title, chrono::Utc::now().timestamp_millis()),
+        title,
+        source: SeriesSource::Manual,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        renamed_by_user: true,
+    };
+    state.meeting_store.upsert_series(entry.clone())?;
+    Ok(entry)
+}
+
+/// Renames a series. The new name survives every later sync.
+#[tauri::command]
+pub fn rename_meeting_series(
+    state: State<'_, AppState>,
+    series_id: String,
+    title: String,
+) -> Result<Vec<MeetingSeries>, CommandError> {
+    let title = validate_series_title(&title)?;
+    Ok(state.meeting_store.rename_series(series_id.trim(), &title)?)
+}
+
+/// Forgets a series. Its recordings stay; they stop being in one.
+#[tauri::command]
+pub fn delete_meeting_series(
+    state: State<'_, AppState>,
+    series_id: String,
+) -> Result<(), CommandError> {
+    state.meeting_store.delete_series(series_id.trim())?;
+    Ok(())
+}
+
+/// Puts a recording in a series, or takes it out of the one it is in.
+///
+/// `None` removes it. A membership set here is the user's and a later sync
+/// leaves it alone, which is what makes this the escape hatch for a series
+/// Google split by having the recurrence deleted and recreated.
+#[tauri::command]
+pub fn set_meeting_series(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    series_id: Option<String>,
+) -> Result<Meeting, CommandError> {
+    let series_id = series_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
+
+    if let Some(id) = series_id.as_deref() {
+        let known = state
+            .meeting_store
+            .load_series()
+            .into_iter()
+            .any(|entry| entry.id == id);
+        if !known {
+            return Err(CommandError::new(
+                "MEETING_SERIES_NOT_FOUND",
+                "That series no longer exists.",
+            ));
+        }
+    }
+
+    Ok(state
+        .meeting_store
+        .set_meeting_series(meeting_id.trim(), series_id)?)
+}
+
+fn validate_series_title(title: &str) -> Result<String, CommandError> {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(CommandError::new(
+            "MEETING_SERIES_INVALID_TITLE",
+            "A series needs a name.",
+        ));
+    }
+    if title.chars().count() > MAX_SERIES_TITLE {
+        return Err(CommandError::new(
+            "MEETING_SERIES_INVALID_TITLE",
+            "That name is too long.",
+        ));
+    }
+    Ok(title)
 }
 
 /// Opens a meeting's folder in the OS file manager.

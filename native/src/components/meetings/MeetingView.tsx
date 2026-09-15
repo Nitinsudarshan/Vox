@@ -6,9 +6,11 @@ import { MeetingTranscript } from './MeetingTranscript';
 import { MeetingSummaryPanel } from './MeetingSummaryPanel';
 import { MeetingDetailHeader } from './MeetingDetailHeader';
 import { SpeakerPanel } from './SpeakerPanel';
+import { SeriesPanel } from './series/SeriesPanel';
 import type {
   MeetingDetail as MeetingDetailData,
   MeetingTemplate,
+  SeriesOccurrence,
   SummaryProgress,
 } from '@/types/meetings';
 
@@ -35,6 +37,15 @@ interface MeetingViewProps {
   onDetectSpeakers: () => Promise<void> | void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<void> | void;
   detectingSpeakers: boolean;
+  /** The recurring meeting this one belongs to, when it is in one. */
+  seriesTitle?: string | null;
+  /** The whole series, oldest first. Empty until it has been read. */
+  seriesOccurrences: SeriesOccurrence[];
+  seriesLoading: boolean;
+  /** Opens another recording in the same series. */
+  onOpenMeeting: (meetingId: string) => void;
+  /** Opens the dialog that puts this meeting in a series. */
+  onAddToSeries: () => void;
 }
 
 /** Which pane is showing. `split` appears only where it fits. */
@@ -77,6 +88,11 @@ export const MeetingView: React.FC<MeetingViewProps> = ({
   onDetectSpeakers,
   onRenameSpeaker,
   detectingSpeakers,
+  seriesTitle,
+  seriesOccurrences,
+  seriesLoading,
+  onOpenMeeting,
+  onAddToSeries,
 }) => {
   const { meeting, segments, summary } = detail;
   // Absent for a meeting stored before speaker detection existed.
@@ -90,6 +106,7 @@ export const MeetingView: React.FC<MeetingViewProps> = ({
   const [editingTitle, setEditingTitle] = React.useState(false);
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [showSpeakers, setShowSpeakers] = React.useState(false);
+  const [showSeries, setShowSeries] = React.useState(false);
 
   React.useEffect(() => {
     setEditingTitle(false);
@@ -116,7 +133,16 @@ export const MeetingView: React.FC<MeetingViewProps> = ({
     setPlayhead(undefined);
     setSeekTo(null);
     setShowSpeakers(false);
+    setShowSeries(false);
   }, [meeting.id]);
+
+  /** Where this recording sits in its series, once the series has been read. */
+  const seriesPosition = React.useMemo((): [number, number] | null => {
+    const index = seriesOccurrences.findIndex(
+      (occurrence) => occurrence.meeting_id === meeting.id,
+    );
+    return index < 0 ? null : [index + 1, seriesOccurrences.length];
+  }, [seriesOccurrences, meeting.id]);
 
   const panes: Array<{ value: Pane; label: string }> = [
     { value: 'summary', label: 'Report' },
@@ -140,6 +166,11 @@ export const MeetingView: React.FC<MeetingViewProps> = ({
         onRename={onRename}
         showSpeakers={showSpeakers}
         onToggleSpeakers={() => setShowSpeakers((open) => !open)}
+        seriesTitle={seriesTitle}
+        seriesPosition={seriesPosition}
+        showSeries={showSeries}
+        onToggleSeries={() => setShowSeries((open) => !open)}
+        onAddToSeries={onAddToSeries}
         onRequestDelete={() => setConfirmingDelete(true)}
         onOpenFolder={onOpenFolder}
         onRetranscribe={onRetranscribe}
@@ -181,6 +212,18 @@ export const MeetingView: React.FC<MeetingViewProps> = ({
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{meeting.error}</span>
           </p>
+        )}
+
+        {showSeries && seriesTitle && (
+          <div className="mb-3">
+            <SeriesPanel
+              title={seriesTitle}
+              occurrences={seriesOccurrences}
+              loading={seriesLoading}
+              currentMeetingId={meeting.id}
+              onOpen={onOpenMeeting}
+            />
+          </div>
         )}
 
         {showSpeakers && (

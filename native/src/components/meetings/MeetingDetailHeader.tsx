@@ -6,6 +6,7 @@ import {
   Languages,
   MoreHorizontal,
   Pencil,
+  Repeat,
   RotateCcw,
   Trash2,
   Users,
@@ -37,6 +38,14 @@ interface MeetingDetailHeaderProps {
   onRename: (title: string) => void;
   showSpeakers: boolean;
   onToggleSpeakers: () => void;
+  /** The recurring meeting this one belongs to, when it is in one. */
+  seriesTitle?: string | null;
+  /** Where in that series this recording sits: `[position, total]`, 1-based. */
+  seriesPosition?: [number, number] | null;
+  showSeries: boolean;
+  onToggleSeries: () => void;
+  /** Opens the dialog that puts this meeting in a series. */
+  onAddToSeries: () => void;
   /** Asks for the delete confirmation; it does not delete. */
   onRequestDelete: () => void;
   onOpenFolder: () => void;
@@ -72,6 +81,11 @@ export const MeetingDetailHeader: React.FC<MeetingDetailHeaderProps> = ({
   onRename,
   showSpeakers,
   onToggleSpeakers,
+  seriesTitle,
+  seriesPosition,
+  showSeries,
+  onToggleSeries,
+  onAddToSeries,
   onRequestDelete,
   onOpenFolder,
   onRetranscribe,
@@ -199,6 +213,34 @@ export const MeetingDetailHeader: React.FC<MeetingDetailHeaderProps> = ({
         ) : undefined
       }
     >
+      {seriesTitle && (
+        // Only where there is a series to show. A button that opens an empty
+        // panel is a control that lies about there being something behind it.
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleSeries}
+          aria-pressed={showSeries}
+          title={seriesTitle}
+          // Spelled out rather than left to the visible "2/3", which a screen
+          // reader says as "two slash three".
+          aria-label={
+            seriesPosition
+              ? `${seriesTitle}, ${seriesPosition[0]} of ${seriesPosition[1]}`
+              : seriesTitle
+          }
+          className="h-8 gap-1.5 text-xs text-muted-foreground max-w-[14rem]"
+        >
+          <Repeat className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{seriesTitle}</span>
+          {seriesPosition && (
+            <span className="tabular-nums shrink-0">
+              {seriesPosition[0]}/{seriesPosition[1]}
+            </span>
+          )}
+        </Button>
+      )}
+
       <Button
         variant="ghost"
         size="sm"
@@ -241,6 +283,10 @@ export const MeetingDetailHeader: React.FC<MeetingDetailHeaderProps> = ({
           >
             <Users className="w-3.5 h-3.5" />
             Find speakers
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onAddToSeries}>
+            <Repeat className="w-3.5 h-3.5" />
+            {seriesTitle ? 'Change series…' : 'Add to series…'}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {/* "Add to graph" is deliberately not here. It belongs to the report,

@@ -231,12 +231,11 @@ and Gemini, and that is the one place provider choice belongs).
 - **Voices remembered across meetings.** A name given in one meeting does not
   carry to the next. That needs an embedding stable enough to store, which is
   the same gap as above.
-- **Meeting reminders.** Calendar events are matched to recordings and their
-  join links are one click from the Meetings page, but Vox does not notify
-  before one starts.
-- **Recurring meetings as a series.** Twelve occurrences of a weekly standup
-  are twelve unrelated meetings; nothing links them. Designed in
-  `maybe_later.md` §14, including why the series identity has to come from
-  Google's `recurringEventId` rather than from matching titles.
+- **Reminder snooze.** A reminder fires once per lead time and is dismissed or
+  ignored; there is no "remind me again in five minutes".
+- **A summary across a whole series.** Recurring meetings are linked
+  (`meetings::series`) and their occurrences read in order, but "what has
+  changed in this standup over six weeks" is still six reports read by hand.
+  Designed in `maybe_later.md` §14.
 - **A meeting overlay window.** Recording is controlled from the Meetings
   surface and the tray.

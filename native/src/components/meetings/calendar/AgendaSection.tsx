@@ -1,7 +1,7 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
 
-import { agendaDayLabel, isPast } from '@/lib/calendar';
+import { agendaDayLabel, isPast, isTodayOrLater } from '@/lib/calendar';
 import type { CalendarAccount, CalendarEvent, DayAgenda } from '@/types/calendar';
 import { AccountLegend } from './AccountLegend';
 import { AgendaEventRow } from './AgendaEventRow';
@@ -20,12 +20,19 @@ interface AgendaSectionProps {
 }
 
 /**
- * What is coming up, across every connected calendar.
+ * The day, across every connected calendar.
  *
- * Deliberately short: two days, and only what has not finished. A calendar is
- * useful on this page for what is about to happen — what already happened is
- * the recording list underneath, which is the real record. Everything further
- * out lives in the calendar view, which is a calendar rather than a preview.
+ * Two days, from today — including the ones that have already finished, dimmed
+ * rather than dropped. A schedule that deletes a meeting the moment it ends is
+ * a schedule you cannot check yourself against: "did the 10:30 happen, and did
+ * I record it?" is asked at 11, and the row that answers it had just
+ * disappeared. Finished rows keep their join link too, which is what a call
+ * that resumes on the same link needs.
+ *
+ * Everything before today is cut: the cache holds a month of history so
+ * recordings can be matched to meetings, and none of it belongs above today's
+ * schedule. Everything further out lives in the calendar view, which is a
+ * calendar rather than a preview.
  */
 export const AgendaSection: React.FC<AgendaSectionProps> = ({
   agenda,
@@ -40,28 +47,27 @@ export const AgendaSection: React.FC<AgendaSectionProps> = ({
     [accounts],
   );
 
-  const upcoming = React.useMemo(() => {
+  const days = React.useMemo(() => {
     const clock = now ?? new Date();
     return (agenda ?? [])
-      .map((day) => ({ ...day, events: day.events.filter((event) => !isPast(event, clock)) }))
-      .filter((day) => day.events.length > 0)
+      .filter((day) => isTodayOrLater(day.date, clock) && day.events.length > 0)
       .slice(0, DAYS_SHOWN);
   }, [agenda, now]);
 
-  if (upcoming.length === 0) return null;
+  if (days.length === 0) return null;
 
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between gap-3 mb-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-          Coming up
+          Your day
           {syncing && <Loader2 className="w-3 h-3 animate-spin" />}
         </h2>
         <AccountLegend accounts={accounts} />
       </div>
 
       <div className="rounded-xl border border-border divide-y divide-border">
-        {upcoming.map((day) => (
+        {days.map((day) => (
           <div key={day.date} className="p-3">
             <p className="text-[11px] font-medium text-muted-foreground mb-2">
               {agendaDayLabel(day.date, now)}
@@ -72,6 +78,7 @@ export const AgendaSection: React.FC<AgendaSectionProps> = ({
                   key={`${event.account_email}-${event.id}`}
                   event={event}
                   connectedAccounts={connectedAccounts}
+                  done={isPast(event, now ?? new Date())}
                   onOpenNotes={onOpenNotes}
                   onJoin={onJoin}
                   now={now}
