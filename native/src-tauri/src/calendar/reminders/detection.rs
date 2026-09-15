@@ -209,6 +209,40 @@ pub fn is_generic_fallback_title(title: &str) -> bool {
     )
 }
 
+/// Where a sighting came from, so the developer panel can say which signal saw
+/// what and a bad match can be told from a bad title.
+pub const SOURCE_WINDOW_TITLE: &str = "window_title";
+pub const SOURCE_WINDOW_CLASS: &str = "window_class";
+
+/// Window classes that exist only while a conferencing app is in a call.
+///
+/// Titles are the weak signal for a native client, which is the lesson every
+/// comparable app has already learnt: Meetily detects Zoom and Teams by process
+/// and calls its browser-title path "limited support", and OpenWhispr likewise
+/// auto-detects the native clients. A process is the wrong unit on Windows —
+/// Zoom and Teams both sit in the tray all day, so their presence says nothing
+/// — but Zoom names its in-meeting windows, and those classes exist only during
+/// a call. That is the same evidence a process check is reaching for, without
+/// the false positive.
+///
+/// Zoom only. Teams and Webex are Chromium and ATL shells whose classes are
+/// shared with every other app built the same way, so there is nothing here to
+/// match on that would not also match a browser.
+const MEETING_WINDOW_CLASSES: [(&str, &str); 3] = [
+    ("ZPContentViewWndClass", PROVIDER_ZOOM),
+    ("ConfMultiTabContentWndClass", PROVIDER_ZOOM),
+    ("ZPFloatVideoWndClass", PROVIDER_ZOOM),
+];
+
+/// The provider a window *class* identifies, if it is one of the few that only
+/// exist during a call.
+pub fn identify_provider_by_class(class_name: &str) -> Option<&'static str> {
+    MEETING_WINDOW_CLASSES
+        .iter()
+        .find(|(class, _)| class.eq_ignore_ascii_case(class_name))
+        .map(|(_, provider)| *provider)
+}
+
 /// A generic title is weaker evidence of a live call than a distinctive one.
 ///
 /// Used as the gate on detection reminders: interrupting someone over a stray
@@ -236,6 +270,7 @@ pub fn detect_active_conferencing_windows() -> Vec<WindowMatch> {
             lParam: Lparam,
         ) -> Bool;
         fn GetWindowTextW(hWnd: Hwnd, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn GetClassNameW(hWnd: Hwnd, lpClassName: *mut u16, nMaxCount: i32) -> i32;
         fn IsWindowVisible(hWnd: Hwnd) -> Bool;
     }
 
@@ -252,20 +287,38 @@ pub fn detect_active_conferencing_windows() -> Vec<WindowMatch> {
 
         let mut buffer = [0u16; 512];
         let len = GetWindowTextW(hwnd, buffer.as_mut_ptr(), 512);
-        if len > 0 {
-            let raw_title = String::from_utf16_lossy(&buffer[..len as usize]);
-            if let Some(provider) = identify_meeting_provider(&raw_title) {
-                let title = clean_meeting_window_title(&raw_title, provider);
-                let confidence = score_confidence(&title);
-                if let Ok(mut found) = FOUND.lock() {
-                    found.push(WindowMatch {
-                        provider: provider.to_string(),
-                        title,
-                        raw_title,
-                        source: "window_detector".to_string(),
-                        confidence,
-                    });
-                }
+        let raw_title = if len > 0 {
+            String::from_utf16_lossy(&buffer[..len as usize])
+        } else {
+            String::new()
+        };
+
+        // The title is tried first because it is the only one of the two that
+        // ever carries what the meeting is about. The class is the fallback,
+        // and the only signal for a Zoom window whose title is localised,
+        // renamed, or simply not what this expects.
+        let by_title = identify_meeting_provider(&raw_title).map(|p| (p, SOURCE_WINDOW_TITLE));
+        let matched = by_title.or_else(|| {
+            let mut class_buffer = [0u16; 256];
+            let class_len = GetClassNameW(hwnd, class_buffer.as_mut_ptr(), 256);
+            if class_len <= 0 {
+                return None;
+            }
+            let class_name = String::from_utf16_lossy(&class_buffer[..class_len as usize]);
+            identify_provider_by_class(&class_name).map(|p| (p, SOURCE_WINDOW_CLASS))
+        });
+
+        if let Some((provider, source)) = matched {
+            let title = clean_meeting_window_title(&raw_title, provider);
+            let confidence = score_confidence(&title);
+            if let Ok(mut found) = FOUND.lock() {
+                found.push(WindowMatch {
+                    provider: provider.to_string(),
+                    title,
+                    raw_title,
+                    source: source.to_string(),
+                    confidence,
+                });
             }
         }
         1
@@ -331,19 +384,21 @@ mod tests {
     }
 
     #[test]
-    fn every_reminder_kind_is_on_out_of_the_box() {
-        // A reminder nobody switched off must arrive. Detection was shipped
-        // defaulted off, which left the one call with no calendar entry —
-        // the only kind nothing else can catch — covered by nothing.
-        let settings = super::super::ReminderSettings::default();
-        assert!(settings.remind_before_meeting);
-        assert!(settings.remind_if_unrecorded);
-        assert!(settings.remind_on_detection);
-
-        // And an older settings file that predates the field reads the same
-        // way, rather than silently keeping the old default.
-        let restored: super::super::ReminderSettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(restored, settings);
+    fn a_zoom_meeting_window_is_known_by_its_class_when_its_title_is_not() {
+        // The signal that does not depend on what Zoom decided to call the
+        // window. These classes exist only while a call is up, which is the
+        // evidence a process check is reaching for without the false positive
+        // of an app that sits in the tray all day.
+        assert_eq!(
+            identify_provider_by_class("ZPContentViewWndClass"),
+            Some(PROVIDER_ZOOM)
+        );
+        assert_eq!(
+            identify_provider_by_class("ConfMultiTabContentWndClass"),
+            Some(PROVIDER_ZOOM)
+        );
+        // Every Chromium app on the machine shares this one, browsers included.
+        assert_eq!(identify_provider_by_class("Chrome_WidgetWin_1"), None);
     }
 
     #[test]

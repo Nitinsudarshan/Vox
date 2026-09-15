@@ -109,14 +109,27 @@ pub struct ReminderQueue {
 /// much earlier and it is noise the user learns to swipe away.
 const UPCOMING_LEAD_SECONDS: i64 = 300;
 
-/// The window in which an `Unrecorded` reminder appears, measured from the
-/// scheduled start.
+/// How long after a scheduled start an `Unrecorded` reminder becomes possible.
 ///
 /// It opens late on purpose: a meeting that is five minutes old and still
 /// unrecorded is a meeting somebody meant to record and forgot, whereas one
 /// that is thirty seconds old is somebody still saying hello.
 const UNRECORDED_FROM_SECONDS: i64 = 300;
-const UNRECORDED_TO_SECONDS: i64 = 420;
+
+/// How long the `Unrecorded` window stays open for a meeting with no end time.
+///
+/// It used to close ninety seconds after it opened, which meant the reminder
+/// only ever existed for somebody who was already at their desk, already in the
+/// call, and had left Vox running through all of it. Join ten minutes late,
+/// start Vox mid-meeting, or wake a laptop, and the meeting ran unrecorded with
+/// nothing ever said about it — the failure this app exists to prevent, missed
+/// by a ninety-second window. It is open for as long as the meeting is, which
+/// costs nothing: one entry is raised per meeting and a dismissal is final.
+const UNRECORDED_FALLBACK_MINUTES: i64 = 60;
+
+/// How far either side of a scheduled meeting a conferencing window on screen
+/// is still taken to be that meeting rather than a different call.
+const SCHEDULED_GRACE_MINUTES: i64 = 5;
 
 /// How long a `Fired` or `Snoozed` reminder can go un-actioned before it is
 /// `Expired`.
@@ -158,6 +171,12 @@ pub struct ReminderSettings {
     /// before it earns an interruption.
     #[serde(default = "default_true")]
     pub remind_on_detection: bool,
+    /// Whether `remind_on_detection`'s stored value has been through
+    /// [`ReminderSettings::migrate`].
+    ///
+    /// Not a preference — a marker, so the correction below happens once.
+    #[serde(default)]
+    pub detection_default_corrected: bool,
 }
 
 fn default_true() -> bool {
@@ -170,11 +189,40 @@ impl Default for ReminderSettings {
             remind_before_meeting: true,
             remind_if_unrecorded: true,
             remind_on_detection: true,
+            detection_default_corrected: true,
         }
     }
 }
 
 impl ReminderSettings {
+    /// Repairs a `remind_on_detection` that was written out as false by a
+    /// version whose default was wrong. Returns whether anything changed.
+    ///
+    /// Changing a default only reaches installs that never stored a value, and
+    /// every install stored one: settings are serialized whole, so saving any
+    /// unrelated preference wrote `"remind_on_detection": false` into the file.
+    /// Those users were left with detection permanently off and a Settings
+    /// switch that looked like it had been chosen deliberately.
+    ///
+    /// One correction, marked so it never repeats. It costs anybody who did
+    /// turn detection off during that window a single re-enable, and their
+    /// second switch-off sticks — which is the right way round, because the
+    /// alternative leaves everybody else with a reminder that cannot fire.
+    pub fn migrate(&mut self) -> bool {
+        if self.detection_default_corrected {
+            return false;
+        }
+        self.detection_default_corrected = true;
+        if self.remind_on_detection {
+            return true;
+        }
+        self.remind_on_detection = true;
+        tracing::info!(
+            "[reminders] detected-call reminders switched back on: the stored value came from a version whose default was wrong"
+        );
+        true
+    }
+
     /// Every kind enabled, whatever the user's preferences say.
     ///
     /// For the developer smoke test only. That button exists to prove the
@@ -183,11 +231,7 @@ impl ReminderSettings {
     /// when detection is switched off, which looks exactly like the surface
     /// being broken — the failure it was added to rule out.
     pub fn all_enabled() -> Self {
-        Self {
-            remind_before_meeting: true,
-            remind_if_unrecorded: true,
-            remind_on_detection: true,
-        }
+        Self::default()
     }
 }
 
@@ -289,6 +333,20 @@ fn provider_of(event: &CalendarEvent) -> String {
         .to_string()
 }
 
+/// Whether `now` falls inside this event, give or take the grace either side.
+///
+/// A meeting nobody is in yet, and one that finished, both have windows of
+/// their own on somebody's screen — so only the one actually running can claim
+/// a live conferencing window as itself.
+fn is_in_progress(event: &CalendarEvent, now: DateTime<Utc>) -> bool {
+    let Some(start) = starts_at(event) else {
+        return false;
+    };
+    let end = ends_at(event).unwrap_or_else(|| start + Duration::minutes(UNRECORDED_FALLBACK_MINUTES));
+    let grace = Duration::minutes(SCHEDULED_GRACE_MINUTES);
+    now >= start - grace && now <= end + grace
+}
+
 /// Whether a live conferencing window plausibly belongs to this event.
 ///
 /// Matching on provider rather than on title: window titles and calendar titles
@@ -319,6 +377,52 @@ fn ensure_entry(entries: &mut Vec<ReminderEvent>, candidate: ReminderEvent) {
         return;
     }
     entries.push(candidate);
+}
+
+/// Why this window would not raise a `Detected` reminder right now.
+///
+/// `None` means it would. The gates are deliberately the same ones `recompute`
+/// applies, in the same order, because the question this answers is the one
+/// that is otherwise unanswerable: a reminder that does not arrive and a
+/// reminder that was never going to arrive look identical from outside, and
+/// every silent gate below has at some point been mistaken for the feature
+/// being broken.
+pub fn detection_blocker(
+    queue: &ReminderQueue,
+    window: &WindowMatch,
+    inputs: &ReminderInputs<'_>,
+) -> Option<String> {
+    if !inputs.settings.remind_on_detection {
+        return Some("Detected-call reminders are switched off in Settings.".to_string());
+    }
+    if inputs.is_recording {
+        return Some("Vox is already recording, so nothing is missing it.".to_string());
+    }
+    if inputs
+        .events
+        .iter()
+        .filter(|event| is_in_progress(event, inputs.now))
+        .any(|event| provider_of(event).eq_ignore_ascii_case(&window.provider))
+    {
+        return Some(
+            "A scheduled meeting on this provider is running now — covered by the unrecorded reminder instead."
+                .to_string(),
+        );
+    }
+    if window.confidence < CONFIDENT_DETECTION {
+        let seen = queue
+            .sightings
+            .lock_or_recover()
+            .get(&ReminderEvent::key_for_window(window))
+            .copied()
+            .unwrap_or(0);
+        if seen < GENERIC_SIGHTINGS_REQUIRED {
+            return Some(format!(
+                "Its title carries no meeting name, so it has to persist: seen {seen} of {GENERIC_SIGHTINGS_REQUIRED} times."
+            ));
+        }
+    }
+    None
 }
 
 /// Reconciles the queue against what should exist right now.
@@ -371,9 +475,12 @@ pub fn recompute(queue: &ReminderQueue, inputs: &ReminderInputs<'_>) -> (Vec<Rem
         }
 
         let seconds_since_start = (now - starts_at).num_seconds();
+        let unrecorded_until = ends_at
+            .unwrap_or_else(|| starts_at + Duration::minutes(UNRECORDED_FALLBACK_MINUTES));
         if settings.remind_if_unrecorded
             && !is_recording
-            && (UNRECORDED_FROM_SECONDS..=UNRECORDED_TO_SECONDS).contains(&seconds_since_start)
+            && seconds_since_start >= UNRECORDED_FROM_SECONDS
+            && now <= unrecorded_until
             && !a_recording_covers(sessions, starts_at, ends_at)
             && event_is_on_screen(event, windows)
         {
@@ -396,11 +503,18 @@ pub fn recompute(queue: &ReminderQueue, inputs: &ReminderInputs<'_>) -> (Vec<Rem
 
     // Detection: only for calls the calendar does not already account for, so a
     // scheduled meeting never produces two reminders about itself.
+    //
+    // "Accounted for" means a meeting that is happening *now*, not one anywhere
+    // in the surrounding two hours. The wider test was the reason detection
+    // almost never fired during a working day: a single Meet invitation within
+    // an hour either way — one already finished, one not yet started, one
+    // declined — blocked every Google Meet window on screen, and the reminder
+    // that was supposed to cover the gap only lives inside the scheduled
+    // meeting's own few minutes. An ad-hoc call at 11:20 is not explained by an
+    // 11:59, and the calendar should not vouch for it.
     let scheduled_providers: Vec<String> = events
         .iter()
-        .filter(|event| {
-            starts_at(event).is_some_and(|start| (now - start).num_seconds().abs() < 3600)
-        })
+        .filter(|event| is_in_progress(event, now))
         .map(provider_of)
         .collect();
 
@@ -640,12 +754,38 @@ mod tests {
     use crate::calendar::model::{Attendance, EventAttendee};
     use crate::meetings::model::MeetingSource;
 
+    #[test]
+    fn every_reminder_kind_is_on_out_of_the_box() {
+        // A reminder nobody switched off has to arrive. Detection shipped
+        // defaulted off, which left the one call with no calendar entry — the
+        // only kind nothing else can catch — covered by nothing at all.
+        let settings = ReminderSettings::default();
+        assert!(settings.remind_before_meeting);
+        assert!(settings.remind_if_unrecorded);
+        assert!(settings.remind_on_detection);
+    }
+
+    #[test]
+    fn a_detection_flag_stored_by_the_wrong_default_is_corrected_once() {
+        // Settings are serialized whole, so saving any unrelated preference
+        // wrote the old default into the file. Changing the default in code
+        // reaches nobody who has ever opened Settings; this is what does.
+        let mut stored: ReminderSettings =
+            serde_json::from_str(r#"{"remind_on_detection": false}"#).unwrap();
+        assert!(!stored.remind_on_detection);
+
+        assert!(stored.migrate());
+        assert!(stored.remind_on_detection);
+
+        // And having been told once, it stays told: a user who switches
+        // detection off after the correction keeps it off.
+        stored.remind_on_detection = false;
+        assert!(!stored.migrate());
+        assert!(!stored.remind_on_detection);
+    }
+
     fn settings_all_on() -> ReminderSettings {
-        ReminderSettings {
-            remind_before_meeting: true,
-            remind_if_unrecorded: true,
-            remind_on_detection: true,
-        }
+        ReminderSettings::default()
     }
 
     fn event_starting_in(id: &str, seconds: i64) -> CalendarEvent {
@@ -680,7 +820,7 @@ mod tests {
             provider: detection::PROVIDER_ZOOM.to_string(),
             title: title.to_string(),
             raw_title: format!("{title} - Zoom"),
-            source: "window_detector".to_string(),
+            source: detection::SOURCE_WINDOW_TITLE.to_string(),
             confidence: detection::score_confidence(title),
         }
     }
@@ -823,6 +963,70 @@ mod tests {
     }
 
     #[test]
+    fn a_meeting_elsewhere_in_the_hour_does_not_vouch_for_the_call_on_screen() {
+        // The reason detection almost never fired during a working day. Any
+        // event within an hour either way used to block every window of its
+        // provider — so one Zoom invitation at 12:00 silenced an ad-hoc Zoom
+        // at 11:10, which nothing else covers.
+        let settings = settings_all_on();
+        let mut later = event_starting_in("evt_later", 50 * 60);
+        later.conference_url = Some("https://zoom.us/j/123".to_string());
+        let mut finished = event_starting_in("evt_earlier", -50 * 60);
+        finished.conference_url = Some("https://zoom.us/j/456".to_string());
+        let events = vec![later, finished];
+        let windows = vec![zoom_window("Ad-hoc with the placement team")];
+        let queue = ReminderQueue::default();
+
+        let (all, _) = recompute(&queue, &inputs(&events, &windows, &settings, false));
+
+        assert!(
+            all.iter().any(|e| e.kind == ReminderKind::Detected),
+            "no meeting was running, so the calendar explains nothing about this call"
+        );
+    }
+
+    #[test]
+    fn a_meeting_joined_late_is_still_reported_unrecorded() {
+        // The window used to close ninety seconds after it opened, so the
+        // reminder existed only for somebody already at their desk, already in
+        // the call, with Vox already running. Everybody else recorded nothing
+        // and heard nothing about it.
+        let settings = settings_all_on();
+        let events = vec![event_starting_in("evt_1", -20 * 60)];
+        let windows = vec![WindowMatch {
+            provider: detection::PROVIDER_GOOGLE_MEET.to_string(),
+            title: "Meeting evt_1".to_string(),
+            raw_title: "Meeting evt_1 - Google Meet".to_string(),
+            source: detection::SOURCE_WINDOW_TITLE.to_string(),
+            confidence: 0.85,
+        }];
+        let queue = ReminderQueue::default();
+
+        let (all, _) = recompute(&queue, &inputs(&events, &windows, &settings, false));
+
+        assert!(
+            all.iter().any(|e| e.kind == ReminderKind::Unrecorded),
+            "twenty minutes into an unrecorded meeting is exactly when to say so"
+        );
+    }
+
+    #[test]
+    fn a_meeting_that_has_finished_is_not_still_called_unrecorded() {
+        // The other half of widening the window: it follows the meeting's own
+        // end, so a call that ran to 11:30 stops being nagged about at 11:31.
+        let settings = settings_all_on();
+        let mut event = event_starting_in("evt_1", -90 * 60);
+        event.end = (Utc::now() - Duration::minutes(60)).to_rfc3339();
+        let events = vec![event];
+        let windows = vec![zoom_window("Sprint planning")];
+        let queue = ReminderQueue::default();
+
+        let (all, _) = recompute(&queue, &inputs(&events, &windows, &settings, false));
+
+        assert!(all.iter().all(|e| e.kind != ReminderKind::Unrecorded));
+    }
+
+    #[test]
     fn a_closed_window_drops_its_reminder() {
         let settings = settings_all_on();
         let windows = vec![zoom_window("Placement review")];
@@ -884,8 +1088,7 @@ mod tests {
     fn each_reminder_kind_can_be_switched_off_on_its_own() {
         let settings = ReminderSettings {
             remind_before_meeting: false,
-            remind_if_unrecorded: true,
-            remind_on_detection: true,
+            ..ReminderSettings::default()
         };
         let events = vec![event_starting_in("evt_1", 120)];
         let queue = ReminderQueue::default();

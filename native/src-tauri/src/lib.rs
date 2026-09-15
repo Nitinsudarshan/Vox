@@ -140,7 +140,16 @@ pub fn run() {
     let default_vault_dir = base_dir.join("vault");
     let config_dir = base_dir.join("config");
 
-    let settings = AppSettings::load(&config_dir.join("settings.json")).unwrap_or_default();
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = AppSettings::load(&settings_path).unwrap_or_default();
+    // Written back immediately so the correction survives a crash before the
+    // next ordinary save, and so the marker is never applied twice.
+    if settings.meetings.reminders.migrate() {
+        if let Err(err) = settings.save(&settings_path) {
+            tracing::warn!("[reminders] could not persist the settings correction: {}", err);
+        }
+    }
+    let settings = settings;
     let hotkeys_config = settings.hotkeys.clone();
     let pill_position = settings.ui.pill_position;
     let startup_config = settings.startup.clone();

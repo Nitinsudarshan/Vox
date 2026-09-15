@@ -221,7 +221,7 @@ export const DeveloperSettingsView: React.FC = () => {
             {detected.map((match) => (
               <div
                 key={`${match.provider}:${match.raw_title}`}
-                className="flex items-center justify-between gap-3 p-2 rounded-md border border-border/60 bg-background/50"
+                className="flex items-start justify-between gap-3 p-2 rounded-md border border-border/60 bg-background/50"
               >
                 <div className="min-w-0">
                   {/* A window title is somebody else's text. Shown, never
@@ -230,9 +230,21 @@ export const DeveloperSettingsView: React.FC = () => {
                   <p className="text-[10px] font-mono text-muted-foreground truncate">
                     {match.raw_title}
                   </p>
+                  {/* The answer to "it sees the call and still says nothing".
+                      Silence from a gate and silence from a broken feature are
+                      otherwise the same silence. */}
+                  {match.blocked_by ? (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                      No reminder: {match.blocked_by}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1">
+                      Would raise a reminder.
+                    </p>
+                  )}
                 </div>
                 <Badge variant="outline" className="text-[10px] shrink-0 font-mono">
-                  {match.provider} · {match.confidence.toFixed(2)}
+                  {match.provider} · {match.source} · {match.confidence.toFixed(2)}
                 </Badge>
               </div>
             ))}
