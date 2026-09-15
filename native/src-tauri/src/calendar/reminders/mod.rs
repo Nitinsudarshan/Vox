@@ -150,9 +150,13 @@ pub struct ReminderSettings {
     pub remind_if_unrecorded: bool,
     /// A conferencing call is on screen that the calendar knows nothing about.
     ///
-    /// Off by default: it reads window titles, which is the most intrusive
-    /// signal here, and it is the one most likely to be wrong.
-    #[serde(default)]
+    /// On, like the other two. This is the only reminder that can catch an
+    /// ad-hoc call somebody pulled you into — the exact meeting with no
+    /// calendar entry to remind you about it — so defaulting it off left the
+    /// one case nothing else covers covered by nothing. The window titles it
+    /// reads never leave the machine, and a topicless one has to persist
+    /// before it earns an interruption.
+    #[serde(default = "default_true")]
     pub remind_on_detection: bool,
 }
 
@@ -165,7 +169,24 @@ impl Default for ReminderSettings {
         Self {
             remind_before_meeting: true,
             remind_if_unrecorded: true,
-            remind_on_detection: false,
+            remind_on_detection: true,
+        }
+    }
+}
+
+impl ReminderSettings {
+    /// Every kind enabled, whatever the user's preferences say.
+    ///
+    /// For the developer smoke test only. That button exists to prove the
+    /// reminder surface works at all, so a preference must not be able to
+    /// silence it: a Send that respects `remind_on_detection` does nothing
+    /// when detection is switched off, which looks exactly like the surface
+    /// being broken — the failure it was added to rule out.
+    pub fn all_enabled() -> Self {
+        Self {
+            remind_before_meeting: true,
+            remind_if_unrecorded: true,
+            remind_on_detection: true,
         }
     }
 }

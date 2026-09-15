@@ -66,6 +66,15 @@ describe('MeetingReminderWindow', () => {
     expect(screen.getByText('2 invited')).toBeInTheDocument();
   });
 
+  it('says it is Vox asking', async () => {
+    // The card appears unasked-for, over whatever the user is in the middle
+    // of, carrying buttons that start a recording. A window like that with no
+    // name on it is one nobody should press.
+    await renderWithReminder();
+
+    expect(screen.getByAltText('Vox logo')).toBeInTheDocument();
+  });
+
   it('starts recording the meeting the card is about', async () => {
     await renderWithReminder();
 

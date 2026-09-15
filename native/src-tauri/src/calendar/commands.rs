@@ -8,7 +8,6 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::commands::{AppState, CommandError};
-use crate::sync::MutexExt;
 use crate::oauth::{start_desktop_oauth_flow, OAuthTokens, SCOPE_CALENDAR_READONLY, SCOPE_IDENTITY};
 
 use super::agenda::{self, RecordingWindow};
@@ -460,6 +459,7 @@ fn persist_refresh(app: &AppHandle, email: &str, refreshed: Option<OAuthTokens>)
 
 use crate::calendar::reminders::{
     self, MeetingReminderPayload, NotificationService, ReminderKind, ReminderQueue,
+    ReminderSettings,
 };
 use std::sync::Arc;
 
@@ -637,17 +637,27 @@ pub async fn trigger_mock_meeting_reminder(
     app: AppHandle,
     kind: ReminderKind,
 ) -> Result<(), CommandError> {
-    let (entry, settings) = {
-        let state = app.state::<AppState>();
-        let settings = state.settings.lock_or_recover().meetings.reminders.clone();
+    let entry = {
         let queue = app.state::<Arc<ReminderQueue>>();
-        (reminders::inject_mock(&queue, kind), settings)
+        reminders::inject_mock(&queue, kind)
     };
     let notifications = app.state::<Arc<NotificationService>>().inner().clone();
-    // `is_recording: false`: the point of the mock is to see the card, and a
-    // developer testing it while recording something else still wants to.
-    notifications.show(&app, &entry, false, &settings);
+    // Neither the user's preferences nor a recording in progress can silence
+    // this one. The button's whole job is to answer "does the reminder window
+    // still work", and a suppressed card answers it with the same nothing as
+    // a broken one.
+    notifications.show(&app, &entry, false, &ReminderSettings::all_enabled());
     Ok(())
+}
+
+/// Testing only: what window detection can see right now.
+///
+/// The `detected` reminder is the one kind no calendar can explain, so the
+/// only way to tell "nothing is open" from "detection is blind on this
+/// machine" is to ask it what it sees. Reports, never acts.
+#[tauri::command]
+pub fn debug_detect_conferencing_windows() -> Vec<reminders::detection::WindowMatch> {
+    reminders::detection::detect_active_conferencing_windows()
 }
 
 /// Grows the meeting pill for its hovered state and shrinks it back.

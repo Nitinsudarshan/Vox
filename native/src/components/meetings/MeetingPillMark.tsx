@@ -22,6 +22,16 @@ const MIN_BAR_PX = 2;
 /** Below this a bar is drawn idle, so room tone does not tint the whole meter. */
 const AUDIBLE = 0.02;
 
+/**
+ * Bar colours, one pair per theme.
+ *
+ * The idle bar has to read as "quiet", not as "off": a dark idle bar on the
+ * light card is heavier than a live one, which inverts the whole meter.
+ */
+const MIC_LIVE = 'bg-indigo-500 dark:bg-indigo-400';
+const SYS_LIVE = 'bg-sky-500 dark:bg-sky-400';
+const IDLE = 'bg-neutral-300 dark:bg-neutral-700';
+
 const barPx = (level: number) =>
   Math.max(MIN_BAR_PX, Math.round(Math.max(0, Math.min(1, level)) * HALF_PX));
 
@@ -55,13 +65,13 @@ export const MeetingPillWaveform: React.FC<MeetingPillWaveformProps> = ({
         >
           <span
             className={`w-full rounded-full transition-[height] duration-75 ease-out ${
-              micLive ? 'bg-indigo-400' : 'bg-neutral-700'
+              micLive ? MIC_LIVE : IDLE
             }`}
             style={{ height: muted ? MIN_BAR_PX : barPx(micLevel) }}
           />
           <span
             className={`w-full rounded-full transition-[height] duration-75 ease-out ${
-              sysLive ? 'bg-sky-400' : 'bg-neutral-700'
+              sysLive ? SYS_LIVE : IDLE
             }`}
             style={{ height: muted ? MIN_BAR_PX : barPx(sysLevel) }}
           />
