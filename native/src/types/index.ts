@@ -1193,3 +1193,8 @@ export interface CorrectionRecord {
   /** Whether the user also ticked "Teach Relay this correction". */
   learned: boolean;
 }
+
+export type {
+  MeetingReminderPayload,
+  ReminderKind,
+} from './meetings';

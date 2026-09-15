@@ -147,7 +147,7 @@ pub async fn start_meeting(
     devices: Option<crate::meetings::capture::MeetingDevices>,
 ) -> Result<Meeting, CommandError> {
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let meeting = tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
         let settings = state.settings.lock_or_recover().clone();
         state
@@ -168,7 +168,22 @@ pub async fn start_meeting(
             .map_err(CommandError::from)
     })
     .await
-    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
+    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))??;
+
+    // Bring the pill up only once recording is actually under way.
+    crate::overlay::ensure_meeting_overlay(&app, true);
+
+    // A reminder card asking "shall I record this?" is answered by a recording
+    // starting, wherever it was started from. Clearing it here rather than in
+    // the reminder path alone is what stops the list and the card from holding
+    // different views of whether a meeting has been dealt with.
+    if let Some(notifications) =
+        app.try_state::<std::sync::Arc<crate::calendar::reminders::NotificationService>>()
+    {
+        notifications.dismiss(&app);
+    }
+
+    Ok(meeting)
 }
 
 /// The saved microphone and output choice for recordings.
@@ -197,93 +212,6 @@ pub fn set_meeting_devices(
         guard.clone()
     };
     crate::commands::persist_settings(&app, &state, settings)
-}
-
-/// When Vox announces that a meeting is about to start.
-#[tauri::command]
-pub fn get_meeting_reminder_settings(
-    state: State<'_, AppState>,
-) -> Result<crate::calendar::reminders::ReminderSettings, CommandError> {
-    Ok(state.settings.lock_or_recover().meetings.reminders.clone())
-}
-
-/// Saves the reminder settings.
-///
-/// Its own command rather than a whole-`AppSettings` round trip, for the
-/// reason [`set_meeting_devices`] gives: a stale copy of the document coming
-/// back from a checkbox would overwrite whatever else changed meanwhile.
-///
-/// Unknown lead times are dropped rather than rejected: the set of offered
-/// intervals is Vox's to change, and a settings file written by an older or
-/// newer build must not fail to save.
-#[tauri::command]
-pub fn set_meeting_reminder_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    reminders: crate::calendar::reminders::ReminderSettings,
-) -> Result<crate::calendar::reminders::ReminderSettings, CommandError> {
-    let cleaned = crate::calendar::reminders::ReminderSettings {
-        lead_minutes: reminders.buckets(),
-        ..reminders
-    };
-    let settings = {
-        let mut guard = state.settings.lock_or_recover();
-        guard.meetings.reminders = cleaned.clone();
-        guard.clone()
-    };
-    crate::commands::persist_settings(&app, &state, settings)?;
-    Ok(cleaned)
-}
-
-/// Raises a sample reminder of one kind, through the real path.
-///
-/// Reminders fire in a few specific minutes around a meeting, which meant the
-/// only way to find out whether they work at all was to have a meeting and
-/// wait for the right moment — and a reminder that never appears is
-/// indistinguishable from a minute with nothing due. Each kind is a different
-/// message with a different action, so each gets its own button.
-///
-/// Goes through [`crate::calendar::reminder_service::announce`] itself rather
-/// than reproducing it: a window that fails to show here fails to show for a
-/// real meeting too.
-#[tauri::command]
-pub fn send_test_meeting_reminder(app: AppHandle, kind: String) -> Result<(), CommandError> {
-    use crate::calendar::reminders::{MeetingReminder, ReminderKind, NOT_RECORDING_AFTER_MINUTES};
-
-    let (kind, offset_minutes) = match kind.trim() {
-        "upcoming" => (ReminderKind::Upcoming, 5),
-        "starting" => (ReminderKind::Starting, 0),
-        "not_recording" => (ReminderKind::NotRecording, -NOT_RECORDING_AFTER_MINUTES),
-        other => {
-            return Err(CommandError::new(
-                "MEETING_REMINDER_UNKNOWN_KIND",
-                &format!("There is no reminder of kind {other:?}."),
-            ))
-        }
-    };
-
-    let start = chrono::Utc::now() + chrono::Duration::minutes(offset_minutes);
-    crate::calendar::reminder_service::announce(
-        &app,
-        &MeetingReminder {
-            // Timestamped so pressing the same button twice shows it twice,
-            // which is what somebody checking whether it works will do.
-            key: format!("test|{}|{}", kind.slug_for_test(), chrono::Utc::now().timestamp_millis()),
-            event_id: format!("test-{}", kind.slug_for_test()),
-            account_email: "test@vox".to_string(),
-            title: "Test reminder".to_string(),
-            start: start.to_rfc3339(),
-            // No link: a test that opened a browser tab would be a surprise,
-            // and Join's absence is obvious enough to check by eye.
-            conference_url: None,
-            location: Some("Sample meeting".to_string()),
-            meeting_id: None,
-            minutes_until: offset_minutes,
-            guest_count: 2,
-            kind,
-        },
-    );
-    Ok(())
 }
 
 #[tauri::command]
@@ -317,6 +245,10 @@ pub async fn stop_meeting(app: AppHandle) -> Result<Meeting, CommandError> {
     })
     .await
     .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))??;
+
+    // The pill comes down once the recording is genuinely finished, rather than
+    // vanishing while the transcript is still draining.
+    crate::overlay::hide_meeting_overlay(&app);
 
     let state = handle.state::<AppState>();
     let (provider, meetings) = {

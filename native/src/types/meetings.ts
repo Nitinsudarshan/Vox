@@ -292,51 +292,30 @@ export interface TranslationProgress {
 
 // --- reminders -----------------------------------------------------------
 
-/** The Tauri event a due reminder arrives on. */
+/** The Tauri event a reminder card arrives on. */
 export const MEETING_REMINDER_EVENT = 'meeting-reminder';
 
 /**
- * What a reminder is telling you.
+ * Why a reminder exists.
  *
- * Three genuinely different messages, not one message at three times:
- * - `upcoming` — before it starts (t−15, −10, −5, −1)
- * - `starting` — at the start, or a moment after (t)
- * - `not_recording` — under way, with nothing being recorded (t+5)
+ * Mirrors `native/src-tauri/src/calendar/reminders/mod.rs::ReminderKind`.
+ * - `upcoming` — a scheduled meeting is about to start
+ * - `unrecorded` — a scheduled meeting has started and nothing is recording it
+ * - `detected` — a conferencing call is on screen the calendar knows nothing about
  */
-export type ReminderKind = 'upcoming' | 'starting' | 'not_recording';
+export type ReminderKind = 'upcoming' | 'unrecorded' | 'detected';
 
-/** The lead times Vox offers, in minutes. `0` means "when it starts". */
-export const REMINDER_LEAD_CHOICES = [15, 10, 5, 1, 0] as const;
-
-/**
- * When Vox announces that a meeting is about to start.
- *
- * Mirrors `native/src-tauri/src/calendar/reminders.rs::ReminderSettings`.
- */
-export interface ReminderSettings {
-  enabled: boolean;
-  /** Minutes before the start. These are buckets, not alarms — see the Rust side. */
-  lead_minutes: number[];
-  only_with_link: boolean;
-  include_declined: boolean;
-  /** Say something when a meeting is under way and nothing is being recorded. */
-  nudge_when_not_recording: boolean;
-}
-
-/** A meeting that is about to start. */
-export interface MeetingReminder {
-  /** `<account>|<event>|<bucket>`. Also what the surface de-duplicates on. */
+/** What the reminder card is given. Sanitized in Rust; nothing else crosses. */
+export interface MeetingReminderPayload {
+  /** `cal:<event id>` or `win:<provider>:<title>`. Never a recording's id. */
   key: string;
-  event_id: string;
-  account_email: string;
-  title: string;
-  start: string;
-  conference_url?: string | null;
-  location?: string | null;
-  /** A recording Vox has already matched to this event, if any. */
-  meeting_id?: string | null;
-  /** Minutes until it starts, from the clock. Negative means it has begun. */
-  minutes_until: number;
-  guest_count: number;
   kind: ReminderKind;
+  title: string;
+  provider: string;
+  provider_name: string;
+  /** When the meeting starts, in words — "Starts in 4 minutes". */
+  time_label: string;
+  participants: string[];
+  /** Whether there is a conferencing link behind the Join button. */
+  can_join: boolean;
 }

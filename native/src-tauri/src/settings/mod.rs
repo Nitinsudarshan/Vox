@@ -684,10 +684,10 @@ pub struct MeetingSettings {
     /// resolution, so this costs nothing until someone chooses.
     #[serde(default)]
     pub devices: crate::meetings::capture::MeetingDevices,
-    /// When Vox announces that a meeting is about to start.
+    /// When Vox raises a meeting reminder card.
     ///
-    /// See [`crate::calendar::reminders`] for why the lead times are buckets
-    /// rather than alarms, and what is deliberately never announced.
+    /// See [`crate::calendar::reminders`] for the three kinds and what each is
+    /// evidence of.
     #[serde(default)]
     pub reminders: crate::calendar::reminders::ReminderSettings,
 }

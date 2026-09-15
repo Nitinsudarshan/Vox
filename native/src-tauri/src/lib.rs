@@ -210,6 +210,8 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .manage(std::sync::Arc::new(calendar::reminders::ReminderQueue::default()))
+        .manage(std::sync::Arc::new(calendar::reminders::NotificationService::new()))
         .manage(state)
         .setup(move |app| {
             let handle = app.handle();
@@ -336,11 +338,13 @@ pub fn run() {
             // on every sync, settings change and clock change, and the failure
             // mode of getting that wrong is a reminder that silently never
             // fires.
-            // Built hidden now so the first reminder is a show rather than a
-            // window construction, which is visible enough to make a
-            // reminder late for the meeting it is about.
-            calendar::reminder_window::ensure_window(handle);
-            calendar::reminder_service::spawn(handle.clone());
+            // Both overlays are built hidden now rather than on demand:
+            // creating a webview is slow enough to be seen, and a reminder
+            // that arrives a beat late is a reminder about a meeting that has
+            // already started.
+            overlay::ensure_reminder_window(handle);
+            overlay::ensure_meeting_overlay(handle, false);
+            calendar::reminders::scheduler::spawn(handle.clone());
 
             Ok(())
         })
@@ -513,17 +517,21 @@ pub fn run() {
             calendar::commands::sync_calendars,
             calendar::commands::get_calendar_agenda,
             calendar::commands::open_calendar_link,
-            calendar::commands::dismiss_meeting_reminders,
-            calendar::commands::resize_meeting_reminders,
+            calendar::commands::get_pending_meeting_reminder,
+            calendar::commands::meeting_reminder_ready,
+            calendar::commands::meeting_reminder_hover_changed,
+            calendar::commands::dismiss_meeting_reminder,
+            calendar::commands::snooze_meeting_reminder,
+            calendar::commands::join_meeting_from_reminder,
+            calendar::commands::start_meeting_from_reminder,
+            calendar::commands::trigger_mock_meeting_reminder,
+            calendar::commands::set_meeting_overlay_expanded,
             meetings::commands::list_meeting_series,
             meetings::commands::get_meeting_series,
             meetings::commands::create_meeting_series,
             meetings::commands::rename_meeting_series,
             meetings::commands::delete_meeting_series,
             meetings::commands::set_meeting_series,
-            meetings::commands::get_meeting_reminder_settings,
-            meetings::commands::set_meeting_reminder_settings,
-            meetings::commands::send_test_meeting_reminder,
             meetings::commands::detect_meeting_speakers,
             meetings::commands::rename_meeting_speaker,
             meetings::commands::cancel_meeting_import,
