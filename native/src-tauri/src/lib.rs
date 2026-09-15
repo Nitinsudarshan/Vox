@@ -331,6 +331,13 @@ pub fn run() {
                 }
             });
 
+            // Says something when a meeting is about to start. Polls rather
+            // than holding a timer per event: a timer array has to be rebuilt
+            // on every sync, settings change and clock change, and the failure
+            // mode of getting that wrong is a reminder that silently never
+            // fires.
+            calendar::reminder_service::spawn(handle.clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -508,6 +515,8 @@ pub fn run() {
             meetings::commands::rename_meeting_series,
             meetings::commands::delete_meeting_series,
             meetings::commands::set_meeting_series,
+            meetings::commands::get_meeting_reminder_settings,
+            meetings::commands::set_meeting_reminder_settings,
             meetings::commands::detect_meeting_speakers,
             meetings::commands::rename_meeting_speaker,
             meetings::commands::cancel_meeting_import,

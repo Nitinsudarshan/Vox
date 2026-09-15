@@ -199,6 +199,42 @@ pub fn set_meeting_devices(
     crate::commands::persist_settings(&app, &state, settings)
 }
 
+/// When Vox announces that a meeting is about to start.
+#[tauri::command]
+pub fn get_meeting_reminder_settings(
+    state: State<'_, AppState>,
+) -> Result<crate::calendar::reminders::ReminderSettings, CommandError> {
+    Ok(state.settings.lock_or_recover().meetings.reminders.clone())
+}
+
+/// Saves the reminder settings.
+///
+/// Its own command rather than a whole-`AppSettings` round trip, for the
+/// reason [`set_meeting_devices`] gives: a stale copy of the document coming
+/// back from a checkbox would overwrite whatever else changed meanwhile.
+///
+/// Unknown lead times are dropped rather than rejected: the set of offered
+/// intervals is Vox's to change, and a settings file written by an older or
+/// newer build must not fail to save.
+#[tauri::command]
+pub fn set_meeting_reminder_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    reminders: crate::calendar::reminders::ReminderSettings,
+) -> Result<crate::calendar::reminders::ReminderSettings, CommandError> {
+    let cleaned = crate::calendar::reminders::ReminderSettings {
+        lead_minutes: reminders.buckets(),
+        ..reminders
+    };
+    let settings = {
+        let mut guard = state.settings.lock_or_recover();
+        guard.meetings.reminders = cleaned.clone();
+        guard.clone()
+    };
+    crate::commands::persist_settings(&app, &state, settings)?;
+    Ok(cleaned)
+}
+
 #[tauri::command]
 pub fn pause_meeting(app: AppHandle, state: State<'_, AppState>) -> Result<(), CommandError> {
     state.meeting_engine.pause(Some(app)).map_err(CommandError::from)

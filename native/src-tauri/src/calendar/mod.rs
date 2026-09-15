@@ -47,6 +47,8 @@ pub mod commands;
 pub mod google;
 pub mod model;
 pub mod parse;
+pub mod reminder_service;
+pub mod reminders;
 pub mod store;
 
 pub use model::{Attendance, CalendarAccount, CalendarEvent, DayAgenda, EventAttendee};
