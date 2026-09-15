@@ -17,6 +17,7 @@ import type {
   MeetingSeriesSummary,
   MeetingSummary,
   MeetingTemplate,
+  ReminderSettings,
   SeriesOccurrence,
   Speaker,
   SpeakerReport,
@@ -132,6 +133,17 @@ export const saveSummary = (
   meetingId: string,
   markdown: string,
 ): Promise<MeetingSummary> => invoke('save_meeting_summary', { meetingId, markdown });
+
+// --- reminders -----------------------------------------------------------
+
+/** When Vox announces that a meeting is about to start. */
+export const getReminderSettings = (): Promise<ReminderSettings> =>
+  invoke('get_meeting_reminder_settings');
+
+/** Saves them. Unknown lead times are dropped rather than rejected. */
+export const saveReminderSettings = (
+  reminders: ReminderSettings,
+): Promise<ReminderSettings> => invoke('set_meeting_reminder_settings', { reminders });
 
 // --- recurring meeting series -------------------------------------------
 

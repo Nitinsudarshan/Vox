@@ -8,6 +8,7 @@ import * as meetings from '@/lib/meetings';
 import type { MeetingTemplate, MeetingDevices } from '@/types/meetings';
 import type { AudioDeviceInfo } from '@/types';
 import { DevicePicker } from '@/components/meetings/MeetingRecorder';
+import { ReminderSettingsCard } from './ReminderSettingsCard';
 
 /** The languages a report can be translated into, matching the Rust table. */
 const SUMMARY_LANGUAGES: Array<{ code: string; label: string }> = [
@@ -122,6 +123,10 @@ export const MeetingSettingsView: React.FC = () => {
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {/* Full width: the lead-time row does not fit a half column, and this is
+          the setting a person comes here for after missing a meeting. */}
+      <ReminderSettingsCard />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Card 1: Audio Input & Capture Devices */}
