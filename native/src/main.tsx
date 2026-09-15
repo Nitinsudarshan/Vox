@@ -5,6 +5,7 @@ import { App } from './App';
 import { FloatingPill } from './components/capture/FloatingPill';
 import { MeetingReminderWindow } from './components/meetings/MeetingReminderWindow';
 import { MeetingRecordingOverlay } from './components/meetings/MeetingRecordingOverlay';
+import { resolveTheme } from './lib/overlayTheme';
 import './index.css';
 
 let windowLabel = '';
@@ -54,6 +55,11 @@ const activeRoute = resolveActiveRoute();
 if (activeRoute.isOverlay) {
   document.documentElement.classList.add('overlay-window');
   document.body.classList.add('overlay-window');
+  // Synchronously, before the first paint. An overlay is a separate webview
+  // with no theme of its own, and the reminder window is only revealed once it
+  // reports itself painted — so a theme applied in an effect would be the
+  // theme the card is revealed changing out of.
+  document.documentElement.classList.toggle('dark', resolveTheme() === 'dark');
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

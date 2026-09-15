@@ -8,6 +8,8 @@ import {
   type MeetingRecordingStatus,
 } from '../../types/meetings';
 import { MeetingPillWaveform } from './MeetingPillMark';
+import { VoxLogo } from '../common/VoxLogo';
+import { useOverlayTheme } from '../../lib/overlayTheme';
 
 /**
  * Samples held in the waveform, one per bar.
@@ -54,8 +56,16 @@ const TIMER_TICK_MS = 250;
  * user is actually working in — so it stays narrow at rest and the window grows
  * only while the controls are open. The window is transparent but still takes
  * clicks, so unused width is an invisible dead zone, not free space.
+ *
+ * Painted from the app's own theme tokens, light or dark, and it follows the
+ * switch live. This is a piece of Vox that happens to be outside its window,
+ * and a permanently dark pill over a light app reads as some other program's
+ * notification. Nothing casts a shadow: on a transparent window a blurred
+ * box-shadow is composited straight onto the desktop, which is the grey halo
+ * that used to sit around it.
  */
 export const MeetingRecordingOverlay: React.FC = () => {
+  useOverlayTheme();
   const [session, setSession] = useState<MeetingRecordingStatus | null>(null);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [micLevels, setMicLevels] = useState<number[]>(SILENT_LEVELS);
@@ -221,11 +231,14 @@ export const MeetingRecordingOverlay: React.FC = () => {
       onMouseLeave={() => setExpanded(false)}
     >
       <div
-        className="inline-flex items-center gap-3 h-11 pl-3.5 pr-2 rounded-lg
-                   bg-[#141414]/95 backdrop-blur-xl
-                   border border-white/10 ring-1 ring-indigo-500/15
-                   shadow-[0_10px_30px_rgba(0,0,0,0.55)]"
+        className="inline-flex items-center gap-2.5 h-11 pl-3 pr-2 rounded-lg
+                   bg-card border border-border ring-1 ring-indigo-500/20"
       >
+        {/* Whose pill this is. An always-on-top capsule with a red dot and a
+            timer is a shape several screen recorders share, and the one thing
+            it must never be is ambiguous about which program is listening. */}
+        <VoxLogo className="w-4 h-4 shrink-0" />
+
         {/* Status dot and elapsed recorded time — the only text in the pill. */}
         <div className="flex items-center gap-2 shrink-0">
           <span className="relative flex w-2 h-2">
@@ -238,7 +251,7 @@ export const MeetingRecordingOverlay: React.FC = () => {
               }`}
             />
           </span>
-          <span className="font-mono text-[13px] leading-none font-medium tabular-nums text-neutral-100">
+          <span className="font-mono text-[13px] leading-none font-medium tabular-nums text-foreground">
             {formatTimer(elapsedSec)}
           </span>
         </div>
@@ -253,7 +266,7 @@ export const MeetingRecordingOverlay: React.FC = () => {
         )}
 
         {isFinalizing ? (
-          <span className="flex items-center shrink-0 text-neutral-400">
+          <span className="flex items-center shrink-0 text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
           </span>
         ) : (
@@ -270,8 +283,9 @@ export const MeetingRecordingOverlay: React.FC = () => {
               disabled={isBusy}
               title={isPaused ? 'Resume recording' : 'Pause recording'}
               aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
-              className="grid place-items-center w-7 h-7 rounded-md text-neutral-300
-                         hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed
+              className="grid place-items-center w-7 h-7 rounded-md text-muted-foreground
+                         hover:bg-foreground/10 hover:text-foreground
+                         disabled:opacity-40 disabled:cursor-not-allowed
                          focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400
                          cursor-pointer"
             >

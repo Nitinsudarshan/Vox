@@ -4,6 +4,8 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Video, Calendar, Clock, Disc, X, Users, ExternalLink, Loader2 } from 'lucide-react';
 import { MeetingReminderPayload, ReminderKind } from '../../types';
+import { useOverlayTheme } from '../../lib/overlayTheme';
+import { VoxLogo } from '../common/VoxLogo';
 
 /**
  * How long the exit animation runs before the window is hidden.
@@ -29,12 +31,16 @@ const SNOOZE_OPTIONS = [5, 10, 15] as const;
  * recording lifecycle and no queue: every action is one command, and the
  * backend decides what that means.
  *
- * Styled as its own dark surface rather than from theme tokens, like the
- * recording pill beside it — this window is transparent and floats over
- * whatever the user is working in, so it has to be legible against a
- * background it cannot know.
+ * Painted from the app's own theme tokens, light or dark, and it follows the
+ * switch live — it is a piece of Vox that happens to be outside its window,
+ * and a permanently dark card over a light app reads as some other program's
+ * notification. The surface is fully opaque either way, because it floats over
+ * a background it cannot know. Nothing casts a shadow: on a transparent window
+ * a blurred box-shadow is composited straight onto the desktop, which is the
+ * grey halo that used to sit around it.
  */
 export const MeetingReminderWindow: React.FC = () => {
+  useOverlayTheme();
   const [reminder, setReminder] = useState<MeetingReminderPayload | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -140,17 +146,21 @@ export const MeetingReminderWindow: React.FC = () => {
     >
       <div
         className={`w-full h-full flex flex-col rounded-lg px-3.5 py-3
-                    bg-[#141414]/95 backdrop-blur-xl
-                    border border-white/10 ring-1 ring-indigo-500/15
-                    shadow-[0_10px_30px_rgba(0,0,0,0.55)]
+                    bg-card border border-border ring-1 ring-indigo-500/20
                     transition-all duration-150 ease-out ${
                       leaving ? 'opacity-0 translate-x-3' : 'opacity-100 translate-x-0'
                     }`}
       >
         <header className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0">
+            {/* Whose card this is. It arrives unasked-for, over whatever the
+                user is in the middle of, naming a meeting and its guests —
+                so the first thing it has to answer is which program is
+                asking, before anybody decides whether to trust the buttons. */}
+            <VoxLogo expanded className="h-3 w-auto shrink-0" />
+            <span aria-hidden="true" className="shrink-0 w-px h-3 bg-border" />
             <ProviderIcon provider={reminder.provider} />
-            <span className="text-[11px] font-semibold text-neutral-300 truncate">
+            <span className="text-[11px] font-semibold text-muted-foreground truncate">
               {reminder.provider_name}
             </span>
             <KindBadge kind={reminder.kind} />
@@ -162,8 +172,8 @@ export const MeetingReminderWindow: React.FC = () => {
             disabled={busy}
             title="Dismiss this reminder"
             aria-label="Dismiss this reminder"
-            className="shrink-0 p-1 rounded-md text-neutral-500 hover:text-neutral-100
-                       hover:bg-white/10 transition-colors disabled:opacity-50"
+            className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground
+                       hover:bg-foreground/10 transition-colors disabled:opacity-50"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -171,16 +181,16 @@ export const MeetingReminderWindow: React.FC = () => {
 
         <div className="mt-1.5 min-w-0">
           <h1
-            className="text-[13px] font-semibold text-neutral-50 truncate leading-snug"
+            className="text-[13px] font-semibold text-foreground truncate leading-snug"
             title={reminder.title}
           >
             {reminder.title}
           </h1>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-neutral-400">
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
             <span className="truncate">{reminder.time_label}</span>
             {reminder.participants.length > 0 && (
               <>
-                <span aria-hidden="true" className="text-neutral-600">
+                <span aria-hidden="true" className="text-muted-foreground/60">
                   •
                 </span>
                 <span
@@ -198,10 +208,10 @@ export const MeetingReminderWindow: React.FC = () => {
         {/* Actions sit on one row; snooze opens its durations in place rather
             than in a popover, because the window is a fixed size and anything
             escaping it would simply be clipped. */}
-        <div className="mt-auto pt-2.5 flex items-center gap-2 border-t border-white/10">
+        <div className="mt-auto pt-2.5 flex items-center gap-2 border-t border-border">
           {snoozeOpen ? (
             <>
-              <span className="text-[11px] text-neutral-400 shrink-0">Remind me in</span>
+              <span className="text-[11px] text-muted-foreground shrink-0">Remind me in</span>
               {SNOOZE_OPTIONS.map((minutes) => (
                 <button
                   key={minutes}
@@ -209,7 +219,7 @@ export const MeetingReminderWindow: React.FC = () => {
                   onClick={() => handleSnooze(minutes)}
                   disabled={busy}
                   className="flex-1 h-7 rounded-md text-[11px] font-medium
-                             bg-white/10 text-neutral-100 hover:bg-white/20
+                             bg-foreground/10 text-foreground hover:bg-foreground/20
                              transition-colors disabled:opacity-50"
                 >
                   {minutes} min
@@ -220,8 +230,8 @@ export const MeetingReminderWindow: React.FC = () => {
                 onClick={() => setSnoozeOpen(false)}
                 disabled={busy}
                 aria-label="Back to reminder actions"
-                className="shrink-0 h-7 px-2 rounded-md text-[11px] text-neutral-400
-                           hover:text-neutral-100 hover:bg-white/10 transition-colors"
+                className="shrink-0 h-7 px-2 rounded-md text-[11px] text-muted-foreground
+                           hover:text-foreground hover:bg-foreground/10 transition-colors"
               >
                 Back
               </button>
@@ -252,8 +262,8 @@ export const MeetingReminderWindow: React.FC = () => {
                   disabled={busy}
                   title="Open this meeting in your browser"
                   className="flex-1 h-7 inline-flex items-center justify-center gap-1.5
-                             rounded-md text-[11px] font-medium text-neutral-100
-                             bg-white/10 hover:bg-white/20 active:scale-[0.98]
+                             rounded-md text-[11px] font-medium text-foreground
+                             bg-foreground/10 hover:bg-foreground/20 active:scale-[0.98]
                              transition-all disabled:opacity-50"
                 >
                   <ExternalLink className="w-3 h-3" aria-hidden="true" />
@@ -266,8 +276,8 @@ export const MeetingReminderWindow: React.FC = () => {
                 onClick={() => setSnoozeOpen(true)}
                 disabled={busy}
                 className="flex-1 h-7 inline-flex items-center justify-center gap-1.5
-                           rounded-md text-[11px] font-medium text-neutral-300
-                           bg-white/5 hover:bg-white/10 hover:text-neutral-100
+                           rounded-md text-[11px] font-medium text-muted-foreground
+                           bg-foreground/5 hover:bg-foreground/10 hover:text-foreground
                            active:scale-[0.98] transition-all disabled:opacity-50"
               >
                 <Clock className="w-3 h-3" aria-hidden="true" />
@@ -284,11 +294,11 @@ export const MeetingReminderWindow: React.FC = () => {
 const ProviderIcon: React.FC<{ provider: string }> = ({ provider }) => {
   const isVideoCall = ['google_meet', 'zoom', 'teams', 'webex'].includes(provider.toLowerCase());
   return (
-    <span className="shrink-0 p-1 rounded-md bg-white/10 flex items-center justify-center">
+    <span className="shrink-0 p-1 rounded-md bg-foreground/10 flex items-center justify-center">
       {isVideoCall ? (
-        <Video className="w-3 h-3 text-indigo-300" aria-hidden="true" />
+        <Video className="w-3 h-3 text-indigo-500 dark:text-indigo-300" aria-hidden="true" />
       ) : (
-        <Calendar className="w-3 h-3 text-indigo-300" aria-hidden="true" />
+        <Calendar className="w-3 h-3 text-indigo-500 dark:text-indigo-300" aria-hidden="true" />
       )}
     </span>
   );
@@ -305,15 +315,18 @@ const KindBadge: React.FC<{ kind: ReminderKind }> = ({ kind }) => {
   const styles: Record<ReminderKind, { label: string; className: string }> = {
     upcoming: {
       label: 'Starts soon',
-      className: 'bg-indigo-500/15 text-indigo-300 border-indigo-400/25',
+      className:
+        'bg-indigo-500/10 text-indigo-600 border-indigo-500/25 dark:bg-indigo-500/15 dark:text-indigo-300 dark:border-indigo-400/25',
     },
     unrecorded: {
       label: 'Not recording',
-      className: 'bg-amber-500/15 text-amber-300 border-amber-400/25',
+      className:
+        'bg-amber-500/10 text-amber-700 border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-400/25',
     },
     detected: {
       label: 'Detected',
-      className: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/25',
+      className:
+        'bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-400/25',
     },
   };
   const { label, className } = styles[kind];
