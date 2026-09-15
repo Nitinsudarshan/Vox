@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { HomePage } from './components/home/HomePage';
 import { VoiceNotePage } from './components/voicenotes/VoiceNotePage';
 import { MeetingsPage } from './components/meetings/MeetingsPage';
-import { ReminderToasts } from './components/meetings/ReminderToasts';
 import { ScribbleViewer } from './components/scribble/ScribbleViewer';
 import { FilesPage } from './components/files/FilesPage';
 import { CapturesPage } from './components/captures/CapturesPage';
@@ -438,10 +437,6 @@ export const App: React.FC = () => {
           )}
         </main>
       </div>
-
-      {/* At the app root, not on the Meetings page: a reminder that only
-          appears on the page you were already looking at reminds nobody. */}
-      <ReminderToasts onStartMeeting={() => navigateTo('meetings')} />
     </div>
   );
 };

@@ -431,6 +431,21 @@ pub fn open_calendar_link(
         .map_err(|err| CommandError::new("CALENDAR_LINK_FAILED", &err.to_string()))
 }
 
+/// Closes the reminder window, once the last reminder on it is dismissed.
+#[tauri::command]
+pub fn dismiss_meeting_reminders(app: AppHandle) {
+    super::reminder_window::hide(&app);
+}
+
+/// Resizes the reminder window to the height its content measured.
+///
+/// Called by the window itself: one card and three stacked are different
+/// heights, and Rust cannot know how tall a meeting title is after it wraps.
+#[tauri::command]
+pub fn resize_meeting_reminders(app: AppHandle, height: f64) {
+    super::reminder_window::resize(&app, height);
+}
+
 /// The OAuth client Vox signs in with.
 ///
 /// `None` for both, deliberately: [`crate::oauth::GoogleOAuthConfig`] resolves

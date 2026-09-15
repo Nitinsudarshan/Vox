@@ -307,8 +307,6 @@ export interface ReminderSettings {
   enabled: boolean;
   /** Minutes before the start. These are buckets, not alarms — see the Rust side. */
   lead_minutes: number[];
-  /** Whether the OS also gets a toast, for a user who is in another window. */
-  system_notification: boolean;
   only_with_link: boolean;
   include_declined: boolean;
 }

@@ -1,9 +1,11 @@
 import React from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Bell, MapPin, Radio, Users, Video, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import * as calendar from '@/lib/calendar';
+import * as meetings from '@/lib/meetings';
 import { MEETING_REMINDER_EVENT, type MeetingReminder } from '@/types/meetings';
 
 /** How many reminders stack before the oldest is dropped. */
@@ -12,29 +14,25 @@ const MAX_VISIBLE = 3;
 /** How long a reminder sits there before it goes on its own, in ms. */
 const DISMISS_AFTER_MS = 90_000;
 
-interface ReminderToastsProps {
-  /** Takes the user to the Meetings page with a recording running. */
-  onStartMeeting: () => void;
-}
-
 /**
- * What a meeting reminder looks like inside Vox.
+ * The whole content of the meeting-reminder window.
  *
- * The OS toast is the other half of this and is not a substitute for it. A
- * Windows toast reaches somebody working in another window, which is exactly
- * when they would otherwise miss the meeting; it also disappears into a
+ * This renders in a window of its own — undecorated, transparent, always on
+ * top, off the taskbar — rather than inside Vox or as a Windows toast. Inside
+ * Vox it would only reach somebody already looking at Vox, which is precisely
+ * not the person about to miss a meeting; a Windows toast goes to the
  * notification centre, cannot carry a Join button that does the right thing,
- * and looks like Windows. This one can be acted on: join the call, or start
- * recording it, in one click from wherever they are in the app.
+ * and is silenced by Focus Assist without saying so.
  *
- * Mounted at the app root rather than on the Meetings page, because a reminder
- * that only appears on the page you were already looking at reminds nobody.
- *
- * Dismissal is local and final for that reminder: the backend fires each
- * bucket once and never re-notifies, so there is nothing to tell it.
+ * The window is built hidden at startup and lives for the session, so this
+ * component mounts once and is listening long before the first reminder. It
+ * tells Rust how tall it is after every render that changes the stack, and
+ * asks to be hidden once the last card is gone — a transparent always-on-top
+ * window left up with nothing in it still swallows clicks.
  */
-export const ReminderToasts: React.FC<ReminderToastsProps> = ({ onStartMeeting }) => {
+export const ReminderOverlay: React.FC = () => {
   const [reminders, setReminders] = React.useState<MeetingReminder[]>([]);
+  const stackRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     const subscription = listen<MeetingReminder>(MEETING_REMINDER_EVENT, (event) => {
@@ -57,6 +55,17 @@ export const ReminderToasts: React.FC<ReminderToastsProps> = ({ onStartMeeting }
     };
   }, []);
 
+  // The window is sized from what was actually laid out, not from a guess at
+  // how tall a card is: a long meeting title wraps and a short one does not.
+  React.useEffect(() => {
+    if (reminders.length === 0) {
+      void invoke('dismiss_meeting_reminders').catch(() => undefined);
+      return;
+    }
+    const height = (stackRef.current?.offsetHeight ?? 0) + 24;
+    void invoke('resize_meeting_reminders', { height }).catch(() => undefined);
+  }, [reminders]);
+
   const dismiss = React.useCallback((key: string) => {
     setReminders((current) => current.filter((reminder) => reminder.key !== key));
   }, []);
@@ -65,7 +74,8 @@ export const ReminderToasts: React.FC<ReminderToastsProps> = ({ onStartMeeting }
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]"
+      ref={stackRef}
+      className="flex flex-col gap-2 p-3"
       role="region"
       aria-label="Meeting reminders"
     >
@@ -74,7 +84,6 @@ export const ReminderToasts: React.FC<ReminderToastsProps> = ({ onStartMeeting }
           key={reminder.key}
           reminder={reminder}
           onDismiss={() => dismiss(reminder.key)}
-          onStartMeeting={onStartMeeting}
         />
       ))}
     </div>
@@ -104,8 +113,7 @@ function useCountdown(start: string, initialMinutes: number): number {
 const ReminderCard: React.FC<{
   reminder: MeetingReminder;
   onDismiss: () => void;
-  onStartMeeting: () => void;
-}> = ({ reminder, onDismiss, onStartMeeting }) => {
+}> = ({ reminder, onDismiss }) => {
   const minutes = useCountdown(reminder.start, reminder.minutes_until);
 
   React.useEffect(() => {
@@ -122,8 +130,19 @@ const ReminderCard: React.FC<{
           ? 'now'
           : `${-minutes} minute${minutes === -1 ? '' : 's'} ago`;
 
+  /** Opens the call, and starts recording it when asked. */
+  const join = (andRecord: boolean) => {
+    if (reminder.conference_url) {
+      void calendar.openCalendarLink(reminder.conference_url).catch(() => undefined);
+    }
+    if (andRecord) {
+      void meetings.startMeeting(reminder.title).catch(() => undefined);
+    }
+    onDismiss();
+  };
+
   return (
-    <div className="rounded-lg border border-border bg-card shadow-lg p-3 animate-in slide-in-from-bottom-2">
+    <div className="rounded-xl border border-border bg-card shadow-2xl p-3">
       <div className="flex items-start gap-2">
         <Bell className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
@@ -161,30 +180,33 @@ const ReminderCard: React.FC<{
 
       <div className="flex items-center gap-2 mt-2.5 ml-5">
         {reminder.conference_url && (
+          <>
+            <Button size="sm" onClick={() => join(false)} className="h-7 gap-1.5 text-xs">
+              <Video className="w-3.5 h-3.5" />
+              Join
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => join(true)}
+              className="h-7 gap-1.5 text-xs"
+            >
+              <Radio className="w-3.5 h-3.5" />
+              Join and record
+            </Button>
+          </>
+        )}
+        {!reminder.conference_url && (
           <Button
             size="sm"
-            onClick={() => {
-              void calendar.openCalendarLink(reminder.conference_url as string).catch(() => undefined);
-              onDismiss();
-            }}
+            variant="outline"
+            onClick={() => join(true)}
             className="h-7 gap-1.5 text-xs"
           >
-            <Video className="w-3.5 h-3.5" />
-            Join
+            <Radio className="w-3.5 h-3.5" />
+            Record
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            onStartMeeting();
-            onDismiss();
-          }}
-          className="h-7 gap-1.5 text-xs"
-        >
-          <Radio className="w-3.5 h-3.5" />
-          Record
-        </Button>
       </div>
     </div>
   );

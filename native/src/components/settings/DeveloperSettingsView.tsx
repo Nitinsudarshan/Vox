@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeveloperSettings } from '../../types';
-import { Terminal, RefreshCw } from 'lucide-react';
+import { Terminal, RefreshCw, Bell } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import * as meetings from '@/lib/meetings';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 
@@ -12,6 +14,7 @@ export const DeveloperSettingsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [, setSavedFeedback] = useState(false);
+  const [reminderResult, setReminderResult] = useState<string | null>(null);
 
   useEffect(() => {
     loadDevSettings();
@@ -45,6 +48,17 @@ export const DeveloperSettingsView: React.FC = () => {
     }
   };
 
+  const handleTestReminder = async () => {
+    setReminderResult(null);
+    try {
+      await meetings.sendTestReminder();
+      setReminderResult('Sent. The reminder window should be in the corner of your screen.');
+    } catch (err) {
+      setReminderResult(meetings.meetingErrorMessage(err));
+    }
+    setTimeout(() => setReminderResult(null), 8000);
+  };
+
   return (
     <div className="space-y-6">
       <div className="border-b border-border/40 pb-5">
@@ -61,6 +75,42 @@ export const DeveloperSettingsView: React.FC = () => {
           Diagnostic overrides for testing Vox lifecycle, transitions, and onboarding workflows.
           <strong className="text-foreground ml-1">These switches do not delete your saved notes, scribbles, or authentication credentials.</strong>
         </p>
+      </div>
+
+      {/* Meeting reminder smoke test */}
+      <div className="p-5 rounded-lg border border-border/80 bg-card/60 backdrop-blur-xs space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold text-foreground">Send a test meeting reminder</h3>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
+              Raises a sample reminder through the same path a real one takes — the reminder
+              window, not an in-app panel and not a Windows toast. Reminders otherwise only fire
+              in the last few minutes before a meeting, which made &ldquo;nothing appeared&rdquo;
+              and &ldquo;nothing was due&rdquo; impossible to tell apart.
+            </p>
+            <div className="pt-1 text-[11px] text-muted-foreground/80">
+              Nothing is written and no calendar is read: the sample meeting is invented here.
+            </div>
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleTestReminder()}
+            className="shrink-0 gap-2 text-xs"
+          >
+            <Bell className="w-3.5 h-3.5" />
+            Send test
+          </Button>
+        </div>
+        {reminderResult && (
+          <p role="status" className="text-[11px] text-muted-foreground">
+            {reminderResult}
+          </p>
+        )}
       </div>
 
       {/* Onboarding Replay Override Section */}

@@ -140,6 +140,15 @@ export const saveSummary = (
 export const getReminderSettings = (): Promise<ReminderSettings> =>
   invoke('get_meeting_reminder_settings');
 
+/**
+ * Raises a sample reminder, through the real path.
+ *
+ * Reminders only fire in the last few minutes before a meeting, so the only
+ * way to find out whether they work at all was to have a meeting and wait for
+ * it — and one that never appears looks exactly like a day with nothing due.
+ */
+export const sendTestReminder = (): Promise<void> => invoke('send_test_meeting_reminder');
+
 /** Saves them. Unknown lead times are dropped rather than rejected. */
 export const saveReminderSettings = (
   reminders: ReminderSettings,

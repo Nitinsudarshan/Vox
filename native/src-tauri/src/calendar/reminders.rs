@@ -34,6 +34,12 @@
 //!   call began, short enough that it never announces history.
 //! - **Anything the user has declined**, unless they ask for it. Declining is
 //!   the clearest possible statement that they are not going.
+//!
+//! ## Where it appears
+//!
+//! In a window of its own ([`super::reminder_window`]) — not inside the app,
+//! which only reaches somebody already looking at Vox, and not as a Windows
+//! toast, which the notification centre swallows.
 
 use std::collections::HashSet;
 
@@ -64,10 +70,6 @@ pub struct ReminderSettings {
     /// Minutes before the start at which to announce. `0` is "when it starts".
     #[serde(default = "default_leads")]
     pub lead_minutes: Vec<i64>,
-    /// Whether the OS also gets a toast, so a reminder reaches a user who is
-    /// in another window.
-    #[serde(default = "default_true")]
-    pub system_notification: bool,
     /// Only announce meetings that carry a video link.
     ///
     /// Off by default. A meeting with no link is still a meeting, and someone
@@ -94,7 +96,6 @@ impl Default for ReminderSettings {
         Self {
             enabled: true,
             lead_minutes: default_leads(),
-            system_notification: true,
             only_with_link: false,
             include_declined: false,
         }
