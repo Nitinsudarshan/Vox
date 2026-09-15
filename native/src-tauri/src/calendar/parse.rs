@@ -246,17 +246,23 @@ pub fn flatten_html(raw: &str) -> String {
             }
             '&' => {
                 let mut entity = String::new();
-                // Bounded: an unterminated `&` is an ampersand somebody typed,
-                // not the start of an entity that runs to the end of the note.
+                // Stops at the first character that cannot be part of an
+                // entity name, and after ten of them. Scanning blindly for a
+                // `;` was a hole: an entity name can only be letters, digits
+                // and `#`, but the old loop happily ate a `<` on its way, so
+                // `&<img src=x onerror=…>` reached the output with its tag
+                // intact — the one input that made this flattener not flatten.
+                // An unterminated `&` is just an ampersand somebody typed.
                 while let Some(&next) = chars.peek() {
-                    if next == ';' || entity.len() >= 10 {
+                    if !(next.is_ascii_alphanumeric() || next == '#') || entity.len() >= 10 {
                         break;
                     }
                     entity.push(next);
                     chars.next();
                 }
                 match chars.peek() {
-                    Some(';') => {
+                    // `&;` is not an entity, so it is not decoded as one.
+                    Some(';') if !entity.is_empty() => {
                         chars.next();
                         out.push_str(&decode_entity(&entity));
                     }
@@ -571,6 +577,34 @@ mod tests {
         let flattened = flatten_html("<script>alert(1)</script>Hello <b>there</b>");
         assert_eq!(flattened, "alert(1)Hello there");
         assert!(!flattened.contains('<'));
+    }
+
+    #[test]
+    fn an_ampersand_cannot_smuggle_the_tag_that_follows_it() {
+        // The entity scan used to run to the first `;` whatever it passed, so
+        // a `<` inside that window was flushed verbatim along with everything
+        // after it. Both of these came back with their markup intact.
+        for smuggled in [
+            "&<img src=x onerror=alert(1)>",
+            "&x<script>alert(1)</script>;",
+            "&#<iframe src=javascript:alert(1)></iframe>",
+            "&0123456789<b>bold</b>",
+        ] {
+            let flattened = flatten_html(smuggled);
+            assert!(
+                !flattened.contains('<') && !flattened.contains('>'),
+                "{smuggled:?} flattened to {flattened:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ampersand_that_is_not_an_entity_survives_as_itself() {
+        // The fix must not eat the ordinary ones.
+        assert_eq!(flatten_html("Tom & Jerry"), "Tom & Jerry");
+        assert_eq!(flatten_html("R&D"), "R&D");
+        assert_eq!(flatten_html("&;"), "&;");
+        assert_eq!(flatten_html("Q&A: &amp; and &lt;"), "Q&A: & and <");
     }
 
     #[test]
