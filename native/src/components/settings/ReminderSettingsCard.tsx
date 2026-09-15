@@ -23,6 +23,7 @@ const DEFAULTS: ReminderSettings = {
   lead_minutes: [5, 0],
   only_with_link: false,
   include_declined: false,
+  nudge_when_not_recording: true,
 };
 
 /**
@@ -149,6 +150,12 @@ export const ReminderSettingsCard: React.FC = () => {
             description="Off by default — declining says you are not going."
             checked={settings.include_declined}
             onChange={(include_declined) => void update({ include_declined })}
+          />
+          <ReminderToggle
+            label="Tell me when a meeting is not being recorded"
+            description="Five minutes into a meeting with nothing being captured. The failure this app exists to prevent, and the only one that is silent on its own."
+            checked={settings.nudge_when_not_recording}
+            onChange={(nudge_when_not_recording) => void update({ nudge_when_not_recording })}
           />
         </>
       )}

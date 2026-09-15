@@ -235,33 +235,52 @@ pub fn set_meeting_reminder_settings(
     Ok(cleaned)
 }
 
-/// Raises a sample reminder, through the real path.
+/// Raises a sample reminder of one kind, through the real path.
 ///
-/// Reminders fire in the last few minutes before a meeting, which means the
+/// Reminders fire in a few specific minutes around a meeting, which meant the
 /// only way to find out whether they work at all was to have a meeting and
-/// wait for it — and a reminder that never appears is indistinguishable from
-/// a day with nothing due. This goes through
-/// [`crate::calendar::reminder_service::announce`] itself rather than
-/// reproducing it, so a window that fails to show here fails to show for a
+/// wait for the right moment — and a reminder that never appears is
+/// indistinguishable from a minute with nothing due. Each kind is a different
+/// message with a different action, so each gets its own button.
+///
+/// Goes through [`crate::calendar::reminder_service::announce`] itself rather
+/// than reproducing it: a window that fails to show here fails to show for a
 /// real meeting too.
 #[tauri::command]
-pub fn send_test_meeting_reminder(app: AppHandle) -> Result<(), CommandError> {
-    let start = chrono::Utc::now() + chrono::Duration::minutes(5);
+pub fn send_test_meeting_reminder(app: AppHandle, kind: String) -> Result<(), CommandError> {
+    use crate::calendar::reminders::{MeetingReminder, ReminderKind, NOT_RECORDING_AFTER_MINUTES};
+
+    let (kind, offset_minutes) = match kind.trim() {
+        "upcoming" => (ReminderKind::Upcoming, 5),
+        "starting" => (ReminderKind::Starting, 0),
+        "not_recording" => (ReminderKind::NotRecording, -NOT_RECORDING_AFTER_MINUTES),
+        other => {
+            return Err(CommandError::new(
+                "MEETING_REMINDER_UNKNOWN_KIND",
+                &format!("There is no reminder of kind {other:?}."),
+            ))
+        }
+    };
+
+    let start = chrono::Utc::now() + chrono::Duration::minutes(offset_minutes);
     crate::calendar::reminder_service::announce(
         &app,
-        &crate::calendar::reminders::MeetingReminder {
-            key: format!("test|{}", start.timestamp_millis()),
-            event_id: "test".to_string(),
+        &MeetingReminder {
+            // Timestamped so pressing the same button twice shows it twice,
+            // which is what somebody checking whether it works will do.
+            key: format!("test|{}|{}", kind.slug_for_test(), chrono::Utc::now().timestamp_millis()),
+            event_id: format!("test-{}", kind.slug_for_test()),
             account_email: "test@vox".to_string(),
             title: "Test reminder".to_string(),
             start: start.to_rfc3339(),
             // No link: a test that opened a browser tab would be a surprise,
-            // and Join is the one button whose absence is obvious anyway.
+            // and Join's absence is obvious enough to check by eye.
             conference_url: None,
-            location: Some("This is what a meeting reminder looks like".to_string()),
+            location: Some("Sample meeting".to_string()),
             meeting_id: None,
-            minutes_until: 5,
+            minutes_until: offset_minutes,
             guest_count: 2,
+            kind,
         },
     );
     Ok(())

@@ -53,6 +53,48 @@ use super::model::{Attendance, CalendarEvent};
 /// and announcing history trains people to ignore the notification.
 pub const LATE_GRACE_MINUTES: i64 = 5;
 
+/// How long into a meeting the "nothing is being recorded" nudge waits.
+///
+/// Late enough that somebody who joined and pressed record in the first
+/// minute is never nagged, early enough that the nudge still saves most of
+/// the conversation.
+pub const NOT_RECORDING_AFTER_MINUTES: i64 = 5;
+
+/// What a reminder is telling you.
+///
+/// Three, and they are genuinely different messages rather than one message
+/// at three times: the first two are "this is about to happen", and the third
+/// is "this is happening and Vox is not capturing it", which is the failure a
+/// meeting recorder exists to prevent and the only one whose action is not
+/// optional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReminderKind {
+    /// Before it starts — t−15, −10, −5, −1.
+    Upcoming,
+    /// At the start, or a moment after it — t.
+    Starting,
+    /// Under way, with nothing being recorded — t+5.
+    NotRecording,
+}
+
+impl ReminderKind {
+    /// The slug, for a test reminder's own key. Same value as [`Self::slug`],
+    /// exposed because the test command builds a key by hand.
+    pub fn slug_for_test(self) -> &'static str {
+        self.slug()
+    }
+
+    /// The part of a reminder's key that keeps the kinds apart.
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Upcoming => "upcoming",
+            Self::Starting => "starting",
+            Self::NotRecording => "not-recording",
+        }
+    }
+}
+
 /// The lead times offered, in minutes. `0` means "when it starts".
 ///
 /// A fixed set rather than free text: these are the intervals people actually
@@ -81,6 +123,14 @@ pub struct ReminderSettings {
     /// clearest possible statement that they are not going.
     #[serde(default)]
     pub include_declined: bool,
+    /// Whether to say something when a meeting is under way and Vox is
+    /// recording nothing.
+    ///
+    /// On by default, and the reminder that matters most: a meeting that
+    /// happened and was not captured is the failure the whole surface exists
+    /// to prevent, and it is silent by nature — nothing goes wrong on screen.
+    #[serde(default = "default_true")]
+    pub nudge_when_not_recording: bool,
 }
 
 fn default_true() -> bool {
@@ -98,6 +148,7 @@ impl Default for ReminderSettings {
             lead_minutes: default_leads(),
             only_with_link: false,
             include_declined: false,
+            nudge_when_not_recording: true,
         }
     }
 }
@@ -144,27 +195,43 @@ pub struct MeetingReminder {
     pub minutes_until: i64,
     /// How many other people are invited.
     pub guest_count: usize,
+    /// Which of the three messages this is.
+    pub kind: ReminderKind,
 }
 
 impl MeetingReminder {
-    /// The one-line summary a notification leads with.
+    /// The one-line summary a reminder leads with.
+    ///
+    /// Written from the clock rather than from the bucket that fired it, so a
+    /// reminder caught late says how late rather than repeating the lead time
+    /// it was configured with.
     pub fn headline(&self) -> String {
-        match self.minutes_until {
-            minutes if minutes <= 0 && minutes > -1 => format!("{} is starting", self.title),
-            minutes if minutes < 0 => format!(
-                "{} started {} minute{} ago",
-                self.title,
-                -minutes,
-                if minutes == -1 { "" } else { "s" }
-            ),
-            1 => format!("{} starts in 1 minute", self.title),
-            minutes => format!("{} starts in {} minutes", self.title, minutes),
+        match self.kind {
+            ReminderKind::NotRecording => format!("{} is not being recorded", self.title),
+            _ => match self.minutes_until {
+                minutes if minutes <= 0 && minutes > -1 => format!("{} is starting", self.title),
+                minutes if minutes < 0 => format!(
+                    "{} started {} minute{} ago",
+                    self.title,
+                    -minutes,
+                    if minutes == -1 { "" } else { "s" }
+                ),
+                1 => format!("{} starts in 1 minute", self.title),
+                minutes => format!("{} starts in {} minutes", self.title, minutes),
+            },
         }
     }
 
-    /// The second line: where it is, and who else is in it.
+    /// The second line: what state it is in, where, and who else is in it.
     pub fn detail(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
+        if self.kind == ReminderKind::NotRecording {
+            let since = -self.minutes_until;
+            parts.push(format!(
+                "Started {since} minute{} ago",
+                if since == 1 { "" } else { "s" }
+            ));
+        }
         if self.conference_url.is_some() {
             parts.push("Video call".to_string());
         } else if let Some(location) = self.location.as_deref() {
@@ -186,19 +253,25 @@ impl MeetingReminder {
 /// `already_sent` holds the keys of reminders that have gone out. It is the
 /// caller's, deliberately: this function decides *what is due*, and nothing
 /// about what is due depends on where the record of what was said is kept.
+///
+/// `recording_active` is whether Vox is capturing anything at all right now.
+/// Anything, rather than "this meeting specifically": if a recording is
+/// running during a meeting's own hour it is almost certainly that meeting,
+/// and nagging somebody who is already recording is how a person learns to
+/// ignore the one reminder that matters.
+///
+/// At most one reminder per event per tick — the most urgent that applies.
 pub fn due_reminders(
     events: &[CalendarEvent],
     now: chrono::DateTime<chrono::Utc>,
     settings: &ReminderSettings,
     already_sent: &HashSet<String>,
+    recording_active: bool,
 ) -> Vec<MeetingReminder> {
     if !settings.enabled {
         return Vec::new();
     }
     let buckets = settings.buckets();
-    if buckets.is_empty() {
-        return Vec::new();
-    }
 
     let mut due = Vec::new();
     for event in events {
@@ -212,26 +285,31 @@ pub fn due_reminders(
         if settings.only_with_link && event.conference_url.is_none() {
             continue;
         }
-        let Some(start) = event.start_timestamp() else {
+        let (Some(start), Some(end)) = (event.start_timestamp(), event.end_timestamp()) else {
             continue;
         };
 
         let minutes_until = (start.with_timezone(&chrono::Utc) - now).num_minutes();
-        if minutes_until < -LATE_GRACE_MINUTES {
-            continue;
-        }
+        let ended = end.with_timezone(&chrono::Utc) <= now;
 
-        // The tightest bucket this event has reached. `buckets` is largest
-        // first, so the last match is the smallest.
-        let Some(bucket) = buckets
-            .iter()
-            .copied()
-            .rfind(|lead| minutes_until <= *lead)
-        else {
+        let Some((kind, suffix)) = kind_for(
+            minutes_until,
+            ended,
+            &buckets,
+            settings,
+            recording_active,
+            event.meeting_id.is_some(),
+        ) else {
             continue;
         };
 
-        let key = format!("{}|{}|{}", event.account_email, event.id, bucket);
+        let key = format!(
+            "{}|{}|{}:{}",
+            event.account_email,
+            event.id,
+            kind.slug(),
+            suffix
+        );
         if already_sent.contains(&key) {
             continue;
         }
@@ -247,13 +325,54 @@ pub fn due_reminders(
             meeting_id: event.meeting_id.clone(),
             minutes_until,
             guest_count: event.others().len(),
+            kind,
         });
     }
 
-    // Soonest first: when two land in the same tick, the one about to start is
-    // the one that matters.
+    // Soonest first: when two land in the same tick, the one about to start —
+    // or already running unrecorded — is the one that matters.
     due.sort_by_key(|reminder| reminder.minutes_until);
     due
+}
+
+/// Which reminder, if any, one event has earned right now.
+///
+/// The suffix is what keeps a kind from firing twice for the same reason: the
+/// bucket that triggered an upcoming reminder, and a constant for the others,
+/// which fire once each per meeting.
+fn kind_for(
+    minutes_until: i64,
+    ended: bool,
+    buckets: &[i64],
+    settings: &ReminderSettings,
+    recording_active: bool,
+    already_recorded: bool,
+) -> Option<(ReminderKind, String)> {
+    // Under way and unrecorded. Checked first: once a meeting is running with
+    // nothing being captured, that is the more urgent thing to say, and the
+    // start reminder for it has either fired already or is moot.
+    if settings.nudge_when_not_recording
+        && !ended
+        && !recording_active
+        && !already_recorded
+        && minutes_until <= -NOT_RECORDING_AFTER_MINUTES
+    {
+        return Some((ReminderKind::NotRecording, "once".to_string()));
+    }
+
+    if ended || minutes_until < -LATE_GRACE_MINUTES {
+        return None;
+    }
+
+    // The tightest bucket this event has reached. `buckets` is largest first,
+    // so the last match is the smallest.
+    let bucket = buckets.iter().copied().rfind(|lead| minutes_until <= *lead)?;
+    let kind = if bucket > 0 {
+        ReminderKind::Upcoming
+    } else {
+        ReminderKind::Starting
+    };
+    Some((kind, bucket.to_string()))
 }
 
 /// Keys worth keeping in the "already said this" set.
@@ -334,27 +453,27 @@ mod tests {
         // Vox opened at 09:57 for a 10:00 call, with 15, 5 and 0 configured.
         // One alarm per lead would be three notifications about one meeting,
         // two of them lying about how long is left.
-        let due = due_reminders(&[event("evt-1", 3)], now(), &settings(&[15, 5, 0]), &HashSet::new());
+        let due = due_reminders(&[event("evt-1", 3)], now(), &settings(&[15, 5, 0]), &HashSet::new(), false);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].minutes_until, 3, "the clock, not the bucket");
-        assert!(due[0].key.ends_with("|5"), "the tightest bucket reached");
+        assert!(due[0].key.ends_with("upcoming:5"), "the tightest bucket reached");
     }
 
     #[test]
     fn the_text_comes_from_the_clock_so_it_is_never_wrong_about_the_time() {
-        let due = due_reminders(&[event("evt-1", 3)], now(), &settings(&[15, 5, 0]), &HashSet::new());
+        let due = due_reminders(&[event("evt-1", 3)], now(), &settings(&[15, 5, 0]), &HashSet::new(), false);
         assert_eq!(due[0].headline(), "Weekly Sync starts in 3 minutes");
 
-        let starting = due_reminders(&[event("evt-1", 0)], now(), &settings(&[0]), &HashSet::new());
+        let starting = due_reminders(&[event("evt-1", 0)], now(), &settings(&[0]), &HashSet::new(), false);
         assert_eq!(starting[0].headline(), "Weekly Sync is starting");
 
-        let late = due_reminders(&[event("evt-1", -2)], now(), &settings(&[0]), &HashSet::new());
+        let late = due_reminders(&[event("evt-1", -2)], now(), &settings(&[0]), &HashSet::new(), false);
         assert_eq!(late[0].headline(), "Weekly Sync started 2 minutes ago");
     }
 
     #[test]
     fn one_minute_reads_as_one_minute_rather_than_one_minutes() {
-        let due = due_reminders(&[event("evt-1", 1)], now(), &settings(&[1]), &HashSet::new());
+        let due = due_reminders(&[event("evt-1", 1)], now(), &settings(&[1]), &HashSet::new(), false);
         assert_eq!(due[0].headline(), "Weekly Sync starts in 1 minute");
     }
 
@@ -364,39 +483,47 @@ mod tests {
         let clock = now();
 
         // Ten minutes out, with 15/5/0 configured: the 15 bucket.
-        let first = due_reminders(&[event("evt-1", 10)], clock, &settings(&[15, 5, 0]), &sent);
+        let first = due_reminders(&[event("evt-1", 10)], clock, &settings(&[15, 5, 0]), &sent, false);
         assert_eq!(first.len(), 1);
         sent.insert(first[0].key.clone());
 
         // Still ten minutes out on the next tick: nothing more to say.
-        let again = due_reminders(&[event("evt-1", 10)], clock, &settings(&[15, 5, 0]), &sent);
+        let again = due_reminders(&[event("evt-1", 10)], clock, &settings(&[15, 5, 0]), &sent, false);
         assert!(again.is_empty(), "a bucket fires once");
 
         // Four minutes out: a new bucket, which does fire.
-        let closer = due_reminders(&[event("evt-1", 4)], clock, &settings(&[15, 5, 0]), &sent);
+        let closer = due_reminders(&[event("evt-1", 4)], clock, &settings(&[15, 5, 0]), &sent, false);
         assert_eq!(closer.len(), 1);
-        assert!(closer[0].key.ends_with("|5"));
+        assert!(closer[0].key.ends_with("upcoming:5"));
     }
 
     #[test]
-    fn a_meeting_well_under_way_is_history_rather_than_a_reminder() {
-        // Opening a laptop at 11:40 must not announce the 10:00 call.
+    fn a_meeting_well_under_way_is_never_announced_as_if_it_were_starting() {
+        // Opening a laptop at 11:40 must not announce the 10:00 call as
+        // though it were about to begin. What it may say — once the meeting
+        // is running unrecorded — is the nudge, which is a different message.
+        let quiet = ReminderSettings {
+            nudge_when_not_recording: false,
+            ..settings(&[15, 5, 0])
+        };
         let late = due_reminders(
             &[event("evt-1", -(LATE_GRACE_MINUTES + 1))],
             now(),
-            &settings(&[15, 5, 0]),
+            &quiet,
             &HashSet::new(),
+            false,
         );
         assert!(late.is_empty());
 
         // A call that began a moment ago is still worth catching.
-        let just_started = due_reminders(&[event("evt-1", -1)], now(), &settings(&[0]), &HashSet::new());
+        let just_started = due_reminders(&[event("evt-1", -1)], now(), &settings(&[0]), &HashSet::new(), false);
         assert_eq!(just_started.len(), 1);
+        assert_eq!(just_started[0].kind, ReminderKind::Starting);
     }
 
     #[test]
     fn a_meeting_further_out_than_every_lead_says_nothing_yet() {
-        let due = due_reminders(&[event("evt-1", 60)], now(), &settings(&[15, 5]), &HashSet::new());
+        let due = due_reminders(&[event("evt-1", 60)], now(), &settings(&[15, 5]), &HashSet::new(), false);
         assert!(due.is_empty());
     }
 
@@ -404,7 +531,7 @@ mod tests {
     fn an_all_day_event_is_not_something_to_join() {
         let mut holiday = event("evt-holiday", 3);
         holiday.all_day = true;
-        assert!(due_reminders(&[holiday], now(), &settings(&[5]), &HashSet::new()).is_empty());
+        assert!(due_reminders(&[holiday], now(), &settings(&[5]), &HashSet::new(), false).is_empty());
     }
 
     #[test]
@@ -412,14 +539,14 @@ mod tests {
         let mut declined = event("evt-1", 3);
         declined.attendance = Attendance::Declined;
         assert!(
-            due_reminders(&[declined.clone()], now(), &settings(&[5]), &HashSet::new()).is_empty()
+            due_reminders(&[declined.clone()], now(), &settings(&[5]), &HashSet::new(), false).is_empty()
         );
 
         let asking = ReminderSettings {
             include_declined: true,
             ..settings(&[5])
         };
-        assert_eq!(due_reminders(&[declined], now(), &asking, &HashSet::new()).len(), 1);
+        assert_eq!(due_reminders(&[declined], now(), &asking, &HashSet::new(), false).len(), 1);
     }
 
     #[test]
@@ -428,7 +555,7 @@ mod tests {
         in_person.conference_url = None;
         in_person.location = Some("Room 4".into());
         assert_eq!(
-            due_reminders(&[in_person.clone()], now(), &settings(&[5]), &HashSet::new()).len(),
+            due_reminders(&[in_person.clone()], now(), &settings(&[5]), &HashSet::new(), false).len(),
             1
         );
 
@@ -436,7 +563,7 @@ mod tests {
             only_with_link: true,
             ..settings(&[5])
         };
-        assert!(due_reminders(&[in_person], now(), &links_only, &HashSet::new()).is_empty());
+        assert!(due_reminders(&[in_person], now(), &links_only, &HashSet::new(), false).is_empty());
     }
 
     #[test]
@@ -445,12 +572,12 @@ mod tests {
             enabled: false,
             ..settings(&[5, 0])
         };
-        assert!(due_reminders(&[event("evt-1", 1)], now(), &off, &HashSet::new()).is_empty());
+        assert!(due_reminders(&[event("evt-1", 1)], now(), &off, &HashSet::new(), false).is_empty());
     }
 
     #[test]
     fn choosing_no_lead_times_is_the_same_as_choosing_silence() {
-        assert!(due_reminders(&[event("evt-1", 1)], now(), &settings(&[]), &HashSet::new()).is_empty());
+        assert!(due_reminders(&[event("evt-1", 1)], now(), &settings(&[]), &HashSet::new(), false).is_empty());
     }
 
     #[test]
@@ -469,6 +596,7 @@ mod tests {
             now(),
             &settings(&[5]),
             &HashSet::new(),
+            false,
         );
         assert_eq!(due[0].event_id, "evt-soon");
     }
@@ -492,8 +620,130 @@ mod tests {
                 organizer: true,
             },
         ];
-        let due = due_reminders(&[with_guests], now(), &settings(&[5]), &HashSet::new());
+        let due = due_reminders(&[with_guests], now(), &settings(&[5]), &HashSet::new(), false);
         assert_eq!(due[0].detail(), "Video call · 1 guest");
+    }
+
+    #[test]
+    fn a_meeting_under_way_with_nothing_recording_is_the_reminder_that_matters() {
+        // The failure a meeting recorder exists to prevent, and the only one
+        // that is silent by nature: nothing goes wrong on screen.
+        let due = due_reminders(
+            &[event("evt-1", -NOT_RECORDING_AFTER_MINUTES)],
+            now(),
+            &settings(&[5, 0]),
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].kind, ReminderKind::NotRecording);
+        assert_eq!(due[0].headline(), "Weekly Sync is not being recorded");
+        assert!(due[0].detail().starts_with("Started 5 minutes ago"));
+    }
+
+    #[test]
+    fn somebody_already_recording_is_not_nagged_about_it() {
+        // Nagging a person who is already recording is how they learn to
+        // ignore the one reminder that matters.
+        let due = due_reminders(
+            &[event("evt-1", -NOT_RECORDING_AFTER_MINUTES)],
+            now(),
+            &settings(&[5, 0]),
+            &HashSet::new(),
+            true,
+        );
+        assert!(due.iter().all(|r| r.kind != ReminderKind::NotRecording));
+    }
+
+    #[test]
+    fn a_meeting_vox_already_recorded_is_not_nagged_about_either() {
+        // The link to a recording is worked out on read, so an event that
+        // carries one has been captured — an hour ago, perhaps, by a
+        // recording that has since stopped.
+        let mut recorded = event("evt-1", -NOT_RECORDING_AFTER_MINUTES);
+        recorded.meeting_id = Some("meeting-1".into());
+        let due = due_reminders(&[recorded], now(), &settings(&[5, 0]), &HashSet::new(), false);
+        assert!(due.iter().all(|r| r.kind != ReminderKind::NotRecording));
+    }
+
+    #[test]
+    fn the_nudge_waits_rather_than_firing_the_moment_a_meeting_starts() {
+        // Somebody who joined and pressed record in the first minute must
+        // never see it.
+        let due = due_reminders(
+            &[event("evt-1", -1)],
+            now(),
+            &settings(&[0]),
+            // The start reminder has already gone out, so only the nudge
+            // could fire here — and it is too early for it.
+            &["me@work.com|evt-1|starting:0".to_string()].into_iter().collect(),
+            false,
+        );
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn a_meeting_that_has_ended_is_not_nagged_about() {
+        // 30 minutes long, ended 5 minutes ago.
+        let due = due_reminders(
+            &[event("evt-1", -35)],
+            now(),
+            &settings(&[5, 0]),
+            &HashSet::new(),
+            false,
+        );
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn turning_the_nudge_off_leaves_the_other_two_alone() {
+        let quiet = ReminderSettings {
+            nudge_when_not_recording: false,
+            ..settings(&[5, 0])
+        };
+        let due = due_reminders(
+            &[event("evt-1", -NOT_RECORDING_AFTER_MINUTES)],
+            now(),
+            &quiet,
+            &HashSet::new(),
+            false,
+        );
+        assert!(due.iter().all(|r| r.kind != ReminderKind::NotRecording));
+
+        let upcoming = due_reminders(&[event("evt-1", 3)], now(), &quiet, &HashSet::new(), false);
+        assert_eq!(upcoming[0].kind, ReminderKind::Upcoming);
+    }
+
+    #[test]
+    fn the_three_kinds_do_not_cancel_each_other_out() {
+        // Each fires once, and having said one does not suppress the next.
+        let mut sent = HashSet::new();
+        let leads = settings(&[5, 0]);
+
+        let upcoming = due_reminders(&[event("evt-1", 3)], now(), &leads, &sent, false);
+        assert_eq!(upcoming[0].kind, ReminderKind::Upcoming);
+        sent.insert(upcoming[0].key.clone());
+
+        let starting = due_reminders(&[event("evt-1", 0)], now(), &leads, &sent, false);
+        assert_eq!(starting[0].kind, ReminderKind::Starting);
+        sent.insert(starting[0].key.clone());
+
+        let nudge = due_reminders(
+            &[event("evt-1", -NOT_RECORDING_AFTER_MINUTES)],
+            now(),
+            &leads,
+            &sent,
+            false,
+        );
+        assert_eq!(nudge[0].kind, ReminderKind::NotRecording);
+    }
+
+    #[test]
+    fn a_bucket_below_the_start_is_a_starting_reminder_rather_than_an_upcoming_one() {
+        let starting = due_reminders(&[event("evt-1", 0)], now(), &settings(&[0]), &HashSet::new(), false);
+        assert_eq!(starting[0].kind, ReminderKind::Starting);
+        let upcoming = due_reminders(&[event("evt-1", 4)], now(), &settings(&[5]), &HashSet::new(), false);
+        assert_eq!(upcoming[0].kind, ReminderKind::Upcoming);
     }
 
     #[test]

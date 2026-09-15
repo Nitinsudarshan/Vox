@@ -371,7 +371,7 @@ pub fn get_calendar_agenda(state: State<'_, AppState>) -> Result<Vec<DayAgenda>,
 /// A meeting with no duration is skipped rather than given a zero-length
 /// window: it would match nothing, and including it only invites a
 /// zero-overlap match somewhere downstream.
-fn recording_windows(state: &State<'_, AppState>) -> Vec<RecordingWindow> {
+pub(super) fn recording_windows(state: &State<'_, AppState>) -> Vec<RecordingWindow> {
     state
         .meeting_store
         .list_meetings()

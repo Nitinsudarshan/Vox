@@ -137,28 +137,36 @@ fn tick(app: &AppHandle, sent: &Arc<Mutex<HashSet<String>>>) {
         return;
     }
 
-    let events: Vec<super::CalendarEvent> = store
+    let mut events: Vec<super::CalendarEvent> = store
         .load_events()
         .into_iter()
         .filter(|event| enabled.contains(&event.account_email.to_lowercase()))
         .collect();
+
+    // Which events Vox already has a recording of. The cache stores events as
+    // Google sent them; the link to a recording is worked out on read, and
+    // without doing it here the "nothing is being recorded" nudge would fire
+    // for a meeting that was recorded perfectly well an hour ago.
+    super::agenda::match_recordings(&mut events, &super::commands::recording_windows(&state));
+    let recording_active = state.meeting_engine.status().active;
 
     // Logged because everything below it fails quietly by design. Without
     // this line "no reminder appeared" and "no meeting was due" look
     // identical from the outside, which is how a broken poller goes
     // unnoticed for a week.
     tracing::debug!(
-        "reminder loop: {} account(s), {} cached event(s), leads {:?}",
+        "reminder loop: {} account(s), {} cached event(s), leads {:?}, recording: {}",
         enabled.len(),
         events.len(),
-        settings.buckets()
+        settings.buckets(),
+        recording_active
     );
 
     let now = chrono::Utc::now();
     let due = {
         let mut guard = sent.lock_or_recover();
         *guard = reminders::prune_sent(&events, now, &guard);
-        let due = reminders::due_reminders(&events, now, &settings, &guard);
+        let due = reminders::due_reminders(&events, now, &settings, &guard, recording_active);
         for reminder in &due {
             guard.insert(reminder.key.clone());
         }
@@ -178,7 +186,8 @@ fn tick(app: &AppHandle, sent: &Arc<Mutex<HashSet<String>>>) {
 /// ever going to get.
 pub fn announce(app: &AppHandle, reminder: &MeetingReminder) {
     tracing::info!(
-        "meeting reminder: {} ({} minute(s) out)",
+        "meeting reminder ({:?}): {} ({} minute(s) out)",
+        reminder.kind,
         reminder.title,
         reminder.minutes_until
     );
