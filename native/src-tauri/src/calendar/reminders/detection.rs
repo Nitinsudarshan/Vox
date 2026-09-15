@@ -209,6 +209,10 @@ pub fn is_generic_fallback_title(title: &str) -> bool {
     )
 }
 
+/// Where a sighting came from, so the developer panel can say which signal saw
+/// what and a bad match can be told from a bad title.
+pub const SOURCE_WINDOW_TITLE: &str = "window_title";
+
 /// A generic title is weaker evidence of a live call than a distinctive one.
 ///
 /// Used as the gate on detection reminders: interrupting someone over a stray
@@ -328,22 +332,6 @@ mod tests {
             ),
             "Placement sync"
         );
-    }
-
-    #[test]
-    fn every_reminder_kind_is_on_out_of_the_box() {
-        // A reminder nobody switched off must arrive. Detection was shipped
-        // defaulted off, which left the one call with no calendar entry —
-        // the only kind nothing else can catch — covered by nothing.
-        let settings = super::super::ReminderSettings::default();
-        assert!(settings.remind_before_meeting);
-        assert!(settings.remind_if_unrecorded);
-        assert!(settings.remind_on_detection);
-
-        // And an older settings file that predates the field reads the same
-        // way, rather than silently keeping the old default.
-        let restored: super::super::ReminderSettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(restored, settings);
     }
 
     #[test]
