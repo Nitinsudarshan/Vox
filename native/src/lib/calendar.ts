@@ -103,6 +103,20 @@ export function isPast(event: CalendarEvent, now: Date = new Date()): boolean {
   return Number.isFinite(end) && end < now.getTime();
 }
 
+/**
+ * Whether a day string is today or later, in the viewer's timezone.
+ *
+ * The agenda's own cut-off. The cache holds 30 days of history so a recording
+ * made last week can still find its meeting, and none of that belongs above
+ * today's schedule.
+ */
+export function isTodayOrLater(date: string, now: Date = new Date()): boolean {
+  const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate(),
+  ).padStart(2, '0')}`;
+  return date >= local;
+}
+
 /** Whether a day string is today, in the viewer's timezone. */
 export function isToday(date: string, now: Date = new Date()): boolean {
   const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(

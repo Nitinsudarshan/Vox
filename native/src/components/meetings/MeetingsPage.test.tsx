@@ -967,7 +967,7 @@ describe('MeetingsPage', () => {
     });
     render(<MeetingsPage />);
 
-    expect(await screen.findByText('Coming up')).toBeInTheDocument();
+    expect(await screen.findByText('Your day')).toBeInTheDocument();
     expect(screen.getByText('Alumna Growth Team Daily Sync')).toBeInTheDocument();
     expect(screen.getByText('Payal')).toBeInTheDocument();
 
@@ -980,7 +980,7 @@ describe('MeetingsPage', () => {
     mockBackend({ get_calendar_agenda: [] });
     render(<MeetingsPage />);
     await screen.findByText('Weekly sync');
-    expect(screen.queryByText('Coming up')).not.toBeInTheDocument();
+    expect(screen.queryByText('Your day')).not.toBeInTheDocument();
   });
 
   describe('the agenda', () => {
@@ -1034,6 +1034,43 @@ describe('MeetingsPage', () => {
       ]);
       render(<MeetingsPage />);
       expect(await screen.findByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test('a meeting that has already finished stays on the day, dimmed', async () => {
+      // "Did the 10:30 happen, and did I record it?" is asked at 11, and the
+      // row that answers it used to vanish the moment the meeting ended.
+      withAgenda([
+        calendarEvent(10, {
+          title: 'Morning standup',
+          end: new Date(2026, 8, 14, 10, 30).toISOString(),
+        }),
+      ]);
+      render(<MeetingsPage />);
+
+      const row = (await screen.findByText('Morning standup')).closest('li');
+      expect(row).not.toBeNull();
+      expect(row?.className).toMatch(/opacity/);
+      // Dimmed, not struck through — that already means "declined".
+      expect(screen.getByText('Morning standup').className).not.toMatch(/line-through/);
+      // And still joinable, because a call can resume on the same link.
+      expect(screen.getByRole('button', { name: /^join$/i })).toBeInTheDocument();
+    });
+
+    test('days before today are not the agenda, however much history is cached', async () => {
+      const yesterday = new Date(2026, 8, 13, 10, 0);
+      withAgenda([
+        calendarEvent(10, {
+          id: 'evt-yesterday',
+          title: 'Yesterday standup',
+          start: yesterday.toISOString(),
+          end: new Date(yesterday.getTime() + 30 * 60_000).toISOString(),
+        }),
+        calendarEvent(18, { title: 'Later today' }),
+      ]);
+      render(<MeetingsPage />);
+
+      expect(await screen.findByText('Later today')).toBeInTheDocument();
+      expect(screen.queryByText('Yesterday standup')).not.toBeInTheDocument();
     });
 
     test("a meeting on another day shows it has a link but does not offer to open it", async () => {
