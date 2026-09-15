@@ -127,7 +127,7 @@ pub fn spawn(app: AppHandle) {
 /// Vox reads several Google accounts into one cache, so "the calendar" here is
 /// that cache filtered to the accounts the user has switched on — an account
 /// turned off in Settings is one whose meetings should not interrupt them.
-fn cached_events(state: &tauri::State<'_, AppState>) -> Vec<CalendarEvent> {
+pub(crate) fn cached_events(state: &tauri::State<'_, AppState>) -> Vec<CalendarEvent> {
     let store = CalendarStore::new(
         state.vault.vault_dir().join("calendar"),
         state.config_dir.clone(),

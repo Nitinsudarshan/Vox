@@ -319,9 +319,16 @@ export interface ConferencingWindowMatch {
   title: string;
   /** Exactly what the window reported, for telling a bad match from a bad title. */
   raw_title: string;
+  /** Which signal saw it: `window_title` or `window_class`. */
   source: string;
   /** How specific the match is, 0–1. A bare "Zoom Meeting" scores low. */
   confidence: number;
+  /**
+   * Why this window would not raise a reminder right now; absent when it
+   * would. The same gates the real loop applies, in the same order, so a
+   * reminder that never arrives can be told from one that was never due.
+   */
+  blocked_by?: string | null;
 }
 
 /** What the reminder card is given. Sanitized in Rust; nothing else crosses. */

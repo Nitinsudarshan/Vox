@@ -76,6 +76,7 @@ describe('DeveloperSettingsView', () => {
             raw_title: 'Placement review - Google Meet',
             source: 'window_title',
             confidence: 0.9,
+            blocked_by: null,
           },
         ];
       }
@@ -87,7 +88,36 @@ describe('DeveloperSettingsView', () => {
 
     expect(await screen.findByText('Placement review')).toBeInTheDocument();
     expect(screen.getByText('Placement review - Google Meet')).toBeInTheDocument();
-    expect(screen.getByText('google_meet · 0.90')).toBeInTheDocument();
+    expect(screen.getByText('google_meet · window_title · 0.90')).toBeInTheDocument();
+    expect(screen.getByText('Would raise a reminder.')).toBeInTheDocument();
+  });
+
+  it('says why a call it can see would still raise nothing', async () => {
+    // The question the button exists for. A gate's silence and a broken
+    // feature's silence are the same silence without this.
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'get_developer_settings') return { force_onboarding_on_launch: false };
+      if (command === 'debug_detect_conferencing_windows') {
+        return [
+          {
+            provider: 'zoom',
+            title: 'Zoom Meeting',
+            raw_title: 'Zoom Meeting',
+            source: 'window_class',
+            confidence: 0.55,
+            blocked_by: 'Detected-call reminders are switched off in Settings.',
+          },
+        ];
+      }
+      return undefined;
+    });
+    await renderPanel();
+
+    await userEvent.click(screen.getByRole('button', { name: /check window detection/i }));
+
+    expect(
+      await screen.findByText(/No reminder: Detected-call reminders are switched off/),
+    ).toBeInTheDocument();
   });
 
   /**

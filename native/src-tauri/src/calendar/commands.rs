@@ -8,6 +8,7 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::commands::{AppState, CommandError};
+use crate::sync::MutexExt;
 use crate::oauth::{start_desktop_oauth_flow, OAuthTokens, SCOPE_CALENDAR_READONLY, SCOPE_IDENTITY};
 
 use super::agenda::{self, RecordingWindow};
@@ -650,14 +651,52 @@ pub async fn trigger_mock_meeting_reminder(
     Ok(())
 }
 
-/// Testing only: what window detection can see right now.
+/// One conferencing window, and whether it would raise a reminder right now.
+#[derive(serde::Serialize)]
+pub struct DetectionProbe {
+    #[serde(flatten)]
+    pub window: reminders::detection::WindowMatch,
+    /// `None` when this window would raise a reminder.
+    pub blocked_by: Option<String>,
+}
+
+/// Testing only: what window detection can see, and what it would do about it.
 ///
-/// The `detected` reminder is the one kind no calendar can explain, so the
-/// only way to tell "nothing is open" from "detection is blind on this
-/// machine" is to ask it what it sees. Reports, never acts.
+/// The `detected` reminder is the one kind no calendar can explain, so
+/// "nothing is open" and "detection is blind on this machine" are otherwise
+/// the same silence. Every window comes back with the verdict the real loop
+/// would reach on it, against the live calendar, settings and recording state
+/// — because a reminder that does not arrive and one that was never going to
+/// arrive look identical from outside, and every gate behind that silence has
+/// at some point been mistaken for the feature being broken.
+///
+/// Reports, never acts: no reminder is raised and no sighting is recorded.
 #[tauri::command]
-pub fn debug_detect_conferencing_windows() -> Vec<reminders::detection::WindowMatch> {
-    reminders::detection::detect_active_conferencing_windows()
+pub fn debug_detect_conferencing_windows(app: AppHandle) -> Vec<DetectionProbe> {
+    let windows = reminders::detection::detect_active_conferencing_windows();
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock_or_recover().meetings.reminders.clone();
+    let events = reminders::scheduler::cached_events(&state);
+    let sessions = state.meeting_store.list_meetings().unwrap_or_default();
+    let is_recording = state.meeting_engine.status().active;
+    let queue = app.state::<Arc<ReminderQueue>>();
+
+    let inputs = reminders::ReminderInputs {
+        events: &events,
+        windows: &windows,
+        settings: &settings,
+        is_recording,
+        sessions: &sessions,
+        now: chrono::Utc::now(),
+    };
+
+    windows
+        .iter()
+        .map(|window| DetectionProbe {
+            window: window.clone(),
+            blocked_by: reminders::detection_blocker(&queue, window, &inputs),
+        })
+        .collect()
 }
 
 /// Grows the meeting pill for its hovered state and shrinks it back.
