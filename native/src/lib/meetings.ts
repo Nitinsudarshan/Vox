@@ -17,6 +17,7 @@ import type {
   MeetingSeriesSummary,
   MeetingSummary,
   MeetingTemplate,
+  ReminderKind,
   ReminderSettings,
   SeriesOccurrence,
   Speaker,
@@ -147,7 +148,8 @@ export const getReminderSettings = (): Promise<ReminderSettings> =>
  * way to find out whether they work at all was to have a meeting and wait for
  * it — and one that never appears looks exactly like a day with nothing due.
  */
-export const sendTestReminder = (): Promise<void> => invoke('send_test_meeting_reminder');
+export const sendTestReminder = (kind: ReminderKind): Promise<void> =>
+  invoke('send_test_meeting_reminder', { kind });
 
 /** Saves them. Unknown lead times are dropped rather than rejected. */
 export const saveReminderSettings = (

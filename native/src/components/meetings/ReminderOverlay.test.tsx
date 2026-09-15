@@ -21,6 +21,7 @@ const reminder = (overrides: Partial<MeetingReminder> = {}): MeetingReminder => 
   meeting_id: null,
   minutes_until: 3,
   guest_count: 2,
+  kind: 'upcoming',
   ...overrides,
 });
 
@@ -150,6 +151,66 @@ describe('ReminderOverlay', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /dismiss the reminder/i }));
     await waitFor(() => expect(screen.queryByText('Weekly Sync')).not.toBeInTheDocument());
+  });
+
+  test('a meeting running with nothing recorded leads with Record, not Join', async () => {
+    // The call is already happening, so joining is the afterthought — the
+    // other way round from the two reminders that arrive before it starts.
+    render(<ReminderOverlay />);
+    await waitFor(() => expect(deliver).not.toBeNull());
+    deliver?.({
+      payload: reminder({
+        key: 'me@work.com|evt-1|not-recording:once',
+        kind: 'not_recording',
+        start: new Date(Date.now() - 5 * 60_000).toISOString(),
+        minutes_until: -5,
+      }),
+    });
+
+    expect(await screen.findByText(/nothing is being recorded/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /record now/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /join and record/i })).not.toBeInTheDocument();
+  });
+
+  test('recording from the nudge does not also open the call', async () => {
+    // It is already open — that is the whole premise of the reminder.
+    render(<ReminderOverlay />);
+    await waitFor(() => expect(deliver).not.toBeNull());
+    deliver?.({
+      payload: reminder({ kind: 'not_recording', minutes_until: -5 }),
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /record now/i }));
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'start_meeting',
+        expect.objectContaining({ title: 'Weekly Sync' }),
+      ),
+    );
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('open_calendar_link', expect.anything());
+  });
+
+  test('the three kinds stack as three cards', async () => {
+    render(<ReminderOverlay />);
+    await waitFor(() => expect(deliver).not.toBeNull());
+
+    deliver?.({ payload: reminder({ key: 'a|1|upcoming:5', event_id: '1', title: 'Standup' }) });
+    deliver?.({
+      payload: reminder({ key: 'a|2|starting:0', event_id: '2', title: 'Design review', kind: 'starting' }),
+    });
+    deliver?.({
+      payload: reminder({
+        key: 'a|3|not-recording:once',
+        event_id: '3',
+        title: 'Client call',
+        kind: 'not_recording',
+        minutes_until: -5,
+      }),
+    });
+
+    expect(await screen.findByText('Standup')).toBeInTheDocument();
+    expect(screen.getByText('Design review')).toBeInTheDocument();
+    expect(screen.getByText('Client call')).toBeInTheDocument();
   });
 
   test('the same meeting announced again replaces its card rather than stacking', async () => {

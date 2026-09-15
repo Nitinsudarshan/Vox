@@ -295,6 +295,16 @@ export interface TranslationProgress {
 /** The Tauri event a due reminder arrives on. */
 export const MEETING_REMINDER_EVENT = 'meeting-reminder';
 
+/**
+ * What a reminder is telling you.
+ *
+ * Three genuinely different messages, not one message at three times:
+ * - `upcoming` — before it starts (t−15, −10, −5, −1)
+ * - `starting` — at the start, or a moment after (t)
+ * - `not_recording` — under way, with nothing being recorded (t+5)
+ */
+export type ReminderKind = 'upcoming' | 'starting' | 'not_recording';
+
 /** The lead times Vox offers, in minutes. `0` means "when it starts". */
 export const REMINDER_LEAD_CHOICES = [15, 10, 5, 1, 0] as const;
 
@@ -309,6 +319,8 @@ export interface ReminderSettings {
   lead_minutes: number[];
   only_with_link: boolean;
   include_declined: boolean;
+  /** Say something when a meeting is under way and nothing is being recorded. */
+  nudge_when_not_recording: boolean;
 }
 
 /** A meeting that is about to start. */
@@ -326,4 +338,5 @@ export interface MeetingReminder {
   /** Minutes until it starts, from the clock. Negative means it has begun. */
   minutes_until: number;
   guest_count: number;
+  kind: ReminderKind;
 }

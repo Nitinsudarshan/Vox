@@ -1,7 +1,7 @@
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Bell, MapPin, Radio, Users, Video, X } from 'lucide-react';
+import { Bell, CircleAlert, MapPin, Radio, Users, Video, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import * as calendar from '@/lib/calendar';
@@ -121,6 +121,8 @@ const ReminderCard: React.FC<{
     return () => window.clearTimeout(timer);
   }, [onDismiss]);
 
+  const nudge = reminder.kind === 'not_recording';
+
   const when =
     minutes > 1
       ? `in ${minutes} minutes`
@@ -129,6 +131,19 @@ const ReminderCard: React.FC<{
         : minutes === 0
           ? 'now'
           : `${-minutes} minute${minutes === -1 ? '' : 's'} ago`;
+
+  /** The line under the title. The nudge's is a statement, not a countdown. */
+  const subtitle = nudge
+    ? `Started ${when} · nothing is being recorded`
+    : minutes < 0
+      ? `Started ${when}`
+      : `Starts ${when}`;
+
+  /** Starts recording without opening anything. */
+  const record = () => {
+    void meetings.startMeeting(reminder.title).catch(() => undefined);
+    onDismiss();
+  };
 
   /** Opens the call, and starts recording it when asked. */
   const join = (andRecord: boolean) => {
@@ -142,13 +157,28 @@ const ReminderCard: React.FC<{
   };
 
   return (
-    <div className="rounded-xl border border-border bg-card shadow-2xl p-3">
+    // The nudge is bordered differently on purpose: it is the only one of the
+    // three that is about something already going wrong, and it is the one a
+    // person needs to pick out of a stack at a glance.
+    <div
+      className={`rounded-xl border shadow-2xl p-3 ${
+        nudge ? 'border-amber-500/60 bg-amber-500/5' : 'border-border bg-card'
+      }`}
+    >
       <div className="flex items-start gap-2">
-        <Bell className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+        {nudge ? (
+          <CircleAlert className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+        ) : (
+          <Bell className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+        )}
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground leading-snug">{reminder.title}</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
-            {minutes < 0 ? `Started ${when}` : `Starts ${when}`}
+          <p
+            className={`text-[11px] mt-0.5 ${
+              nudge ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'
+            }`}
+          >
+            {subtitle}
           </p>
         </div>
         <button
@@ -179,7 +209,28 @@ const ReminderCard: React.FC<{
       )}
 
       <div className="flex items-center gap-2 mt-2.5 ml-5">
-        {reminder.conference_url && (
+        {/* The call is already happening, so recording it is the action and
+            Join is the afterthought — the other way round from the two
+            reminders that arrive before it starts. */}
+        {nudge ? (
+          <>
+            <Button size="sm" onClick={() => record()} className="h-7 gap-1.5 text-xs">
+              <Radio className="w-3.5 h-3.5" />
+              Record now
+            </Button>
+            {reminder.conference_url && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => join(false)}
+                className="h-7 gap-1.5 text-xs"
+              >
+                <Video className="w-3.5 h-3.5" />
+                Join
+              </Button>
+            )}
+          </>
+        ) : reminder.conference_url ? (
           <>
             <Button size="sm" onClick={() => join(false)} className="h-7 gap-1.5 text-xs">
               <Video className="w-3.5 h-3.5" />
@@ -195,14 +246,8 @@ const ReminderCard: React.FC<{
               Join and record
             </Button>
           </>
-        )}
-        {!reminder.conference_url && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => join(true)}
-            className="h-7 gap-1.5 text-xs"
-          >
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => record()} className="h-7 gap-1.5 text-xs">
             <Radio className="w-3.5 h-3.5" />
             Record
           </Button>
