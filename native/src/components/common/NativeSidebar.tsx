@@ -14,7 +14,6 @@ import {
   Network,
 } from 'lucide-react';
 
-import { VoxLogo } from '@/components/common/VoxLogo';
 import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
@@ -130,7 +129,7 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
   ];
 
   const displayName = profile?.display_name || account?.display_name || 'Local User';
-  const emailOrMode = account?.authenticated ? account.email : '100% On-Device';
+  const storageMode = activeWorkspace === 'cloud' ? 'Hybrid Cloud' : 'Local Vault';
   const initial = displayName && displayName !== 'Local User' ? displayName.charAt(0).toUpperCase() : 'R';
 
   const renderNavButton = (item: NavItemConfig) => {
@@ -186,112 +185,8 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
           isOpen ? 'w-64' : 'w-12 items-center'
         }`}
       >
-        {/* Workspace / Brand Header (sidebar-07 Team Switcher Pattern) */}
-        <div className={`h-14 w-full shrink-0 flex items-center justify-center ${isOpen ? 'px-3' : 'px-2'}`}>
-          {isOpen ? (
-            <div className="w-full h-10 border border-sidebar-border bg-card/60 rounded-lg flex items-center p-1 justify-between shadow-2xs">
-              <button
-                type="button"
-                onClick={() => setActiveTab('home')}
-                className="flex items-center flex-1 min-w-0 h-full rounded-md hover:bg-sidebar-accent/70 px-1.5 transition-all cursor-pointer group text-left"
-                title="Vox Home"
-                aria-label="Vox Home"
-              >
-                <div className="flex items-center h-full gap-2 min-w-0 flex-1">
-                  <VoxLogo expanded className="h-6 w-auto shrink-0 group-hover:scale-105 transition-transform" />
-                  <div className="flex flex-col justify-center leading-none min-w-0 pl-1.5 border-l border-border/50">
-                    <span className="truncate text-[9px] text-muted-foreground font-mono uppercase tracking-wider">
-                      {activeWorkspace === 'cloud' ? 'Hybrid Cloud' : 'Local Vault'}
-                    </span>
-                  </div>
-                </div>
-              </button>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="size-7 rounded-md hover:bg-sidebar-accent text-muted-foreground hover:text-sidebar-foreground flex items-center justify-center shrink-0 cursor-pointer transition-colors"
-                    title="Switch Workspace or Vault"
-                    aria-label="Switch Workspace or Vault"
-                  >
-                    <ChevronsUpDown className="w-3.5 h-3.5" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  side="bottom"
-                  align="end"
-                  sideOffset={8}
-                  className="w-56"
-                >
-                  <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider">
-                    Storage & Workspace
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem
-                    onClick={() => setActiveWorkspace('local')}
-                    className="gap-2.5 cursor-pointer"
-                  >
-                    <div className="flex size-6 items-center justify-center rounded-md border bg-background">
-                      <Database className="size-3.5 text-emerald-500" />
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-xs">Local Vault Only</span>
-                      <span className="text-[10px] text-muted-foreground">Markdown & Audio on Disk</span>
-                    </div>
-                    {activeWorkspace === 'local' && (
-                      <span className="ml-auto text-[10px] font-bold text-primary">✓</span>
-                    )}
-                  </DropdownMenuItem>
-
-                  <DropdownMenuItem
-                    onClick={() => setActiveWorkspace('cloud')}
-                    className="gap-2.5 cursor-pointer"
-                  >
-                    <div className="flex size-6 items-center justify-center rounded-md border bg-background">
-                      <Cloud className="size-3.5 text-blue-500" />
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-xs">Hybrid Cloud Sync</span>
-                      <span className="text-[10px] text-muted-foreground">Supabase Multi-Device</span>
-                    </div>
-                    {activeWorkspace === 'cloud' && (
-                      <span className="ml-auto text-[10px] font-bold text-primary">✓</span>
-                    )}
-                  </DropdownMenuItem>
-
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={onOpenExplanation}
-                    className="gap-2 text-xs text-muted-foreground cursor-pointer"
-                  >
-                    <ShieldCheck className="size-3.5 text-emerald-500" />
-                    <span>Security & Local Guarantees</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('home')}
-                  className="size-8 rounded-lg border border-border bg-card hover:bg-sidebar-accent text-foreground flex items-center justify-center p-0 shadow-xs cursor-pointer group"
-                  title="Vox Home"
-                  aria-label="Vox Home"
-                >
-                  <VoxLogo className="w-8 h-8 group-hover:scale-105 transition-transform" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={10}>
-                <span>Vox Home</span>
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-
         {/* Navigation & Quick Links Body */}
-        <div className={`flex-1 w-full overflow-y-auto overflow-x-hidden flex flex-col ${isOpen ? 'px-3 py-1' : 'px-2 py-1 items-center'}`}>
+        <div className={`flex-1 w-full overflow-y-auto overflow-x-hidden flex flex-col ${isOpen ? 'px-3 py-3' : 'px-2 py-3 items-center'}`}>
           {/* Primary Navigation */}
           <nav className="w-full space-y-1 shrink-0 flex flex-col items-center">
             {primaryNavItems.map(renderNavButton)}
@@ -344,7 +239,7 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                           {displayName}
                         </span>
                         <span className="text-[10px] text-muted-foreground truncate font-mono">
-                          {emailOrMode}
+                          {storageMode}
                         </span>
                       </div>
                       <ChevronsUpDown className="w-3.5 h-3.5 text-muted-foreground shrink-0 ml-1" />
@@ -392,13 +287,50 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
                       </Badge>
                     </div>
                     <span className="text-[10px] text-muted-foreground font-mono truncate">
-                      {emailOrMode}
+                      {storageMode}
                     </span>
                   </div>
                 </div>
               </DropdownMenuLabel>
 
               <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider px-2 py-1">
+                  Storage & Workspace
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={() => setActiveWorkspace('local')}
+                  className="gap-2.5 cursor-pointer py-1.5"
+                >
+                  <div className="flex size-6 items-center justify-center rounded-md border bg-background">
+                    <Database className="size-3.5 text-emerald-500" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs">Local Vault Only</span>
+                    <span className="text-[10px] text-muted-foreground">Markdown & Audio on Disk</span>
+                  </div>
+                  {activeWorkspace === 'local' && (
+                    <span className="ml-auto text-[10px] font-bold text-primary">✓</span>
+                  )}
+                </DropdownMenuItem>
+
+                <DropdownMenuItem
+                  onClick={() => setActiveWorkspace('cloud')}
+                  className="gap-2.5 cursor-pointer py-1.5"
+                >
+                  <div className="flex size-6 items-center justify-center rounded-md border bg-background">
+                    <Cloud className="size-3.5 text-blue-500" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs">Hybrid Cloud Sync</span>
+                    <span className="text-[10px] text-muted-foreground">Supabase Multi-Device</span>
+                  </div>
+                  {activeWorkspace === 'cloud' && (
+                    <span className="ml-auto text-[10px] font-bold text-primary">✓</span>
+                  )}
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator />
+
                 <DropdownMenuItem
                   onClick={() => setActiveTab('settings')}
                   className="gap-2.5 cursor-pointer py-2 text-xs"

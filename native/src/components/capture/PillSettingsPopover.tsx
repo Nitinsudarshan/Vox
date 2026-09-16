@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { AppSettings } from '../../types';
 import { WhisperStatusInfo, OllamaStatusInfo, HotkeyStatusInfo, CleanupStyle, SpeechLanguage } from './PillTypes';
-import { ChevronRight, ChevronLeft, Edit3, Globe, Settings } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Edit3, Globe, Settings, AppWindow } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface PillSettingsPopoverProps {
@@ -162,10 +162,26 @@ export const PillSettingsPopover: React.FC<PillSettingsPopoverProps> = ({
 
           <div className="h-px bg-slate-100 dark:bg-[#262626] my-1" />
 
-          {/* 6. Open All Settings in Main App Window */}
+          {/* 6. Open Vox Main Window */}
+          <div
+            onClick={() => {
+              invoke('show_main_window').catch(() => {
+                invoke('open_settings_window').catch(console.error);
+              });
+            }}
+            className="flex items-center gap-2.5 px-3 py-2 cursor-pointer rounded-lg hover:bg-slate-100 dark:hover:bg-[#262626] text-blue-600 dark:text-blue-400 transition-colors font-medium"
+          >
+            <AppWindow className="w-3.5 h-3.5 shrink-0" />
+            <span className="flex-1 text-xs">Open Vox</span>
+            <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-70" />
+          </div>
+
+          <div className="h-px bg-slate-100 dark:bg-[#262626] my-1" />
+
+          {/* 7. Open All Settings in Main App Window */}
           <div
             onClick={() => invoke('open_settings_window').catch(console.error)}
-            className="flex items-center gap-2.5 px-3 py-2 cursor-pointer rounded-lg hover:bg-slate-100 dark:hover:bg-[#262626] text-blue-600 dark:text-blue-400 transition-colors font-medium"
+            className="flex items-center gap-2.5 px-3 py-2 cursor-pointer rounded-lg hover:bg-slate-100 dark:hover:bg-[#262626] text-slate-700 dark:text-neutral-300 hover:text-slate-900 dark:hover:text-neutral-100 transition-colors"
           >
             <Settings className="w-3.5 h-3.5 shrink-0" />
             <span className="flex-1 text-xs">Open All Settings in App</span>

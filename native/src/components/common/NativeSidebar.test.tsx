@@ -52,28 +52,17 @@ describe('NativeSidebar', () => {
     expect(screen.queryByRole('button', { name: 'Clipboard' })).not.toBeInTheDocument();
   });
 
-  it('clicking the Vox logo in expanded mode navigates to Home', async () => {
-    const setActiveTab = vi.fn();
+  it('displays Local Vault under profile name and opens workspace options', async () => {
     const user = userEvent.setup();
-    render(<NativeSidebar {...defaultProps} isOpen={true} setActiveTab={setActiveTab} />);
+    render(<NativeSidebar {...defaultProps} isOpen={true} />);
 
-    const logoButton = screen.getByRole('button', { name: 'Vox Home' });
-    expect(logoButton).toBeInTheDocument();
-    await user.click(logoButton);
+    expect(screen.getAllByText('Local Vault').length).toBeGreaterThan(0);
 
-    expect(setActiveTab).toHaveBeenCalledWith('home');
-  });
+    const profileBtn = screen.getByTitle('Account & Session Settings');
+    await user.click(profileBtn);
 
-  it('clicking the Vox logo in collapsed mode navigates to Home', async () => {
-    const setActiveTab = vi.fn();
-    const user = userEvent.setup();
-    render(<NativeSidebar {...defaultProps} isOpen={false} setActiveTab={setActiveTab} />);
-
-    const logoButton = screen.getByRole('button', { name: 'Vox Home' });
-    expect(logoButton).toBeInTheDocument();
-    await user.click(logoButton);
-
-    expect(setActiveTab).toHaveBeenCalledWith('home');
+    expect(screen.getByText('Local Vault Only')).toBeInTheDocument();
+    expect(screen.getByText('Hybrid Cloud Sync')).toBeInTheDocument();
   });
 
   it('navigates to primary and system destinations when clicked', async () => {
