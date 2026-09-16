@@ -1,4 +1,5 @@
 use crate::settings::PillPosition;
+use crate::sync::MutexExt;
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub const PILL_WINDOW_LABEL: &str = "dictation-pill";
@@ -188,13 +189,42 @@ pub const MEETING_OVERLAY_LABEL: &str = "meeting-overlay";
 /// window is transparent but still takes clicks, so every pixel wider than the
 /// pill is an invisible dead zone over the user's screen.
 const MEETING_OVERLAY_RESTING_SIZE: (f64, f64) = (248.0, 52.0);
-
-/// The hovered pill, wide enough for the pause and stop controls to open inside
-/// the same surface rather than floating beside it.
 const MEETING_OVERLAY_EXPANDED_SIZE: (f64, f64) = (330.0, 52.0);
 
-/// Gap between the pill and the right edge of the work area.
+const MEETING_OVERLAY_VERTICAL_RESTING_SIZE: (f64, f64) = (56.0, 160.0);
+const MEETING_OVERLAY_VERTICAL_EXPANDED_SIZE: (f64, f64) = (56.0, 240.0);
+
+/// Gap between the pill and the edge of the work area.
 const MEETING_OVERLAY_EDGE_MARGIN: f64 = 10.0;
+
+fn get_meeting_pill_config(app: &AppHandle) -> (String, String, Option<f64>, Option<f64>) {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        let guard = state.settings.lock_or_recover();
+        (
+            guard.meetings.pill_style.clone(),
+            guard.meetings.pill_position.clone(),
+            guard.meetings.pill_free_x,
+            guard.meetings.pill_free_y,
+        )
+    } else {
+        ("horizontal".to_string(), "middle_right".to_string(), None, None)
+    }
+}
+
+fn meeting_overlay_size(app: &AppHandle, expanded: bool) -> (f64, f64) {
+    let (style, _, _, _) = get_meeting_pill_config(app);
+    if style == "vertical" {
+        if expanded {
+            MEETING_OVERLAY_VERTICAL_EXPANDED_SIZE
+        } else {
+            MEETING_OVERLAY_VERTICAL_RESTING_SIZE
+        }
+    } else if expanded {
+        MEETING_OVERLAY_EXPANDED_SIZE
+    } else {
+        MEETING_OVERLAY_RESTING_SIZE
+    }
+}
 
 pub fn ensure_meeting_overlay(app: &AppHandle, visible: bool) {
     if let Some(window) = app.get_webview_window(MEETING_OVERLAY_LABEL) {
@@ -208,16 +238,15 @@ pub fn ensure_meeting_overlay(app: &AppHandle, visible: bool) {
         return;
     }
 
+    let initial_size = meeting_overlay_size(app, false);
+
     let mut builder = WebviewWindowBuilder::new(
         app,
         MEETING_OVERLAY_LABEL,
         WebviewUrl::App("index.html#/meeting-overlay".into()),
     )
     .title("Vox — Meeting Recording")
-    .inner_size(
-        MEETING_OVERLAY_RESTING_SIZE.0,
-        MEETING_OVERLAY_RESTING_SIZE.1,
-    )
+    .inner_size(initial_size.0, initial_size.1)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
@@ -227,7 +256,7 @@ pub fn ensure_meeting_overlay(app: &AppHandle, visible: bool) {
     .visible(visible)
     .focused(false);
 
-    if let Some((x, y)) = meeting_overlay_anchor(app, MEETING_OVERLAY_RESTING_SIZE) {
+    if let Some((x, y)) = meeting_overlay_anchor(app, initial_size) {
         builder = builder.position(x, y);
     }
 
@@ -243,32 +272,18 @@ pub fn hide_meeting_overlay(app: &AppHandle) {
 }
 
 /// Grows the pill for its hovered state and shrinks it back afterwards.
-///
-/// The window is resized rather than kept permanently large with a transparent
-/// margin: a transparent region still swallows clicks, so an oversized window
-/// would put an invisible dead zone over the user's screen for the whole
-/// meeting.
 pub fn set_meeting_overlay_expanded(app: &AppHandle, expanded: bool) {
     let Some(window) = app.get_webview_window(MEETING_OVERLAY_LABEL) else {
         return;
     };
-    let size = if expanded {
-        MEETING_OVERLAY_EXPANDED_SIZE
-    } else {
-        MEETING_OVERLAY_RESTING_SIZE
-    };
+    let size = meeting_overlay_size(app, expanded);
     let _ = window.set_size(LogicalSize::new(size.0, size.1));
     if let Some((x, y)) = meeting_overlay_anchor(app, size) {
         let _ = window.set_position(LogicalPosition::new(x, y));
     }
 }
 
-/// Right edge, vertically centred, recomputed from the live work area so the
-/// pill survives monitor, resolution, DPI and taskbar changes.
-///
-/// The pill grows leftward: `x` is derived from the right edge, so the resting
-/// and hovered states share the same right margin and the mark does not appear
-/// to move when controls open.
+/// Computes anchor coordinates from the live work area and saved settings.
 fn meeting_overlay_anchor(app: &AppHandle, size: (f64, f64)) -> Option<(f64, f64)> {
     let monitor = active_monitor(app)?;
     let scale = monitor.scale_factor();
@@ -278,17 +293,45 @@ fn meeting_overlay_anchor(app: &AppHandle, size: (f64, f64)) -> Option<(f64, f64
     let wa_w = work_area.size.width as f64 / scale;
     let wa_h = work_area.size.height as f64 / scale;
 
-    let x = wa_x + wa_w - size.0 - MEETING_OVERLAY_EDGE_MARGIN;
-    let y = wa_y + (wa_h - size.1) / 2.0;
+    let (_, pos, free_x, free_y) = get_meeting_pill_config(app);
+    let margin = MEETING_OVERLAY_EDGE_MARGIN;
+
+    let (x, y) = match pos.as_str() {
+        "top_left" => (wa_x + margin, wa_y + margin),
+        "top_center" => (wa_x + (wa_w - size.0) / 2.0, wa_y + margin),
+        "top_right" => (wa_x + wa_w - size.0 - margin, wa_y + margin),
+        "middle_left" => (wa_x + margin, wa_y + (wa_h - size.1) / 2.0),
+        "middle_center" => (wa_x + (wa_w - size.0) / 2.0, wa_y + (wa_h - size.1) / 2.0),
+        "middle_right" => (wa_x + wa_w - size.0 - margin, wa_y + (wa_h - size.1) / 2.0),
+        "bottom_left" => (wa_x + margin, wa_y + wa_h - size.1 - margin),
+        "bottom_center" => (wa_x + (wa_w - size.0) / 2.0, wa_y + wa_h - size.1 - margin),
+        "bottom_right" => (wa_x + wa_w - size.0 - margin, wa_y + wa_h - size.1 - margin),
+        "free" => {
+            let raw_x = free_x.unwrap_or(85.0);
+            let raw_y = free_y.unwrap_or(50.0);
+            let valid_x = if raw_x.is_finite() { raw_x } else { 85.0 };
+            let valid_y = if raw_y.is_finite() { raw_y } else { 50.0 };
+            let fx = valid_x.clamp(0.0, 100.0) / 100.0;
+            let fy = valid_y.clamp(0.0, 100.0) / 100.0;
+            let min_x = wa_x + margin;
+            let max_x = (wa_x + wa_w - size.0 - margin).max(min_x);
+            let min_y = wa_y + margin;
+            let max_y = (wa_y + wa_h - size.1 - margin).max(min_y);
+            (
+                (min_x + (max_x - min_x) * fx).clamp(min_x, max_x),
+                (min_y + (max_y - min_y) * fy).clamp(min_y, max_y),
+            )
+        }
+        _ => (wa_x + wa_w - size.0 - margin, wa_y + (wa_h - size.1) / 2.0),
+    };
+
     Some((x, y))
 }
 
-fn reposition_meeting_overlay(app: &AppHandle, window: &tauri::WebviewWindow) {
-    let _ = window.set_size(LogicalSize::new(
-        MEETING_OVERLAY_RESTING_SIZE.0,
-        MEETING_OVERLAY_RESTING_SIZE.1,
-    ));
-    if let Some((x, y)) = meeting_overlay_anchor(app, MEETING_OVERLAY_RESTING_SIZE) {
+pub fn reposition_meeting_overlay(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let size = meeting_overlay_size(app, false);
+    let _ = window.set_size(LogicalSize::new(size.0, size.1));
+    if let Some((x, y)) = meeting_overlay_anchor(app, size) {
         let _ = window.set_position(LogicalPosition::new(x, y));
     }
 }

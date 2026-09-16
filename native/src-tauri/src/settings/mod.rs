@@ -690,10 +690,31 @@ pub struct MeetingSettings {
     /// evidence of.
     #[serde(default)]
     pub reminders: crate::calendar::reminders::ReminderSettings,
+    /// Pill style: "horizontal" or "vertical".
+    #[serde(default = "default_pill_style")]
+    pub pill_style: String,
+    /// Screen anchor position: "top_left", "top_center", "top_right", "middle_left",
+    /// "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right", or "free".
+    #[serde(default = "default_pill_position")]
+    pub pill_position: String,
+    /// Free movement X coordinate (percentage 0..100).
+    #[serde(default)]
+    pub pill_free_x: Option<f64>,
+    /// Free movement Y coordinate (percentage 0..100).
+    #[serde(default)]
+    pub pill_free_y: Option<f64>,
 }
 
 fn default_meeting_template() -> String {
     "general".to_string()
+}
+
+fn default_pill_style() -> String {
+    "horizontal".to_string()
+}
+
+fn default_pill_position() -> String {
+    "middle_right".to_string()
 }
 
 impl Default for MeetingSettings {
@@ -706,6 +727,10 @@ impl Default for MeetingSettings {
             transcription_language: String::new(),
             devices: crate::meetings::capture::MeetingDevices::default(),
             reminders: crate::calendar::reminders::ReminderSettings::default(),
+            pill_style: default_pill_style(),
+            pill_position: default_pill_position(),
+            pill_free_x: None,
+            pill_free_y: None,
         }
     }
 }

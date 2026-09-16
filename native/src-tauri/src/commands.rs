@@ -2160,6 +2160,10 @@ pub async fn save_settings(
     // switch says so.
     crate::startup::reconcile_launch_at_login(&app, settings.startup.launch_at_login);
 
+    if let Some(window) = app.get_webview_window(crate::overlay::MEETING_OVERLAY_LABEL) {
+        crate::overlay::reposition_meeting_overlay(&app, &window);
+    }
+
     let _ = app.emit("settings-changed", &settings);
     Ok(())
 }
