@@ -48,7 +48,7 @@ export const VoxLogo: React.FC<VoxLogoProps> = ({ className = 'w-6 h-6', expande
     <img
       src={src}
       alt="Vox logo"
-      className={`${className} object-contain`}
+      className={`${className} max-h-full object-contain`}
       draggable={false}
     />
   );

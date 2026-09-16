@@ -2185,6 +2185,67 @@ pub async fn open_settings_window(
     Ok(())
 }
 
+/// Minimizes the main window to the OS taskbar without terminating.
+#[tauri::command]
+pub async fn minimize_main_window(app: AppHandle) -> Result<(), CommandError> {
+    if let Some(window) = app.get_webview_window(crate::hotkeys::MAIN_WINDOW_LABEL) {
+        let _ = window.minimize();
+    }
+    Ok(())
+}
+
+/// Hides the main window while keeping Vox running in the background.
+#[tauri::command]
+pub async fn hide_main_window(app: AppHandle) -> Result<(), CommandError> {
+    if let Some(window) = app.get_webview_window(crate::hotkeys::MAIN_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
+/// Fully terminates the Vox desktop application.
+#[tauri::command]
+pub async fn close_app(app: AppHandle) -> Result<(), CommandError> {
+    app.exit(0);
+    Ok(())
+}
+
+/// Unminimizes, shows, and focuses the main Vox window.
+#[tauri::command]
+pub async fn show_main_window(app: AppHandle) -> Result<(), CommandError> {
+    if let Some(window) = app.get_webview_window(crate::hotkeys::MAIN_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+/// Toggles maximize state of the main window.
+#[tauri::command]
+pub async fn toggle_maximize_main_window(app: AppHandle) -> Result<bool, CommandError> {
+    if let Some(window) = app.get_webview_window(crate::hotkeys::MAIN_WINDOW_LABEL) {
+        if window.is_maximized().unwrap_or(false) {
+            let _ = window.unmaximize();
+            return Ok(false);
+        } else {
+            let _ = window.maximize();
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Checks if the main window is currently maximized.
+#[tauri::command]
+pub async fn is_main_window_maximized(app: AppHandle) -> Result<bool, CommandError> {
+    if let Some(window) = app.get_webview_window(crate::hotkeys::MAIN_WINDOW_LABEL) {
+        return Ok(window.is_maximized().unwrap_or(false));
+    }
+    Ok(false)
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangelogItem {
     pub category: String,

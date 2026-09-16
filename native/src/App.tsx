@@ -16,14 +16,11 @@ import { AccountExplanationModal } from './components/common/AccountExplanationM
 import { RelayAccount, RelayProfile, DeveloperSettings, AppSettings, MainTabType } from './types';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { NativeSidebar } from './components/common/NativeSidebar';
-import {
-  Sidebar as SidebarIcon,
-  ChevronRight,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { AppHeader } from './components/common/AppHeader';
+import { CloseConfirmationDialog } from './components/common/CloseConfirmationDialog';
 import { PageHeader } from './components/common/PageHeader';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import type { CaptureMethod } from './components/captures/CaptureHubPage';
 
 export type { MainTabType };
@@ -61,6 +58,16 @@ export const App: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const [explanationOpen, setExplanationOpen] = useState(false);
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+
+  const handleConfirmClose = async () => {
+    setCloseDialogOpen(false);
+    try {
+      await invoke('close_app');
+    } catch {
+      window.close();
+    }
+  };
 
 
 
@@ -289,91 +296,32 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans">
-      {/* Navigation Sidebar (sidebar-07 icon-collapsible pattern) */}
-      <NativeSidebar
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
+    <TooltipProvider delayDuration={200}>
+      <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden font-sans">
+      {/* Borderless Product-Native Unified Header */}
+      <AppHeader
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         activeTab={activeTab}
-        setActiveTab={(tab) => navigateTo(tab)}
-        account={account}
-        profile={profile}
-        appVersion={appVersion}
-
-        onOpenChangelog={() => setChangelogOpen(true)}
-        onOpenWelcome={() => setWelcomeOpen(true)}
-        onOpenExplanation={() => setExplanationOpen(true)}
+        onNavigateHome={() => navigateTo('home')}
+        onCloseClick={() => setCloseDialogOpen(true)}
       />
 
-      {/* Welcome First-Launch Onboarding Modal */}
-      <WelcomeModal
-        isOpen={welcomeOpen}
-        initialDisplayName={profile?.display_name && profile.display_name !== 'Local User' ? profile.display_name : ''}
-        onContinueGoogle={handleWelcomeGoogle}
-        onContinueLocally={handleWelcomeLocally}
-        onFinish={() => {
-          setWelcomeOpen(false);
-          if (explainAfterWelcome) {
-            setExplainAfterWelcome(false);
-            setExplanationOpen(true);
-          }
-        }}
-      />
-
-      {/* Account Trust & Privacy Explanation Modal */}
-      <AccountExplanationModal
-        isOpen={explanationOpen}
-        onClose={() => setExplanationOpen(false)}
-      />
-
-      {/* Changelog Modal */}
-      <ChangelogModal
-        open={changelogOpen}
-        onClose={() => setChangelogOpen(false)}
-        currentVersion={appVersion}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top Header Bar */}
-        <header className="h-14 bg-sidebar border-b border-border px-4 flex items-center justify-between shrink-0 select-none">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              aria-label="Toggle Sidebar Navigation"
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
-
-            <div className="h-4 w-px bg-border" />
-
-            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
-              {activeTab === 'home' ? (
-                <span className="font-semibold text-foreground">VOX</span>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => navigateTo('home')}
-                    className="hover:text-foreground hover:underline transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-xs"
-                    aria-label="Navigate to Vox Home"
-                  >
-                    VOX
-                  </button>
-                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/60" />
-                  <span className="font-semibold text-foreground">{TAB_LABELS[activeTab]}</span>
-                </>
-              )}
-            </nav>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-          </div>
-        </header>
+      {/* Main Workspace Surface: Sidebar + View Content */}
+      <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+        {/* Navigation Sidebar (sidebar-07 icon-collapsible pattern) */}
+        <NativeSidebar
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(!sidebarOpen)}
+          activeTab={activeTab}
+          setActiveTab={(tab) => navigateTo(tab)}
+          account={account}
+          profile={profile}
+          appVersion={appVersion}
+          onOpenChangelog={() => setChangelogOpen(true)}
+          onOpenWelcome={() => setWelcomeOpen(true)}
+          onOpenExplanation={() => setExplanationOpen(true)}
+        />
 
         {/* View Surface Container */}
         <main className="flex-1 min-w-0 p-4 md:p-6 overflow-y-auto flex flex-col bg-background">
@@ -437,6 +385,42 @@ export const App: React.FC = () => {
           )}
         </main>
       </div>
-    </div>
+
+      {/* Welcome First-Launch Onboarding Modal */}
+      <WelcomeModal
+        isOpen={welcomeOpen}
+        initialDisplayName={profile?.display_name && profile.display_name !== 'Local User' ? profile.display_name : ''}
+        onContinueGoogle={handleWelcomeGoogle}
+        onContinueLocally={handleWelcomeLocally}
+        onFinish={() => {
+          setWelcomeOpen(false);
+          if (explainAfterWelcome) {
+            setExplainAfterWelcome(false);
+            setExplanationOpen(true);
+          }
+        }}
+      />
+
+      {/* Account Trust & Privacy Explanation Modal */}
+      <AccountExplanationModal
+        isOpen={explanationOpen}
+        onClose={() => setExplanationOpen(false)}
+      />
+
+      {/* Changelog Modal */}
+      <ChangelogModal
+        open={changelogOpen}
+        onClose={() => setChangelogOpen(false)}
+        currentVersion={appVersion}
+      />
+
+      {/* Close Confirmation Dialog */}
+      <CloseConfirmationDialog
+        open={closeDialogOpen}
+        onOpenChange={setCloseDialogOpen}
+        onConfirmClose={handleConfirmClose}
+      />
+      </div>
+    </TooltipProvider>
   );
 };
