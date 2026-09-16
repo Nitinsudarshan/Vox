@@ -2245,6 +2245,17 @@ pub async fn is_main_window_maximized(app: AppHandle) -> Result<bool, CommandErr
     Ok(false)
 }
 
+/// Updates the taskbar and tray icon based on theme or automatic Windows taskbar detection.
+#[tauri::command]
+pub async fn update_taskbar_theme_icon(
+    app: AppHandle,
+    is_dark_taskbar: Option<bool>,
+) -> Result<bool, CommandError> {
+    let dark = is_dark_taskbar.unwrap_or_else(crate::theme_icon::is_system_taskbar_dark);
+    crate::theme_icon::apply_taskbar_icon(&app, dark);
+    Ok(dark)
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangelogItem {

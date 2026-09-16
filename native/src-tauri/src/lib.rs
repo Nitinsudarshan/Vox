@@ -20,6 +20,7 @@ pub mod retrieval;
 pub mod settings;
 pub mod startup;
 pub mod sync;
+pub mod theme_icon;
 pub mod triggers;
 pub mod updates;
 pub mod vault;
@@ -289,7 +290,7 @@ pub fn run() {
                 }
             }
 
-            let mut tray_builder = tauri::tray::TrayIconBuilder::new().menu(&menu);
+            let mut tray_builder = tauri::tray::TrayIconBuilder::with_id(crate::theme_icon::TRAY_ID).menu(&menu);
             if let Some(icon) = app.default_window_icon() {
                 tray_builder = tray_builder.icon(icon.clone());
             }
@@ -315,6 +316,9 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Apply theme-matching taskbar and window icon (light icon on dark taskbar, dark icon on light taskbar)
+            crate::theme_icon::apply_taskbar_icon(handle, crate::theme_icon::is_system_taskbar_dark());
 
             hotkeys::register_hotkeys(
                 handle,
@@ -400,6 +404,7 @@ pub fn run() {
             commands::minimize_main_window,
             commands::toggle_maximize_main_window,
             commands::is_main_window_maximized,
+            commands::update_taskbar_theme_icon,
             commands::hide_main_window,
             commands::close_app,
             commands::show_main_window,

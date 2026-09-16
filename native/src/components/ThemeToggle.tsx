@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Sun, Moon } from 'lucide-react';
 import { emit } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { applyThemeWithoutTransition } from '@/lib/utils';
 
 export type ThemeMode = 'light' | 'dark';
@@ -11,7 +12,7 @@ export const ThemeToggle: React.FC = () => {
     if (saved === 'light' || saved === 'dark') {
       return saved;
     }
-    if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)')?.matches) {
       return 'dark';
     }
     return 'light';
@@ -22,7 +23,20 @@ export const ThemeToggle: React.FC = () => {
     localStorage.setItem('vox-theme', theme);
     emit('vox-theme-changed', theme).catch(() => {});
     emit('relay-theme-changed', theme).catch(() => {});
+    invoke('update_taskbar_theme_icon').catch(() => {});
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleMediaChange = () => {
+      invoke('update_taskbar_theme_icon').catch(() => {});
+    };
+    media.addEventListener?.('change', handleMediaChange);
+    return () => {
+      media.removeEventListener?.('change', handleMediaChange);
+    };
+  }, []);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
