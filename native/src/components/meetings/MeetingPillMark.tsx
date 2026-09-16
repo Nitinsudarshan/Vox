@@ -13,11 +13,13 @@ interface MeetingPillWaveformProps {
   sys: number[];
   /** Flattens the bars and drops them to the idle colour. */
   muted?: boolean;
+  /** Layout orientation: horizontal (default) or vertical dual-channel meter. */
+  orientation?: 'horizontal' | 'vertical';
 }
 
-/** Half the waveform's height: the microphone above the centreline, the meeting below. */
+/** Half the waveform's height or width: mic on one side of centreline, meeting on the other. */
 const HALF_PX = 11;
-/** Every bar keeps this much height, so silence is a line rather than a gap. */
+/** Every bar keeps this much thickness/height, so silence is a line rather than a gap. */
 const MIN_BAR_PX = 2;
 /** Below this a bar is drawn idle, so room tone does not tint the whole meter. */
 const AUDIBLE = 0.02;
@@ -39,44 +41,85 @@ const barPx = (level: number) =>
  * The live level meter: one mirrored waveform, and the only moving part.
  *
  * Both channels are drawn on a single strip sharing one timeline — the
- * microphone above the centreline, the meeting's audio below it — so "who is
+ * microphone on one half of the centreline, the meeting's audio on the other — so "who is
  * talking right now" is legible without a legend explaining which half is
- * which. Two separate meters side by side needed labels to be read at all, and
- * labels are what a pill has no room for.
+ * which.
  */
 export const MeetingPillWaveform: React.FC<MeetingPillWaveformProps> = ({
   mic,
   sys,
   muted = false,
-}) => (
-  <div
-    className="flex items-center gap-[2px]"
-    style={{ height: HALF_PX * 2 + 2 }}
-    aria-hidden="true"
-  >
-    {mic.map((micLevel, index) => {
-      const sysLevel = sys[index] ?? 0;
-      const micLive = !muted && micLevel > AUDIBLE;
-      const sysLive = !muted && sysLevel > AUDIBLE;
-      return (
-        <div
-          key={index}
-          className="flex flex-col items-center justify-center gap-[2px] w-[3px]"
-        >
-          <span
-            className={`w-full rounded-full transition-[height] duration-75 ease-out ${
-              micLive ? MIC_LIVE : IDLE
-            }`}
-            style={{ height: muted ? MIN_BAR_PX : barPx(micLevel) }}
-          />
-          <span
-            className={`w-full rounded-full transition-[height] duration-75 ease-out ${
-              sysLive ? SYS_LIVE : IDLE
-            }`}
-            style={{ height: muted ? MIN_BAR_PX : barPx(sysLevel) }}
-          />
-        </div>
-      );
-    })}
-  </div>
-);
+  orientation = 'horizontal',
+}) => {
+  if (orientation === 'vertical') {
+    // 12 bars vertically to fit nicely in a vertical pill
+    const verticalMic = mic.slice(-12);
+    const verticalSys = sys.slice(-12);
+
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-[2px]"
+        style={{ width: HALF_PX * 2 + 2 }}
+        aria-hidden="true"
+      >
+        {verticalMic.map((micLevel, index) => {
+          const sysLevel = verticalSys[index] ?? 0;
+          const micLive = !muted && micLevel > AUDIBLE;
+          const sysLive = !muted && sysLevel > AUDIBLE;
+          return (
+            <div
+              key={index}
+              className="flex items-center justify-center gap-[2px] h-[3px]"
+            >
+              <span
+                className={`h-full rounded-full transition-[width] duration-75 ease-out ${
+                  micLive ? MIC_LIVE : IDLE
+                }`}
+                style={{ width: muted ? MIN_BAR_PX : barPx(micLevel) }}
+              />
+              <span
+                className={`h-full rounded-full transition-[width] duration-75 ease-out ${
+                  sysLive ? SYS_LIVE : IDLE
+                }`}
+                style={{ width: muted ? MIN_BAR_PX : barPx(sysLevel) }}
+              />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center gap-[2px]"
+      style={{ height: HALF_PX * 2 + 2 }}
+      aria-hidden="true"
+    >
+      {mic.map((micLevel, index) => {
+        const sysLevel = sys[index] ?? 0;
+        const micLive = !muted && micLevel > AUDIBLE;
+        const sysLive = !muted && sysLevel > AUDIBLE;
+        return (
+          <div
+            key={index}
+            className="flex flex-col items-center justify-center gap-[2px] w-[3px]"
+          >
+            <span
+              className={`w-full rounded-full transition-[height] duration-75 ease-out ${
+                micLive ? MIC_LIVE : IDLE
+              }`}
+              style={{ height: muted ? MIN_BAR_PX : barPx(micLevel) }}
+            />
+            <span
+              className={`w-full rounded-full transition-[height] duration-75 ease-out ${
+                sysLive ? SYS_LIVE : IDLE
+              }`}
+              style={{ height: muted ? MIN_BAR_PX : barPx(sysLevel) }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+};

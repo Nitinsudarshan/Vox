@@ -1,15 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Square, Loader2, Pause, Play, AlertTriangle } from 'lucide-react';
+
+import { useOverlayTheme } from '@/lib/overlayTheme';
+
 import {
   MEETING_EVENTS,
   type MeetingLevels,
   type MeetingRecordingStatus,
 } from '../../types/meetings';
-import { MeetingPillWaveform } from './MeetingPillMark';
-import { VoxLogo } from '../common/VoxLogo';
-import { useOverlayTheme } from '../../lib/overlayTheme';
+import {
+  MeetingPill,
+  type MeetingPillState,
+  type MeetingPillOrientation,
+} from './MeetingPill';
 
 /**
  * Samples held in the waveform, one per bar.
@@ -72,6 +76,29 @@ export const MeetingRecordingOverlay: React.FC = () => {
   const [sysLevels, setSysLevels] = useState<number[]>(SILENT_LEVELS);
   const [isBusy, setIsBusy] = useState<boolean>(false);
   const [isHovered, setIsHovered] = useState<boolean>(false);
+  const [pillStyle, setPillStyle] = useState<MeetingPillOrientation>('horizontal');
+
+  useEffect(() => {
+    void invoke<Record<string, unknown>>('get_settings')
+      .then((all) => {
+        const stored = (all?.meetings ?? {}) as { pillStyle?: MeetingPillOrientation };
+        if (stored.pillStyle) setPillStyle(stored.pillStyle);
+      })
+      .catch(() => undefined);
+
+    const unlisten = listen<{ meetings?: { pillStyle?: MeetingPillOrientation } }>(
+      'settings-changed',
+      (event) => {
+        if (event.payload?.meetings?.pillStyle) {
+          setPillStyle(event.payload.meetings.pillStyle);
+        }
+      },
+    );
+
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
 
   /**
    * Backend-reported recorded duration plus the local instant it arrived.
@@ -178,16 +205,6 @@ export const MeetingRecordingOverlay: React.FC = () => {
     }
   }, [session, isHovered, setExpanded]);
 
-  const formatTimer = (totalSeconds: number) => {
-    const hrs = Math.floor(totalSeconds / 3600);
-    const mins = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-    if (hrs > 0) {
-      return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    }
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  };
-
   const isPaused = session?.state === 'paused';
   const isFinalizing = session?.state === 'transcribing';
 
@@ -222,7 +239,11 @@ export const MeetingRecordingOverlay: React.FC = () => {
     return <div className="w-full h-full bg-transparent" />;
   }
 
-  const showControls = isHovered && !isFinalizing;
+  const pillState: MeetingPillState = isFinalizing
+    ? 'transcribing'
+    : isPaused
+      ? 'paused'
+      : 'recording';
 
   return (
     <div
@@ -230,86 +251,19 @@ export const MeetingRecordingOverlay: React.FC = () => {
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}
     >
-      <div
-        className="inline-flex items-center gap-2.5 h-11 pl-3 pr-2 rounded-lg
-                   bg-card border border-border ring-1 ring-indigo-500/20"
-      >
-        {/* Whose pill this is. An always-on-top capsule with a red dot and a
-            timer is a shape several screen recorders share, and the one thing
-            it must never be is ambiguous about which program is listening. */}
-        <VoxLogo className="w-4 h-4 shrink-0" />
-
-        {/* Status dot and elapsed recorded time — the only text in the pill. */}
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="relative flex w-2 h-2">
-            {isRecording && (
-              <span className="absolute inline-flex w-2 h-2 rounded-full bg-red-500 opacity-70 animate-ping" />
-            )}
-            <span
-              className={`relative inline-flex w-2 h-2 rounded-full ${
-                isPaused ? 'bg-amber-400' : isFinalizing ? 'bg-indigo-400' : 'bg-red-500'
-              }`}
-            />
-          </span>
-          <span className="font-mono text-[13px] leading-none font-medium tabular-nums text-foreground">
-            {formatTimer(elapsedSec)}
-          </span>
-        </div>
-
-        {session.active && !session.system_audio_active && (
-          <span
-            className="flex items-center shrink-0 text-amber-400"
-            title="Only this machine's microphone is being recorded"
-          >
-            <AlertTriangle className="w-3.5 h-3.5" />
-          </span>
-        )}
-
-        {isFinalizing ? (
-          <span className="flex items-center shrink-0 text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
-          </span>
-        ) : (
-          <div className="shrink-0" title="You above the line, the meeting below it">
-            <MeetingPillWaveform mic={micLevels} sys={sysLevels} muted={isPaused} />
-          </div>
-        )}
-
-        {/* Controls open inside the pill, not beside it. */}
-        {showControls && (
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={handleTogglePause}
-              disabled={isBusy}
-              title={isPaused ? 'Resume recording' : 'Pause recording'}
-              aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
-              className="grid place-items-center w-7 h-7 rounded-md text-muted-foreground
-                         hover:bg-foreground/10 hover:text-foreground
-                         disabled:opacity-40 disabled:cursor-not-allowed
-                         focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400
-                         cursor-pointer"
-            >
-              {isPaused ? (
-                <Play className="w-3.5 h-3.5 fill-current" />
-              ) : (
-                <Pause className="w-3.5 h-3.5 fill-current" />
-              )}
-            </button>
-            <button
-              onClick={handleStop}
-              disabled={isBusy}
-              title="Stop and save this meeting"
-              aria-label="Stop and save this meeting"
-              className="grid place-items-center w-7 h-7 rounded-md text-white bg-red-500
-                         hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed
-                         focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400
-                         cursor-pointer"
-            >
-              <Square className="w-3 h-3 fill-current" />
-            </button>
-          </div>
-        )}
-      </div>
+      <MeetingPill
+        orientation={pillStyle}
+        state={pillState}
+        elapsedSeconds={elapsedSec}
+        isSystemAudioActive={session.system_audio_active ?? true}
+        micLevels={micLevels}
+        sysLevels={sysLevels}
+        isBusy={isBusy}
+        isHovered={isHovered}
+        onTogglePause={handleTogglePause}
+        onStop={handleStop}
+      />
     </div>
   );
 };
+
