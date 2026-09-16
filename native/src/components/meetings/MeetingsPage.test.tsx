@@ -510,6 +510,64 @@ describe('MeetingsPage', () => {
     expect(screen.getByText(/not connected — recording will fall back/i)).toBeInTheDocument();
   });
 
+  test('configures and saves meeting pill style and position', async () => {
+    mockBackend();
+    render(<MeetingSettingsView />);
+
+    expect(await screen.findByText('Meeting Recording Pill')).toBeInTheDocument();
+
+    // Select vertical style
+    const verticalBtn = screen.getByRole('button', { name: /vertical/i });
+    fireEvent.click(verticalBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'save_settings',
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            meetings: expect.objectContaining({
+              pillStyle: 'vertical',
+            }),
+          }),
+        }),
+      );
+    });
+
+    // Select Top Left position
+    const tlBtn = screen.getByTitle('Top Left');
+    fireEvent.click(tlBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'save_settings',
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            meetings: expect.objectContaining({
+              pillPosition: 'top_left',
+            }),
+          }),
+        }),
+      );
+    });
+
+    // Select Free Movement
+    const freeBtn = screen.getByRole('button', { name: /free movement/i });
+    fireEvent.click(freeBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'save_settings',
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            meetings: expect.objectContaining({
+              pillPosition: 'free',
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
   test('names the devices a running recording opened', async () => {
     mockBackend({
       get_meeting_recording_status: {

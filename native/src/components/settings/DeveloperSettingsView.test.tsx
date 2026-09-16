@@ -137,4 +137,77 @@ describe('DeveloperSettingsView', () => {
 
     expect(await screen.findByText('No conferencing windows on screen.')).toBeInTheDocument();
   });
+
+  it('renders the interactive meeting pill workbench', async () => {
+    await renderPanel();
+
+    expect(screen.getByText('Meeting Pill Workbench')).toBeInTheDocument();
+    expect(screen.getByTestId('meeting-pill')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /force expand meeting pill controls/i })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /toggle missing system audio warning/i })).toBeInTheDocument();
+  });
+
+  it('allows switching pill states and toggles in the playground', async () => {
+    await renderPanel();
+
+    // Switch to Paused state via workbench button
+    await userEvent.click(screen.getByRole('button', { name: 'Paused' }));
+    expect(screen.getByTestId('status-indicator').querySelector('.bg-amber-400')).toBeInTheDocument();
+
+    // Toggle missing system audio
+    await userEvent.click(screen.getByRole('switch', { name: /toggle missing system audio warning/i }));
+    expect(screen.getByTestId('sys-audio-warning')).toBeInTheDocument();
+
+    // Force expand controls
+    await userEvent.click(screen.getByRole('switch', { name: /force expand meeting pill controls/i }));
+    expect(screen.getByTestId('meeting-pill-controls')).toBeInTheDocument();
+  });
+
+  it('allows interacting directly with the pill action buttons in the playground', async () => {
+    await renderPanel();
+
+    // Force expand so buttons are accessible
+    await userEvent.click(screen.getByRole('switch', { name: /force expand meeting pill controls/i }));
+
+    // Click Pause button on the pill
+    const pauseBtn = screen.getByRole('button', { name: /pause recording/i });
+    await userEvent.click(pauseBtn);
+
+    // Pill should now be paused (amber indicator, play button appears)
+    expect(screen.getByTestId('status-indicator').querySelector('.bg-amber-400')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /resume recording/i })).toBeInTheDocument();
+
+    // Click Resume button on the pill
+    await userEvent.click(screen.getByRole('button', { name: /resume recording/i }));
+    expect(screen.getByTestId('status-indicator').querySelector('.bg-red-500')).toBeInTheDocument();
+
+    // Click Stop button on the pill
+    await userEvent.click(screen.getByRole('button', { name: /stop and save this meeting/i }));
+    expect(screen.getByTestId('transcribing-loader')).toBeInTheDocument();
+  });
+
+  it('allows switching between horizontal and vertical styles and selecting screen positions', async () => {
+    await renderPanel();
+
+    // Default style is horizontal
+    expect(screen.getByTestId('meeting-pill')).toHaveAttribute('data-orientation', 'horizontal');
+
+    // Switch to vertical style
+    await userEvent.click(screen.getByRole('button', { name: /vertical/i }));
+    expect(screen.getByTestId('meeting-pill')).toHaveAttribute('data-orientation', 'vertical');
+
+    // Switch back to horizontal
+    await userEvent.click(screen.getByRole('button', { name: /horizontal/i }));
+    expect(screen.getByTestId('meeting-pill')).toHaveAttribute('data-orientation', 'horizontal');
+
+    // Click Top Right position in the grid
+    await userEvent.click(screen.getByTitle(/Top Right/i));
+    expect(screen.getByText(/Anchor: top_right/i)).toBeInTheDocument();
+
+    // Select Free Movement mode
+    await userEvent.click(screen.getByRole('button', { name: /free movement/i }));
+    expect(screen.getByText(/Viewport boundaries locked \(cannot exit screen\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Free Movement active/i)).toBeInTheDocument();
+  });
 });
+

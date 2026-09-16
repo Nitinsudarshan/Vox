@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { DeveloperSettings } from '../../types';
 import { Terminal, RefreshCw, Bell, SearchCode } from 'lucide-react';
+
 import { Button } from '@/components/ui/button';
-import type { ConferencingWindowMatch, ReminderKind } from '@/types/meetings';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
+import type { ConferencingWindowMatch, ReminderKind } from '@/types/meetings';
+
+import { DeveloperSettings } from '../../types';
+import { MeetingPillPlayground } from './MeetingPillPlayground';
 
 /**
  * Every kind of meeting reminder, with when it fires and what it is for.
@@ -251,6 +254,9 @@ export const DeveloperSettingsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Meeting Pill Interactive Workbench */}
+      <MeetingPillPlayground />
 
       {/* Onboarding Replay Override Section */}
       <div className="p-5 rounded-lg border border-border/80 bg-card/60 backdrop-blur-xs space-y-4">
