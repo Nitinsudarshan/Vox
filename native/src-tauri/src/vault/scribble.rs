@@ -1,3 +1,4 @@
+use super::para::{deserialize_band_lenient, ParaBand};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -87,6 +88,12 @@ pub struct Scribble {
     pub topics: Vec<String>,
     #[serde(default)]
     pub entities: Vec<String>,
+    /// Which PARA band this thought is filed under, if any.
+    ///
+    /// `None` means uncategorised — a real state, shown as its own region,
+    /// not a band to be guessed at from topics or content.
+    #[serde(default, deserialize_with = "deserialize_band_lenient")]
+    pub para: Option<ParaBand>,
     #[serde(default)]
     pub relationships: Vec<ScribbleRelationship>,
     #[serde(default)]
@@ -131,6 +138,7 @@ impl Scribble {
             tags: Vec::new(),
             topics: Vec::new(),
             entities: Vec::new(),
+            para: None,
             relationships: Vec::new(),
             attachments: Vec::new(),
             status: "active".to_string(),
@@ -208,6 +216,7 @@ impl Scribble {
             tags: self.tags.clone(),
             topics: self.topics.clone(),
             entities: self.entities.clone(),
+            para: self.para,
             relationships: self.relationships.clone(),
             attachments: self.attachments.clone(),
             status: self.status.clone(),
@@ -244,6 +253,7 @@ impl Scribble {
             tags: meta.tags,
             topics: meta.topics,
             entities: meta.entities,
+            para: meta.para,
             relationships: meta.relationships,
             attachments: meta.attachments,
             status: meta.status,
@@ -268,6 +278,8 @@ struct ScribbleFrontmatter {
     pub topics: Vec<String>,
     #[serde(default)]
     pub entities: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_band_lenient")]
+    pub para: Option<ParaBand>,
     #[serde(default)]
     pub relationships: Vec<ScribbleRelationship>,
     #[serde(default)]
@@ -290,6 +302,31 @@ pub struct KnowledgeNode {
     pub metadata: serde_json::Value,
     pub degree: usize,
     pub source_type: Option<String>,
+    /// Structural importance, computed once over the whole graph.
+    ///
+    /// Node size in the Rings view reads this rather than `degree`: degree
+    /// counts a node's own links, PageRank counts whether those links come
+    /// from anywhere that matters. Computed before filtering, so hiding
+    /// topics does not resize what is left.
+    #[serde(default)]
+    pub pagerank: f32,
+    /// The PARA band this node sits in, if it has one.
+    ///
+    /// Only scribbles carry a band: it comes from the scribble's own
+    /// frontmatter. Topics, entities and source records are not filed under
+    /// PARA at all, so they stay `None` and render in the uncategorised
+    /// region rather than being assigned a band on the strength of what they
+    /// happen to connect to.
+    #[serde(default)]
+    pub para: Option<ParaBand>,
+    /// When the underlying object last changed, where that is known.
+    ///
+    /// Drives the Rings view's recency temperature. Derived nodes (topics,
+    /// entities) take the most recent `updated_at` of the scribbles that
+    /// produced them — a topic is exactly as fresh as the last thought filed
+    /// under it.
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// Knowledge Graph Edge representation.
@@ -322,8 +359,24 @@ pub struct GraphFilter {
 }
 
 impl KnowledgeGraphData {
-    /// Builds a KnowledgeGraphData instance from a collection of Scribbles.
+    /// Builds a graph from Scribbles and applies `filter` to the result.
+    ///
+    /// Equivalent to `build` followed by `filtered`, kept as one call for
+    /// the callers that have no reason to hold the unfiltered graph.
     pub fn from_scribbles(scribbles: &[Scribble], filter: Option<&GraphFilter>) -> Self {
+        let unfiltered = Self::build(scribbles);
+        match filter {
+            Some(f) => unfiltered.filtered(f),
+            None => unfiltered,
+        }
+    }
+
+    /// Builds the whole graph, filtering nothing.
+    ///
+    /// This is the expensive half — node construction and PageRank — and the
+    /// half that only changes when the vault does, so it is what the index
+    /// caches. Filtering runs against the cached result.
+    pub fn build(scribbles: &[Scribble]) -> Self {
         let mut nodes_map: HashMap<String, KnowledgeNode> = HashMap::new();
         let mut edges: Vec<KnowledgeEdge> = Vec::new();
         let mut degrees: HashMap<String, usize> = HashMap::new();
@@ -361,6 +414,9 @@ impl KnowledgeGraphData {
                 }),
                 degree: 0,
                 source_type: Some(scribble.source_type.clone()),
+                pagerank: 0.0,
+                para: scribble.para,
+                updated_at: Some(scribble.updated_at.clone()),
             };
 
             nodes_map.insert(scribble.id.clone(), node);
@@ -379,7 +435,11 @@ impl KnowledgeGraphData {
                     metadata: serde_json::json!({ "topic": topic }),
                     degree: 0,
                     source_type: None,
+                    pagerank: 0.0,
+                    para: None,
+                    updated_at: None,
                 });
+                freshen(&mut nodes_map, &topic_node_id, &scribble.updated_at);
 
                 edges.push(KnowledgeEdge {
                     id: format!("edge_{}_{}", scribble.id, topic_node_id),
@@ -407,7 +467,11 @@ impl KnowledgeGraphData {
                     metadata: serde_json::json!({ "entity": entity }),
                     degree: 0,
                     source_type: None,
+                    pagerank: 0.0,
+                    para: None,
+                    updated_at: None,
                 });
+                freshen(&mut nodes_map, &entity_node_id, &scribble.updated_at);
 
                 edges.push(KnowledgeEdge {
                     id: format!("edge_{}_{}", scribble.id, entity_node_id),
@@ -450,7 +514,11 @@ impl KnowledgeGraphData {
                         metadata: serde_json::json!({ "voice_note_id": vn_id }),
                         degree: 0,
                         source_type: Some("voice".to_string()),
+                        pagerank: 0.0,
+                        para: None,
+                        updated_at: None,
                     });
+                    freshen(&mut nodes_map, &source_node_id, &scribble.updated_at);
 
                     edges.push(KnowledgeEdge {
                         id: format!("edge_{}_{}", scribble.id, source_node_id),
@@ -475,7 +543,11 @@ impl KnowledgeGraphData {
                         metadata: serde_json::json!({ "filename": filename }),
                         degree: 0,
                         source_type: Some("file".to_string()),
+                        pagerank: 0.0,
+                        para: None,
+                        updated_at: None,
                     });
+                    freshen(&mut nodes_map, &source_node_id, &scribble.updated_at);
 
                     edges.push(KnowledgeEdge {
                         id: format!("edge_{}_{}", scribble.id, source_node_id),
@@ -516,11 +588,39 @@ impl KnowledgeGraphData {
             }
         }
 
-        // Filter nodes and edges if requested
-        let mut final_nodes: Vec<KnowledgeNode> = nodes_map.into_values().collect();
-        let mut final_edges = edges;
+        // Rank before filtering. A node's structural importance is a property
+        // of the whole vault, not of whichever slice is on screen — hiding
+        // topics must not resize the scribbles that remain.
+        let ranks = pagerank(&nodes_map, &edges);
+        for (id, node) in nodes_map.iter_mut() {
+            if let Some(r) = ranks.get(id) {
+                node.pagerank = *r;
+            }
+        }
 
-        if let Some(f) = filter {
+        let mut final_nodes: Vec<KnowledgeNode> = nodes_map.into_values().collect();
+        let final_edges = edges;
+
+        // Sort nodes stably
+        final_nodes.sort_by(|a, b| a.label.cmp(&b.label));
+
+        KnowledgeGraphData {
+            nodes: final_nodes,
+            edges: final_edges,
+        }
+    }
+
+    /// A filtered copy of this graph.
+    ///
+    /// Only ever removes: no node is rebuilt, re-ranked or re-positioned by
+    /// filtering, so a node that survives a filter is byte-identical to the
+    /// one in the unfiltered graph. That is what lets the Rings view treat
+    /// filtering as a change of opacity rather than a change of layout.
+    pub fn filtered(&self, f: &GraphFilter) -> Self {
+        let mut final_nodes: Vec<KnowledgeNode> = self.nodes.clone();
+        let mut final_edges: Vec<KnowledgeEdge> = self.edges.clone();
+
+        {
             if f.orphans_only.unwrap_or(false) {
                 // An orphan is a scribble node with degree <= 1 (only itself or no inter-scribble/topic connections)
                 // or degree == 0
@@ -556,14 +656,132 @@ impl KnowledgeGraphData {
             }
         }
 
-        // Sort nodes stably
-        final_nodes.sort_by(|a, b| a.label.cmp(&b.label));
-
         KnowledgeGraphData {
             nodes: final_nodes,
             edges: final_edges,
         }
     }
+}
+
+/// Raises a derived node's `updated_at` to the newest contributor seen so far.
+///
+/// Topics and entities have no timestamp of their own. Taking the maximum
+/// rather than the first writer's value is what makes a topic read as fresh
+/// when any thought under it is fresh, which is what the Rings view's
+/// recency temperature is claiming to show. RFC3339 strings from
+/// `chrono::Utc` sort lexically in time order, so a string compare is a time
+/// compare here.
+fn freshen(nodes_map: &mut HashMap<String, KnowledgeNode>, node_id: &str, candidate: &str) {
+    if let Some(node) = nodes_map.get_mut(node_id) {
+        let newer = node
+            .updated_at
+            .as_ref()
+            .is_none_or(|existing| candidate > existing.as_str());
+        if newer {
+            node.updated_at = Some(candidate.to_string());
+        }
+    }
+}
+
+/// Damping factor: the standard 0.85, the probability a walk follows an edge
+/// rather than teleporting.
+const PAGERANK_DAMPING: f32 = 0.85;
+
+/// A fixed iteration count, deliberately not a convergence threshold.
+///
+/// An early exit on "close enough" makes the output depend on how the input
+/// happened to be shaped, and the Rings view is built on the promise that
+/// the same vault produces the same picture. 40 sweeps is past the point
+/// where ranks move visibly at vault scale, and costs the same every time.
+const PAGERANK_ITERATIONS: usize = 40;
+
+/// PageRank over the knowledge graph, computed once per index build.
+///
+/// Edges are walked in both directions. The stored edges are directional
+/// (`scribble -> topic`, `scribble -> source`), but that direction records
+/// provenance rather than endorsement: treating it as one-way would sink all
+/// the rank into topic and source nodes and leave every scribble at the
+/// floor, which is the opposite of what node size should say.
+///
+/// Returns raw ranks summing to 1.0. Callers that need a drawing radius
+/// normalise against the largest rank in view — that is a render-time
+/// concern and does not change what was ranked here.
+fn pagerank(
+    nodes_map: &HashMap<String, KnowledgeNode>,
+    edges: &[KnowledgeEdge],
+) -> HashMap<String, f32> {
+    let n = nodes_map.len();
+    if n == 0 {
+        return HashMap::new();
+    }
+
+    // Deterministic node order: iteration order of a HashMap is not stable
+    // between runs, and float addition is not associative, so summing
+    // contributions in map order would make ranks differ run to run.
+    let mut ids: Vec<&String> = nodes_map.keys().collect();
+    ids.sort();
+    let position: HashMap<&str, usize> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+
+    // Undirected adjacency, deduplicated: a repeated edge between the same
+    // pair is the same link seen twice, not twice the endorsement.
+    let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut seen_pairs: HashSet<(usize, usize)> = HashSet::new();
+    for edge in edges {
+        let (Some(&a), Some(&b)) = (
+            position.get(edge.source_id.as_str()),
+            position.get(edge.target_id.as_str()),
+        ) else {
+            continue;
+        };
+        if a == b {
+            continue;
+        }
+        let key = if a < b { (a, b) } else { (b, a) };
+        if seen_pairs.insert(key) {
+            neighbours[a].push(b);
+            neighbours[b].push(a);
+        }
+    }
+
+    let uniform = 1.0 / n as f32;
+    let teleport = (1.0 - PAGERANK_DAMPING) / n as f32;
+    let mut rank = vec![uniform; n];
+    let mut next = vec![0.0f32; n];
+
+    for _ in 0..PAGERANK_ITERATIONS {
+        // Dangling nodes (no links at all) would leak their rank out of the
+        // system; redistributing it uniformly is what keeps the vector
+        // summing to 1.
+        let dangling: f32 = (0..n)
+            .filter(|&i| neighbours[i].is_empty())
+            .map(|i| rank[i])
+            .sum();
+        let spread = PAGERANK_DAMPING * dangling / n as f32;
+
+        for slot in next.iter_mut() {
+            *slot = teleport + spread;
+        }
+        for i in 0..n {
+            let out_degree = neighbours[i].len();
+            if out_degree == 0 {
+                continue;
+            }
+            let share = PAGERANK_DAMPING * rank[i] / out_degree as f32;
+            for &j in &neighbours[i] {
+                next[j] += share;
+            }
+        }
+        std::mem::swap(&mut rank, &mut next);
+    }
+
+    ids.into_iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), rank[i]))
+        .collect()
 }
 
 fn slugify(text: &str) -> String {

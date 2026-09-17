@@ -823,7 +823,7 @@ fn stop_dictation_session(
 
             // 3. Persist voice note in vault after injection so vault disk I/O does not delay paste
             let t_vault_start = std::time::Instant::now();
-            crate::commands::save_voice_note(&app, &state.vault, &final_text);
+            let _ = crate::commands::save_voice_note(&app, &state.vault, &final_text);
             let t_vault_complete = std::time::Instant::now();
 
             let metrics = captured.timing_metrics.clone().unwrap_or_default();

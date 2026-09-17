@@ -6,6 +6,7 @@ import { ScribbleViewer } from './components/scribble/ScribbleViewer';
 import { FilesPage } from './components/files/FilesPage';
 import { CapturesPage } from './components/captures/CapturesPage';
 import { KnowledgeGraphPage } from './components/knowledge/KnowledgeGraphPage';
+import { TodosPage } from './components/todos/TodosPage';
 
 import { ProviderSettings, type SettingsSection } from './components/settings/ProviderSettings';
 import { DiagnosticsPage } from './components/diagnostics/DiagnosticsPage';
@@ -30,6 +31,7 @@ const TAB_LABELS: Record<MainTabType, string> = {
   capture: 'Voice Notes',
   meetings: 'Meetings',
   scribble: 'Scribbles',
+  todos: 'TODOs',
   graph: 'Knowledge Graph',
   files: 'Files & Docs',
   captures: 'Web Capture',
@@ -260,6 +262,7 @@ export const App: React.FC = () => {
       case 'meetings':
       case 'settings':
       case 'scribble':
+      case 'todos':
       case 'graph':
         return null;
       case 'captures':
@@ -354,6 +357,10 @@ export const App: React.FC = () => {
               focusScribbleId={focusScribbleId}
               onStartCapture={() => navigateTo('captures', { captureMethod: 'text' })}
             />
+          )}
+
+          {activeTab === 'todos' && (
+            <TodosPage onNavigateTab={(tab) => navigateTo(tab)} />
           )}
 
           {activeTab === 'graph' && (

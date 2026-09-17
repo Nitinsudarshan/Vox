@@ -40,6 +40,8 @@ export interface VaultFile {
   tags: string[];
   topics: string[];
   entities: string[];
+  /** PARA band this thought is filed under. `null` means uncategorised. */
+  para?: ParaBand | null;
   relationships: ScribbleRelationship[];
   ai_metadata: ScribbleAiMetadata;
   linked_scribble_id?: string | null;
@@ -332,16 +334,50 @@ export interface VaultLocationInfo {
   accessible: boolean;
 }
 
+/** Where a todo came from. Absent means provenance was never recorded. */
+export type TodoSourceKind = 'meeting' | 'voice_note' | 'scribble' | 'manual' | 'talkback';
+
+/** Enough to navigate back to exactly where a todo came from. */
+export interface TodoSourceRef {
+  id: string;
+  turn_ordinal?: number | null;
+  label?: string | null;
+}
+
+export type TodoStatus = 'todo' | 'in_progress' | 'done';
+
+/** The three columns, in board order. Mirrors `KANBAN_STATUSES` in Rust. */
+export const TODO_STATUSES: TodoStatus[] = ['todo', 'in_progress', 'done'];
+
+export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
+  todo: 'To do',
+  in_progress: 'In progress',
+  done: 'Done',
+};
+
+/**
+ * A todo, as the vault stores it.
+ *
+ * Still a Kanban card on disk: the same `kanban/` directory the model
+ * always had, grown the provenance and PARA fields the TODOs surface
+ * needs. Every added field is optional, because a card written before they
+ * existed still loads.
+ */
 export interface KanbanCard {
   id: string;
   title: string;
   assignee: string;
-  status: 'todo' | 'in_progress' | 'done';
-  priority: 'high' | 'medium' | 'low';
-  due_date?: string;
+  status: TodoStatus;
+  priority: 'high' | 'medium' | 'low' | string;
+  due_date?: string | null;
   created_at: string;
   description: string;
-  source_note_id?: string;
+  source_note_id?: string | null;
+  source_kind?: TodoSourceKind | null;
+  source_ref?: TodoSourceRef | null;
+  /** Inherited from the source note; never set by hand. */
+  para?: ParaBand | null;
+  captured_at?: string | null;
 }
 
 export interface TriggerConfig {
@@ -814,6 +850,16 @@ export interface Scribble {
   ai_metadata: ScribbleAiMetadata;
 }
 
+/**
+ * The four PARA bands, innermost (most active) first.
+ *
+ * The array order is the ring order the Rings view draws, so anything that
+ * needs to walk the bands reads this rather than re-listing them.
+ */
+export const PARA_BANDS = ['projects', 'areas', 'resources', 'archive'] as const;
+
+export type ParaBand = (typeof PARA_BANDS)[number];
+
 export interface KnowledgeNode {
   id: string;
   node_type: 'scribble' | 'topic' | 'entity' | 'source' | 'project' | 'document' | 'task' | 'voice_note' | 'person' | 'organization' | 'place' | string;
@@ -824,6 +870,19 @@ export interface KnowledgeNode {
   source_type?: string | null;
   created_at?: string | null;
   resolved?: boolean;
+  /**
+   * Structural importance over the whole graph, computed at index time.
+   * Raw PageRank, so it sums to 1 across the unfiltered graph — callers
+   * that want a radius normalise against the largest value in view.
+   */
+  pagerank?: number;
+  /**
+   * PARA band. Only scribbles carry one; topics, entities and source
+   * records are `null` and belong to the uncategorised region.
+   */
+  para?: ParaBand | null;
+  /** When the underlying object last changed, where that is known. */
+  updated_at?: string | null;
 }
 
 export interface KnowledgeEdge {
@@ -1198,3 +1257,46 @@ export type {
   MeetingReminderPayload,
   ReminderKind,
 } from './meetings';
+
+/**
+ * How a decision came to be known, and therefore how sure the tree is
+ * allowed to look about it. Mirrors `memory::decision::DecisionProvenance`.
+ */
+export type DecisionProvenance = 'inferred' | 'extracted' | 'captured' | 'confirmed';
+
+/**
+ * The confidence ladder, derived on the Rust side from a decision's
+ * evidence and never asserted by this one. Kept here so the renderer can
+ * label the rungs without a second source of truth about the numbers.
+ */
+export const DECISION_CONFIDENCE: Record<DecisionProvenance, number> = {
+  inferred: 0.15,
+  extracted: 0.55,
+  captured: 0.9,
+  confirmed: 0.98,
+};
+
+export interface DecisionEvidence {
+  source_id: string;
+  source_type: string;
+  evidence: string;
+  extracted_by: string;
+}
+
+export interface DecisionRecord {
+  id: string;
+  /** What the decision is about — the node it hangs from. */
+  subject: string;
+  /** What was chosen. */
+  choice: string;
+  /** Why, where a reason was given. Never invented when it was not. */
+  rationale?: string | null;
+  provenance: DecisionProvenance;
+  confidence: number;
+  evidence: DecisionEvidence[];
+  superseded_by?: string | null;
+  supersedes_id?: string | null;
+  superseded: boolean;
+  created_at: string;
+  updated_at: string;
+}

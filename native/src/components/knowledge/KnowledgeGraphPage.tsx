@@ -9,6 +9,13 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { PageHeader } from '@/components/common/PageHeader';
 
 import { KnowledgeGraphView } from './KnowledgeGraphView';
+import { GraphModeSwitcher } from './GraphModeSwitcher';
+import { RingsView } from './RingsView';
+import { FocusFlowView } from './FocusFlowView';
+import { DecisionTreeView } from './DecisionTreeView';
+import { loadGraphViewMode, saveGraphViewMode } from './graph/graphStorage';
+import type { GraphViewMode } from './graph/graphTypes';
+import type { RingBand } from './graph/ringsLayout';
 
 import type { KnowledgeGraphData, KnowledgeTelemetrySnapshot, Scribble } from '@/types';
 
@@ -35,6 +42,7 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
   const [telemetry, setTelemetry] = useState<KnowledgeTelemetrySnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [viewMode, setViewMode] = useState<GraphViewMode>(loadGraphViewMode);
 
   const refreshData = useCallback(async () => {
     try {
@@ -67,6 +75,32 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
       unlistenEnriched.then((u) => u());
     };
   }, [refreshData]);
+
+  /**
+   * Switching modes changes which view renders the graph already in state.
+   * It deliberately does not refetch: the data is the same data, and a
+   * refetch would make a view switch cost a vault read.
+   */
+  const handleModeChange = (mode: GraphViewMode) => {
+    setViewMode(mode);
+    saveGraphViewMode(mode);
+  };
+
+  /** Files a scribble under a PARA band — what Rings reads position from. */
+  const handleSetPara = useCallback(
+    async (scribbleId: string, band: RingBand | null) => {
+      try {
+        await invoke('set_scribble_para', {
+          id: scribbleId,
+          para: band === null || band === 'uncategorised' ? null : band,
+        });
+        await refreshData();
+      } catch (err) {
+        console.error('Failed to file the scribble under a PARA band:', err);
+      }
+    },
+    [refreshData],
+  );
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
@@ -113,6 +147,8 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
         compact
       >
         <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap shrink-0">
+          <GraphModeSwitcher mode={viewMode} onChange={handleModeChange} />
+
           <div className="flex items-center divide-x divide-border/60 bg-background/60 backdrop-blur-xs border border-border/80 rounded-lg py-1 px-1 shadow-2xs">
             <span className="sr-only">{counts.edges} link{counts.edges === 1 ? '' : 's'}</span>
             <span className="sr-only">{counts.orphans} unconnected</span>
@@ -192,15 +228,27 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
         />
       ) : (
         <div className="flex-1 flex min-h-0">
-          <KnowledgeGraphView
-            graphData={graphData}
-            allScribbles={scribbles}
-            isLoading={loading}
-            onOpenScribbleEditor={onOpenScribble}
-            onScribbleUpdated={handleScribbleUpdated}
-            onScribbleCreated={handleScribbleCreated}
-            onScribbleDeleted={handleScribbleDeleted}
-          />
+          {viewMode === 'rings' ? (
+            <RingsView
+              graphData={graphData}
+              onOpenScribbleEditor={onOpenScribble}
+              onSetPara={handleSetPara}
+            />
+          ) : viewMode === 'focus' ? (
+            <FocusFlowView graphData={graphData} onOpenScribbleEditor={onOpenScribble} />
+          ) : viewMode === 'decisions' ? (
+            <DecisionTreeView />
+          ) : (
+            <KnowledgeGraphView
+              graphData={graphData}
+              allScribbles={scribbles}
+              isLoading={loading}
+              onOpenScribbleEditor={onOpenScribble}
+              onScribbleUpdated={handleScribbleUpdated}
+              onScribbleCreated={handleScribbleCreated}
+              onScribbleDeleted={handleScribbleDeleted}
+            />
+          )}
         </div>
       )}
     </div>

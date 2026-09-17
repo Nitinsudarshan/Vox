@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { SimNode } from './graphTypes';
+import { RING_BANDS, type RingBand } from './ringsLayout';
 
 interface GraphNodeInspectorProps {
   selectedNode: SimNode | null;
@@ -24,7 +25,23 @@ interface GraphNodeInspectorProps {
   onMergeScribbles?: (scribbleId: string) => void;
   onDeleteScribble?: (scribbleId: string) => void;
   onExploreLocalGraph?: (nodeId: string) => void;
+  /**
+   * Files this scribble under a PARA band, or clears it with `null`.
+   *
+   * Only offered for scribbles, because only scribbles carry a band —
+   * everything downstream inherits. Absent when the surface has no way to
+   * write, so the control is never shown without something behind it.
+   */
+  onSetPara?: (scribbleId: string, band: RingBand | null) => void;
 }
+
+const BAND_LABELS: Record<RingBand, string> = {
+  projects: 'Projects',
+  areas: 'Areas',
+  resources: 'Resources',
+  archive: 'Archive',
+  uncategorised: 'Unfiled',
+};
 
 export const GraphNodeInspector: React.FC<GraphNodeInspectorProps> = ({
   selectedNode,
@@ -36,6 +53,7 @@ export const GraphNodeInspector: React.FC<GraphNodeInspectorProps> = ({
   onMergeScribbles,
   onDeleteScribble,
   onExploreLocalGraph,
+  onSetPara,
 }) => {
   if (!selectedNode) return null;
 
@@ -92,6 +110,35 @@ export const GraphNodeInspector: React.FC<GraphNodeInspectorProps> = ({
         <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3 bg-muted/20 p-2 rounded-md border border-border/40">
           "{selectedNode.summary}"
         </p>
+      )}
+
+      {/* PARA band — what the Rings view reads position from */}
+      {isScribble && onSetPara && (
+        <div className="space-y-1.5 pt-1 border-t border-border/50">
+          <p className="text-[10px] font-bold font-mono text-muted-foreground uppercase">
+            Filed under
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {RING_BANDS.map((band) => {
+              const current = (selectedNode.para ?? 'uncategorised') as RingBand;
+              const isCurrent = current === band;
+              return (
+                <button
+                  key={band}
+                  onClick={() => onSetPara(selectedNode.id, band === 'uncategorised' ? null : band)}
+                  aria-pressed={isCurrent}
+                  className={`text-[10px] px-2 py-0.5 rounded-md border transition-colors ${
+                    isCurrent
+                      ? 'bg-accent text-accent-foreground border-border'
+                      : 'bg-muted/40 hover:bg-muted/80 text-muted-foreground hover:text-foreground border-border/40'
+                  }`}
+                >
+                  {BAND_LABELS[band]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* 1-Hop Neighbors List */}

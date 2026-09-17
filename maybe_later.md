@@ -277,3 +277,90 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
     rather than silently showing a stale answer.
 - **Not blocked on anything.** It is a feature-sized piece of work, not a
   dependency problem.
+
+---
+
+### 15. Retire the Knowledge Graph's Node-Position Cache
+
+- **Status**: Deferred — superseded, not yet removed
+- **Area**: Native frontend (`native/src/components/knowledge/graph/graphStorage.ts` —
+  `loadNodePositions`, `saveNodePositions`, `clearNodePositions`, and the
+  `GraphPositionMap` type; the "Reset layout" affordance in
+  `KnowledgeGraphView`)
+- **Original Context**:
+  - The force-directed view's layout is seeded from `Math.random` and
+    settles differently on every run, so coordinates were persisted to
+    localStorage to stop the graph rearranging itself between sessions. The
+    cache exists to paper over an irreproducible layout.
+  - The Rings view removed that need for itself: `ringsLayout` is seeded,
+    runs a fixed iteration count with no convergence exit, and produces
+    bit-identical coordinates for the same vault (`ringsLayout.test.ts`).
+    Rings therefore reads and writes none of this.
+- **Concept & Implementation Blueprint**:
+  - Not removed in the same change that introduced Rings, deliberately: the
+    force view still depends on the cache, and deleting it while that view
+    is the fallback would regress the mode the change promised not to touch.
+  - The removal is unblocked once the force view either adopts a seeded
+    layout of its own or stops being offered. At that point delete the three
+    functions, the `POSITIONS_STORAGE_KEY` entry, the `GraphPositionMap`
+    type, and the "Reset layout" confirmation flow that exists only to clear
+    it — reproducibility makes a reset button meaningless, since there is
+    nothing to reset to.
+  - Leave the stored key unread rather than migrating it; a stale
+    localStorage entry costs nothing and nothing else reads that key.
+
+---
+
+### 16. Action-Item Extraction for Meetings, Voice Notes and Scribbles
+
+- **Status**: Deferred — the TODOs surface exists, three of its four
+  promised feeds do not
+- **Area**: Native backend (`native/src-tauri/src/meetings/summary/`,
+  `native/src-tauri/src/pipeline/enrichment.rs`,
+  `native/src-tauri/src/talkback/`), feeding
+  `vault::VaultManager::record_extracted_todos`
+- **Original Context**:
+  - An audit of every capture path found exactly one structured
+    action-item extractor in the codebase: `ContextActionItem` in
+    `capture/web/context.rs`, with both an LLM and a deterministic
+    cue-scanning implementation. It serves **browser captures** — AI
+    conversations, GitHub issues, pull requests, discussions — reachable
+    from the Captures surface via `analyze_capture_context`. It is now
+    wired through to persisted todos.
+  - It is **not** a meetings extractor, despite being the one the TODOs
+    brief expected to reuse for meetings. The remaining sources have no
+    extraction at all:
+    - **Meetings** — "Action Items" is a prose heading in a summary
+      template (`SectionStyle::Checklist` in `summary/templates.rs`). The
+      model writes checkboxes into Markdown; nothing parses them back out,
+      so no meeting has ever produced a structured commitment.
+    - **Voice notes** — `pipeline::enrichment` derives title, summary,
+      topics, entities, concepts and questions. Action items are not among
+      them.
+    - **Scribbles** — the same enrichment pass, the same absence.
+    - **Talkback** — no action-item concept anywhere in the module.
+- **Concept & Implementation Blueprint**:
+  - The write side is done and shared: `record_extracted_todos` takes
+    `(title, kind, source_ref, para, captured_at)` and is idempotent on
+    `(source id, title)`, so re-running an extractor over the same source
+    cannot deal a second copy. Each new extractor only has to produce
+    candidates.
+  - **Meetings** are the highest-value and the most structural work. The
+    honest fix is a structured extraction pass beside the summary rather
+    than parsing checkboxes back out of generated prose — the report is a
+    rendering, and reverse-engineering data from it will break the first
+    time the template's wording changes. The pass wants `source_turn_ordinals`
+    the way `ContextActionItem` has them, so a todo can open the meeting at
+    the moment the commitment was made.
+  - **Voice notes and scribbles** share `enrich_scribble`'s single LLM
+    call. Adding an `action_items` array to the existing analysis contract
+    is cheaper than a second pass, and a deterministic cue scanner (the
+    shape `extract_deterministic_context` already uses) must back it, or
+    the feature silently stops existing whenever no model is configured —
+    which is Vox's zero-cost default.
+  - **PARA** comes free for these two: a scribble carries a band, so the
+    todo inherits it. Meetings and web captures have no band, so their
+    todos arrive uncategorised until the source is filed.
+  - Watch the false-positive rate. "I should probably look at that" is not
+    a commitment, and a TODOs surface that fills with non-commitments is
+    one the user stops opening — which is worse than one with gaps in it.

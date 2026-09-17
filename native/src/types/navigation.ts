@@ -13,6 +13,7 @@ export type MainTabType =
   | 'capture'
   | 'meetings'
   | 'scribble'
+  | 'todos'
   | 'graph'
   | 'files'
   | 'captures'

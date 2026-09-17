@@ -22,12 +22,13 @@ describe('NativeSidebar', () => {
   it('renders primary destinations in expected order and does not include Home or capture actions', () => {
     render(<NativeSidebar {...defaultProps} />);
 
-    // Primary items: Voice notes, Scribbles, Knowledge Graph
+    // Primary items: Voice notes, Scribbles, TODOs, Knowledge Graph
     const buttons = screen.getAllByRole('button');
     const buttonLabels = buttons.map((b) => b.getAttribute('aria-label')).filter(Boolean);
     const expectedOrder = [
       'Voice Notes',
       'Scribbles',
+      'TODOs',
       'Knowledge Graph',
     ];
     let lastIdx = -1;
@@ -75,6 +76,9 @@ describe('NativeSidebar', () => {
 
     await user.click(screen.getByRole('button', { name: 'Scribbles' }));
     expect(setActiveTab).toHaveBeenCalledWith('scribble');
+
+    await user.click(screen.getByRole('button', { name: 'TODOs' }));
+    expect(setActiveTab).toHaveBeenCalledWith('todos');
 
     await user.click(screen.getByRole('button', { name: 'Knowledge Graph' }));
     expect(setActiveTab).toHaveBeenCalledWith('graph');

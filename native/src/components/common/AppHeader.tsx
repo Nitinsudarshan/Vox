@@ -13,6 +13,7 @@ const TAB_LABELS: Record<MainTabType, string> = {
   capture: 'Voice Notes',
   meetings: 'Meetings',
   scribble: 'Scribbles',
+  todos: 'TODOs',
   graph: 'Knowledge Graph',
   files: 'Files & Docs',
   captures: 'Web Capture',

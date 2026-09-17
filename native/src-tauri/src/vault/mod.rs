@@ -37,8 +37,19 @@ pub const CORRECTIONS_DIR: &str = "corrections";
 pub mod correction;
 pub use correction::CorrectionRecord;
 
+pub mod para;
+pub use para::*;
+
+pub mod kanban;
+pub use kanban::{
+    ExtractedTodo, KanbanCard, TodoSourceKind, TodoSourceRef, KANBAN_STATUSES,
+};
+
 pub mod scribble;
 pub use scribble::*;
+
+pub mod scribble_index;
+pub use scribble_index::{RefreshStats, ScribbleIndex, ScribbleIndexError};
 
 pub mod trash;
 pub use trash::*;
@@ -56,6 +67,9 @@ pub enum VaultError {
 
     #[error("Note not found: {0}")]
     NotFound(String),
+
+    #[error("Scribble index error: {0}")]
+    IndexError(#[from] ScribbleIndexError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,19 +139,6 @@ impl VaultNote {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct KanbanCard {
-    pub id: String,
-    pub title: String,
-    pub assignee: String,
-    pub status: String, // "todo", "in_progress", "done"
-    pub priority: String,
-    pub due_date: Option<String>,
-    pub created_at: String,
-    pub description: String,
-    pub source_note_id: Option<String>,
-}
-
 pub struct VaultManager {
     // A `Mutex` (rather than a plain `PathBuf`) so the vault root can be
     // repointed at runtime — e.g. when the user picks a folder via the
@@ -146,13 +147,28 @@ pub struct VaultManager {
     // only needed `&self`, so this is the only change needed to make that
     // safe; no call site elsewhere has to change.
     vault_dir: Mutex<PathBuf>,
+
+    /// Parse cache over `scribbles/`. Reading the graph goes through this
+    /// rather than re-walking the directory; every write path below
+    /// invalidates it.
+    scribble_index: ScribbleIndex,
 }
 
 impl VaultManager {
     pub fn new(vault_dir: PathBuf) -> Self {
         Self {
             vault_dir: Mutex::new(vault_dir),
+            scribble_index: ScribbleIndex::new(),
         }
+    }
+
+    /// The scribble parse cache, for callers that need to report on it.
+    pub fn scribble_index(&self) -> &ScribbleIndex {
+        &self.scribble_index
+    }
+
+    fn scribbles_dir(&self) -> PathBuf {
+        self.vault_dir().join("scribbles")
     }
 
     pub fn vault_dir(&self) -> PathBuf {
@@ -164,6 +180,8 @@ impl VaultManager {
     /// migrated, or deleted (see docs/decisions.md).
     pub fn set_vault_dir(&self, new_dir: PathBuf) {
         *self.vault_dir.lock_or_recover() = new_dir;
+        // Entries cached from the old root describe a different vault.
+        self.scribble_index.invalidate();
     }
 
     pub fn init(&self) -> Result<(), VaultError> {
@@ -204,17 +222,111 @@ impl VaultManager {
             .vault_dir()
             .join("kanban")
             .join(format!("{}.md", card.id));
-        let due_date_str = card.due_date.as_deref().unwrap_or("");
-        let source_id_str = card.source_note_id.as_deref().unwrap_or("");
 
-        let frontmatter = format!(
-            "---\nid: \"{}\"\ntitle: \"{}\"\nassignee: \"{}\"\nstatus: \"{}\"\npriority: \"{}\"\ndue_date: \"{}\"\ncreated_at: \"{}\"\nsource_note_id: \"{}\"\n---\n\n{}",
-            card.id, card.title, card.assignee, card.status, card.priority, due_date_str, card.created_at, source_id_str, card.description
-        );
-
-        fs::write(&file_path, frontmatter)?;
+        fs::write(&file_path, card.format_markdown())?;
         tracing::info!("Saved Kanban card to {:?}", file_path);
         Ok(file_path)
+    }
+
+    /// One card by id.
+    pub fn get_kanban_card(&self, id: &str) -> Result<KanbanCard, VaultError> {
+        self.init()?;
+        let file_path = self.vault_dir().join("kanban").join(format!("{}.md", id));
+        if !file_path.exists() {
+            return Err(VaultError::NotFound(id.to_string()));
+        }
+        let content = fs::read_to_string(&file_path)?;
+        KanbanCard::parse_markdown(&content)
+            .ok_or_else(|| VaultError::FrontmatterError(format!("Failed to parse card {}", id)))
+    }
+
+    /// Records extracted action items as todos, skipping ones already on
+    /// the board.
+    ///
+    /// Re-analysing a capture is a normal thing to do — the user presses
+    /// the button again after configuring a better model — and it must not
+    /// deal a second copy of every action item. Identity is the source
+    /// reference plus the exact title, which is what a re-run reproduces
+    /// when nothing has changed. Returns the cards it actually created.
+    pub fn record_extracted_todos(
+        &self,
+        candidates: &[ExtractedTodo],
+    ) -> Result<Vec<KanbanCard>, VaultError> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let existing = self.list_kanban_cards()?;
+        let already: std::collections::HashSet<(String, String)> = existing
+            .iter()
+            .map(|c| {
+                (
+                    c.source_ref
+                        .as_ref()
+                        .map(|r| r.id.clone())
+                        .or_else(|| c.source_note_id.clone())
+                        .unwrap_or_default(),
+                    c.title.trim().to_lowercase(),
+                )
+            })
+            .collect();
+
+        let mut created = Vec::new();
+        for candidate in candidates {
+            let trimmed = candidate.title.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if already.contains(&(candidate.source_ref.id.clone(), trimmed.to_lowercase())) {
+                continue;
+            }
+
+            let card = KanbanCard::from_source(
+                trimmed,
+                candidate.kind,
+                candidate.source_ref.clone(),
+                candidate.para,
+                candidate.captured_at.clone(),
+            );
+            self.save_kanban_card(&card)?;
+            created.push(card);
+        }
+
+        tracing::info!(
+            candidates = candidates.len(),
+            created = created.len(),
+            "recorded extracted action items as todos"
+        );
+        Ok(created)
+    }
+
+    /// Moves a card to another column.
+    ///
+    /// Rejects a status that is not one of the three columns rather than
+    /// writing it: a card in a column the board does not render would
+    /// simply vanish from the surface with no error anywhere.
+    pub fn set_kanban_status(&self, id: &str, status: &str) -> Result<KanbanCard, VaultError> {
+        if !KANBAN_STATUSES.contains(&status) {
+            return Err(VaultError::FrontmatterError(format!(
+                "Unknown Kanban status: {}",
+                status
+            )));
+        }
+        let mut card = self.get_kanban_card(id)?;
+        card.status = status.to_string();
+        self.save_kanban_card(&card)?;
+        Ok(card)
+    }
+
+    /// Removes a card from the board for good.
+    pub fn delete_kanban_card(&self, id: &str) -> Result<(), VaultError> {
+        self.init()?;
+        let file_path = self.vault_dir().join("kanban").join(format!("{}.md", id));
+        if file_path.exists() {
+            fs::remove_file(&file_path)?;
+            tracing::info!("Deleted Kanban card {:?}", file_path);
+        }
+        Ok(())
     }
 
     pub fn get_note(&self, id: &str) -> Result<VaultNote, VaultError> {
@@ -606,81 +718,18 @@ impl VaultManager {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "md") {
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Some(card) = Self::parse_kanban_card_md(&content) {
+                    if let Some(card) = KanbanCard::parse_markdown(&content) {
                         cards.push(card);
                     }
                 }
             }
         }
 
+        // `read_dir` order is filesystem-dependent; the surface groups and
+        // sorts these itself, but a stable base order keeps two reads of an
+        // unchanged board identical.
+        cards.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(cards)
-    }
-
-    fn parse_kanban_card_md(content: &str) -> Option<KanbanCard> {
-        let parts: Vec<&str> = content.split("---").collect();
-        if parts.len() < 3 {
-            return None;
-        }
-
-        let frontmatter = parts[1];
-        let description = parts[2..].join("---").trim().to_string();
-
-        let mut id = String::new();
-        let mut title = String::new();
-        let mut assignee = String::new();
-        let mut status = "todo".to_string();
-        let mut priority = "medium".to_string();
-        let mut due_date = None;
-        let mut created_at = String::new();
-        let mut source_note_id = None;
-
-        /// Frontmatter values are quoted; the value is what's left after the
-        /// key, unquoted and trimmed.
-        fn value_of(line: &str, key: &str) -> Option<String> {
-            line.strip_prefix(key)
-                .map(|rest| rest.trim().trim_matches('"').to_string())
-        }
-
-        for line in frontmatter.lines() {
-            let line = line.trim();
-            if let Some(v) = value_of(line, "id:") {
-                id = v;
-            } else if let Some(v) = value_of(line, "title:") {
-                title = v;
-            } else if let Some(v) = value_of(line, "assignee:") {
-                assignee = v;
-            } else if let Some(v) = value_of(line, "status:") {
-                status = v;
-            } else if let Some(v) = value_of(line, "priority:") {
-                priority = v;
-            } else if let Some(v) = value_of(line, "due_date:") {
-                if !v.is_empty() {
-                    due_date = Some(v);
-                }
-            } else if let Some(v) = value_of(line, "created_at:") {
-                created_at = v;
-            } else if let Some(v) = value_of(line, "source_note_id:") {
-                if !v.is_empty() {
-                    source_note_id = Some(v);
-                }
-            }
-        }
-
-        if id.is_empty() || title.is_empty() {
-            return None;
-        }
-
-        Some(KanbanCard {
-            id,
-            title,
-            assignee,
-            status,
-            priority,
-            due_date,
-            created_at,
-            description,
-            source_note_id,
-        })
     }
 
     pub fn save_scribble(&self, scribble: &Scribble) -> Result<PathBuf, VaultError> {
@@ -691,6 +740,9 @@ impl VaultManager {
             .join(format!("{}.md", scribble.id));
         let content = scribble.format_markdown();
         fs::write(&file_path, content)?;
+        // A writer knows it changed the file; do not make the next read
+        // infer it from a timestamp whose granularity we do not control.
+        self.scribble_index.invalidate();
         tracing::info!("Saved scribble note to {:?}", file_path);
         Ok(file_path)
     }
@@ -715,36 +767,13 @@ impl VaultManager {
         Ok(scribble)
     }
 
+    /// Every active scribble, newest first.
+    ///
+    /// Served from the scribble index: the directory is stat'd, but only
+    /// files whose mtime or size moved are read and re-parsed.
     pub fn list_scribbles(&self) -> Result<Vec<Scribble>, VaultError> {
         self.init()?;
-        let scribbles_dir = self.vault_dir().join("scribbles");
-        let mut scribbles = Vec::new();
-
-        if !scribbles_dir.exists() {
-            return Ok(scribbles);
-        }
-
-        for entry in fs::read_dir(&scribbles_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "md") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Some(scribble) = Scribble::parse_markdown(&content) {
-                        scribbles.push(scribble);
-                    }
-                }
-            }
-        }
-
-        // Clean any dangling relationships pointing to merged, deleted, or trashed scribbles
-        let valid_ids: std::collections::HashSet<String> = scribbles.iter().map(|s| s.id.clone()).collect();
-        for s in &mut scribbles {
-            s.relationships.retain(|r| valid_ids.contains(&r.target_id));
-        }
-
-        // Sort newest updated / created first
-        scribbles.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        Ok(scribbles)
+        Ok(self.scribble_index.scribbles(&self.scribbles_dir())?)
     }
 
     pub fn update_scribble(&self, scribble: &Scribble) -> Result<Scribble, VaultError> {
@@ -752,6 +781,24 @@ impl VaultManager {
         updated.updated_at = chrono::Utc::now().to_rfc3339();
         self.save_scribble(&updated)?;
         Ok(updated)
+    }
+
+    /// Files a scribble under a PARA band, or clears the band it had.
+    ///
+    /// The band is stored on the scribble itself because everything derived
+    /// from it — graph nodes, todos — inherits rather than declares one.
+    /// Clearing returns the scribble to uncategorised, which is a state the
+    /// UI shows rather than a gap it fills in.
+    pub fn set_scribble_para(
+        &self,
+        id: &str,
+        band: Option<ParaBand>,
+    ) -> Result<Scribble, VaultError> {
+        let mut scribble = self.get_scribble(id)?;
+        scribble.para = band;
+        scribble.updated_at = chrono::Utc::now().to_rfc3339();
+        self.save_scribble(&scribble)?;
+        Ok(scribble)
     }
 
     pub fn delete_scribble(&self, id: &str) -> Result<(), VaultError> {
@@ -762,6 +809,7 @@ impl VaultManager {
             .join(format!("{}.md", id));
         if file_path.exists() {
             fs::remove_file(&file_path)?;
+            self.scribble_index.invalidate();
             tracing::info!("Deleted scribble file {:?}", file_path);
         }
         Ok(())
@@ -1529,9 +1577,18 @@ impl VaultManager {
         })
     }
 
-    pub fn get_knowledge_graph(&self, filter: Option<&GraphFilter>) -> Result<KnowledgeGraphData, VaultError> {
-        let scribbles = self.list_scribbles()?;
-        Ok(KnowledgeGraphData::from_scribbles(&scribbles, filter))
+    /// The knowledge graph, served from the scribble index.
+    ///
+    /// The graph itself — nodes, edges and PageRank — is cached with the
+    /// parsed scribbles and rebuilt only when the vault changes. `filter`
+    /// is applied to that cached graph, so changing a filter costs a clone
+    /// and a retain, not a vault walk.
+    pub fn get_knowledge_graph(
+        &self,
+        filter: Option<&GraphFilter>,
+    ) -> Result<KnowledgeGraphData, VaultError> {
+        self.init()?;
+        Ok(self.scribble_index.graph(&self.scribbles_dir(), filter)?)
     }
 
     pub fn add_scribble_relationship(
@@ -1575,6 +1632,7 @@ impl VaultManager {
                 fs::write(&meta_path, serde_json::to_string_pretty(&trash_item).map_err(|e| VaultError::FrontmatterError(e.to_string()))?)?;
                 if src_md.exists() {
                     fs::rename(&src_md, &dest_md)?;
+                    self.scribble_index.invalidate();
                 }
 
                 // Clean up any relationships in remaining active scribbles pointing to this trashed scribble
@@ -1652,6 +1710,7 @@ impl VaultManager {
                 let active_md = self.vault_dir().join("scribbles").join(format!("{}.md", item.original_id));
                 if trash_md.exists() {
                     fs::rename(&trash_md, &active_md)?;
+                    self.scribble_index.invalidate();
                 }
             }
             "voice_note" | "note" => {
@@ -2288,6 +2347,152 @@ mod tests {
         let _ = fs::remove_dir_all(dir_b);
     }
 
+    /// Extraction runs again every time the user re-analyses a capture.
+    /// Fails if a second run deals a second copy of every action item.
+    #[test]
+    fn recording_the_same_extracted_items_twice_creates_them_once() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let candidates = vec![
+            ExtractedTodo {
+                title: "Send the pricing deck".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_1".to_string(),
+                    turn_ordinal: Some(4),
+                    label: Some("Pricing thread".to_string()),
+                },
+                para: None,
+                captured_at: None,
+            },
+            ExtractedTodo {
+                title: "Book the room".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_1".to_string(),
+                    turn_ordinal: Some(9),
+                    label: Some("Pricing thread".to_string()),
+                },
+                para: None,
+                captured_at: None,
+            },
+        ];
+
+        let first = manager.record_extracted_todos(&candidates).unwrap();
+        assert_eq!(first.len(), 2);
+
+        let second = manager.record_extracted_todos(&candidates).unwrap();
+        assert!(second.is_empty(), "re-analysis must not duplicate todos");
+        assert_eq!(manager.list_kanban_cards().unwrap().len(), 2);
+
+        // The same wording from a *different* capture is a different
+        // commitment and must still be recorded.
+        let elsewhere = vec![ExtractedTodo {
+            title: "Send the pricing deck".to_string(),
+            kind: TodoSourceKind::WebCapture,
+            source_ref: TodoSourceRef {
+                id: "capture_2".to_string(),
+                turn_ordinal: None,
+                label: None,
+            },
+            para: None,
+            captured_at: None,
+        }];
+        assert_eq!(manager.record_extracted_todos(&elsewhere).unwrap().len(), 1);
+        assert_eq!(manager.list_kanban_cards().unwrap().len(), 3);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Provenance has to survive the trip to disk, or the surface cannot
+    /// link a todo back to the capture it came from.
+    #[test]
+    fn an_extracted_todo_keeps_the_turn_it_came_from() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        manager
+            .record_extracted_todos(&[ExtractedTodo {
+                title: "Follow up with legal".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_9".to_string(),
+                    turn_ordinal: Some(17),
+                    label: Some("Contract review".to_string()),
+                },
+                para: Some(ParaBand::Projects),
+                captured_at: Some("2026-02-03T00:00:00Z".to_string()),
+            }])
+            .unwrap();
+
+        let cards = manager.list_kanban_cards().unwrap();
+        assert_eq!(cards.len(), 1);
+        let card = &cards[0];
+        assert_eq!(card.source_kind, Some(TodoSourceKind::WebCapture));
+        assert_eq!(card.para, Some(ParaBand::Projects));
+        assert_eq!(card.captured_at.as_deref(), Some("2026-02-03T00:00:00Z"));
+        let source_ref = card.source_ref.as_ref().unwrap();
+        assert_eq!(source_ref.id, "capture_9");
+        assert_eq!(source_ref.turn_ordinal, Some(17));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// An extractor that returns an empty string must not create a blank
+    /// card — a todo with no text is indistinguishable from a bug.
+    #[test]
+    fn a_blank_extracted_item_creates_nothing() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let created = manager
+            .record_extracted_todos(&[ExtractedTodo {
+                title: "   ".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_1".to_string(),
+                    turn_ordinal: None,
+                    label: None,
+                },
+                para: None,
+                captured_at: None,
+            }])
+            .unwrap();
+
+        assert!(created.is_empty());
+        assert!(manager.list_kanban_cards().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Rejects a column the board does not render, rather than writing a
+    /// card that would silently vanish from every view.
+    #[test]
+    fn an_unknown_kanban_status_is_refused() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let card = KanbanCard::new_manual("Something to do");
+        manager.save_kanban_card(&card).unwrap();
+
+        assert!(manager.set_kanban_status(&card.id, "blocked").is_err());
+        assert_eq!(
+            manager.get_kanban_card(&card.id).unwrap().status,
+            "todo",
+            "a refused move must not have been written"
+        );
+
+        let moved = manager.set_kanban_status(&card.id, "in_progress").unwrap();
+        assert_eq!(moved.status, "in_progress");
+        assert_eq!(
+            manager.get_kanban_card(&card.id).unwrap().status,
+            "in_progress"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
     #[test]
     fn test_kanban_card_serialization() {
         let card = KanbanCard {
@@ -2300,6 +2505,10 @@ mod tests {
             created_at: "2026-08-19T01:50:00Z".to_string(),
             description: "Scaffold Rust domain modules per project rules.".to_string(),
             source_note_id: Some("note_001".to_string()),
+            source_kind: None,
+            source_ref: None,
+            para: None,
+            captured_at: None,
         };
 
         let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
@@ -2345,6 +2554,10 @@ mod tests {
             created_at: "2026-08-30T09:00:00Z".to_string(),
             description: "No owner, no deadline, no source.".to_string(),
             source_note_id: None,
+            source_kind: None,
+            source_ref: None,
+            para: None,
+            captured_at: None,
         };
 
         let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
