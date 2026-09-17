@@ -1147,6 +1147,34 @@ pub async fn update_scribble(
     Ok(updated)
 }
 
+/// Files a scribble under a PARA band, or clears it when `para` is absent.
+///
+/// An unrecognised band is rejected rather than silently dropped: a caller
+/// asking for a band that does not exist has a bug, and quietly filing the
+/// thought as uncategorised would hide it.
+#[tauri::command]
+pub async fn set_scribble_para(
+    app: AppHandle,
+    id: String,
+    para: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Scribble, CommandError> {
+    let band = match para.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(raw) => Some(crate::vault::ParaBand::from_str_opt(raw).ok_or_else(|| {
+            CommandError::new("INVALID_INPUT", &format!("Unknown PARA band: {}", raw))
+        })?),
+    };
+
+    let updated = state
+        .vault
+        .set_scribble_para(&id, band)
+        .map_err(|e| CommandError::new("VAULT_UPDATE_FAILED", &e.to_string()))?;
+
+    let _ = app.emit(SCRIBBLE_SAVED_EVENT, &updated);
+    Ok(updated)
+}
+
 #[tauri::command]
 pub async fn delete_scribble(
     id: String,

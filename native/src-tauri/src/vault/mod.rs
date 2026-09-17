@@ -37,8 +37,14 @@ pub const CORRECTIONS_DIR: &str = "corrections";
 pub mod correction;
 pub use correction::CorrectionRecord;
 
+pub mod para;
+pub use para::*;
+
 pub mod scribble;
 pub use scribble::*;
+
+pub mod scribble_index;
+pub use scribble_index::{RefreshStats, ScribbleIndex, ScribbleIndexError};
 
 pub mod trash;
 pub use trash::*;
@@ -56,6 +62,9 @@ pub enum VaultError {
 
     #[error("Note not found: {0}")]
     NotFound(String),
+
+    #[error("Scribble index error: {0}")]
+    IndexError(#[from] ScribbleIndexError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -146,13 +155,28 @@ pub struct VaultManager {
     // only needed `&self`, so this is the only change needed to make that
     // safe; no call site elsewhere has to change.
     vault_dir: Mutex<PathBuf>,
+
+    /// Parse cache over `scribbles/`. Reading the graph goes through this
+    /// rather than re-walking the directory; every write path below
+    /// invalidates it.
+    scribble_index: ScribbleIndex,
 }
 
 impl VaultManager {
     pub fn new(vault_dir: PathBuf) -> Self {
         Self {
             vault_dir: Mutex::new(vault_dir),
+            scribble_index: ScribbleIndex::new(),
         }
+    }
+
+    /// The scribble parse cache, for callers that need to report on it.
+    pub fn scribble_index(&self) -> &ScribbleIndex {
+        &self.scribble_index
+    }
+
+    fn scribbles_dir(&self) -> PathBuf {
+        self.vault_dir().join("scribbles")
     }
 
     pub fn vault_dir(&self) -> PathBuf {
@@ -164,6 +188,8 @@ impl VaultManager {
     /// migrated, or deleted (see docs/decisions.md).
     pub fn set_vault_dir(&self, new_dir: PathBuf) {
         *self.vault_dir.lock_or_recover() = new_dir;
+        // Entries cached from the old root describe a different vault.
+        self.scribble_index.invalidate();
     }
 
     pub fn init(&self) -> Result<(), VaultError> {
@@ -691,6 +717,9 @@ impl VaultManager {
             .join(format!("{}.md", scribble.id));
         let content = scribble.format_markdown();
         fs::write(&file_path, content)?;
+        // A writer knows it changed the file; do not make the next read
+        // infer it from a timestamp whose granularity we do not control.
+        self.scribble_index.invalidate();
         tracing::info!("Saved scribble note to {:?}", file_path);
         Ok(file_path)
     }
@@ -715,36 +744,13 @@ impl VaultManager {
         Ok(scribble)
     }
 
+    /// Every active scribble, newest first.
+    ///
+    /// Served from the scribble index: the directory is stat'd, but only
+    /// files whose mtime or size moved are read and re-parsed.
     pub fn list_scribbles(&self) -> Result<Vec<Scribble>, VaultError> {
         self.init()?;
-        let scribbles_dir = self.vault_dir().join("scribbles");
-        let mut scribbles = Vec::new();
-
-        if !scribbles_dir.exists() {
-            return Ok(scribbles);
-        }
-
-        for entry in fs::read_dir(&scribbles_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "md") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Some(scribble) = Scribble::parse_markdown(&content) {
-                        scribbles.push(scribble);
-                    }
-                }
-            }
-        }
-
-        // Clean any dangling relationships pointing to merged, deleted, or trashed scribbles
-        let valid_ids: std::collections::HashSet<String> = scribbles.iter().map(|s| s.id.clone()).collect();
-        for s in &mut scribbles {
-            s.relationships.retain(|r| valid_ids.contains(&r.target_id));
-        }
-
-        // Sort newest updated / created first
-        scribbles.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        Ok(scribbles)
+        Ok(self.scribble_index.scribbles(&self.scribbles_dir())?)
     }
 
     pub fn update_scribble(&self, scribble: &Scribble) -> Result<Scribble, VaultError> {
@@ -752,6 +758,24 @@ impl VaultManager {
         updated.updated_at = chrono::Utc::now().to_rfc3339();
         self.save_scribble(&updated)?;
         Ok(updated)
+    }
+
+    /// Files a scribble under a PARA band, or clears the band it had.
+    ///
+    /// The band is stored on the scribble itself because everything derived
+    /// from it — graph nodes, todos — inherits rather than declares one.
+    /// Clearing returns the scribble to uncategorised, which is a state the
+    /// UI shows rather than a gap it fills in.
+    pub fn set_scribble_para(
+        &self,
+        id: &str,
+        band: Option<ParaBand>,
+    ) -> Result<Scribble, VaultError> {
+        let mut scribble = self.get_scribble(id)?;
+        scribble.para = band;
+        scribble.updated_at = chrono::Utc::now().to_rfc3339();
+        self.save_scribble(&scribble)?;
+        Ok(scribble)
     }
 
     pub fn delete_scribble(&self, id: &str) -> Result<(), VaultError> {
@@ -762,6 +786,7 @@ impl VaultManager {
             .join(format!("{}.md", id));
         if file_path.exists() {
             fs::remove_file(&file_path)?;
+            self.scribble_index.invalidate();
             tracing::info!("Deleted scribble file {:?}", file_path);
         }
         Ok(())
@@ -1529,9 +1554,18 @@ impl VaultManager {
         })
     }
 
-    pub fn get_knowledge_graph(&self, filter: Option<&GraphFilter>) -> Result<KnowledgeGraphData, VaultError> {
-        let scribbles = self.list_scribbles()?;
-        Ok(KnowledgeGraphData::from_scribbles(&scribbles, filter))
+    /// The knowledge graph, served from the scribble index.
+    ///
+    /// The graph itself — nodes, edges and PageRank — is cached with the
+    /// parsed scribbles and rebuilt only when the vault changes. `filter`
+    /// is applied to that cached graph, so changing a filter costs a clone
+    /// and a retain, not a vault walk.
+    pub fn get_knowledge_graph(
+        &self,
+        filter: Option<&GraphFilter>,
+    ) -> Result<KnowledgeGraphData, VaultError> {
+        self.init()?;
+        Ok(self.scribble_index.graph(&self.scribbles_dir(), filter)?)
     }
 
     pub fn add_scribble_relationship(
@@ -1575,6 +1609,7 @@ impl VaultManager {
                 fs::write(&meta_path, serde_json::to_string_pretty(&trash_item).map_err(|e| VaultError::FrontmatterError(e.to_string()))?)?;
                 if src_md.exists() {
                     fs::rename(&src_md, &dest_md)?;
+                    self.scribble_index.invalidate();
                 }
 
                 // Clean up any relationships in remaining active scribbles pointing to this trashed scribble
@@ -1652,6 +1687,7 @@ impl VaultManager {
                 let active_md = self.vault_dir().join("scribbles").join(format!("{}.md", item.original_id));
                 if trash_md.exists() {
                     fs::rename(&trash_md, &active_md)?;
+                    self.scribble_index.invalidate();
                 }
             }
             "voice_note" | "note" => {

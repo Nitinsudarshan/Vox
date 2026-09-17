@@ -432,6 +432,7 @@ pub fn run() {
             commands::promote_voice_note_to_scribble,
             commands::create_file_scribble,
             commands::update_scribble,
+            commands::set_scribble_para,
             commands::delete_scribble,
             commands::merge_scribbles,
 

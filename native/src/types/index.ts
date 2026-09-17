@@ -40,6 +40,8 @@ export interface VaultFile {
   tags: string[];
   topics: string[];
   entities: string[];
+  /** PARA band this thought is filed under. `null` means uncategorised. */
+  para?: ParaBand | null;
   relationships: ScribbleRelationship[];
   ai_metadata: ScribbleAiMetadata;
   linked_scribble_id?: string | null;
@@ -814,6 +816,16 @@ export interface Scribble {
   ai_metadata: ScribbleAiMetadata;
 }
 
+/**
+ * The four PARA bands, innermost (most active) first.
+ *
+ * The array order is the ring order the Rings view draws, so anything that
+ * needs to walk the bands reads this rather than re-listing them.
+ */
+export const PARA_BANDS = ['projects', 'areas', 'resources', 'archive'] as const;
+
+export type ParaBand = (typeof PARA_BANDS)[number];
+
 export interface KnowledgeNode {
   id: string;
   node_type: 'scribble' | 'topic' | 'entity' | 'source' | 'project' | 'document' | 'task' | 'voice_note' | 'person' | 'organization' | 'place' | string;
@@ -824,6 +836,19 @@ export interface KnowledgeNode {
   source_type?: string | null;
   created_at?: string | null;
   resolved?: boolean;
+  /**
+   * Structural importance over the whole graph, computed at index time.
+   * Raw PageRank, so it sums to 1 across the unfiltered graph — callers
+   * that want a radius normalise against the largest value in view.
+   */
+  pagerank?: number;
+  /**
+   * PARA band. Only scribbles carry one; topics, entities and source
+   * records are `null` and belong to the uncategorised region.
+   */
+  para?: ParaBand | null;
+  /** When the underlying object last changed, where that is known. */
+  updated_at?: string | null;
 }
 
 export interface KnowledgeEdge {
