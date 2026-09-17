@@ -730,6 +730,51 @@ pub async fn get_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, CommandE
     Ok(devices)
 }
 
+/// Creates a todo typed on the TODOs page.
+///
+/// An empty title is rejected rather than stored: a blank card is
+/// indistinguishable from a bug, and the voice path depends on this
+/// refusal so that a failed transcription cannot create an empty todo.
+#[tauri::command]
+pub async fn create_manual_todo(
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<KanbanCard, CommandError> {
+    if title.trim().is_empty() {
+        return Err(CommandError::new(
+            "INVALID_INPUT",
+            "A todo needs a title",
+        ));
+    }
+
+    let card = KanbanCard::new_manual(&title);
+    state
+        .vault
+        .save_kanban_card(&card)
+        .map_err(|e| CommandError::new("VAULT_WRITE_FAILED", &e.to_string()))?;
+    Ok(card)
+}
+
+#[tauri::command]
+pub async fn set_todo_status(
+    id: String,
+    status: String,
+    state: State<'_, AppState>,
+) -> Result<KanbanCard, CommandError> {
+    state
+        .vault
+        .set_kanban_status(&id, &status)
+        .map_err(|e| CommandError::new("VAULT_UPDATE_FAILED", &e.to_string()))
+}
+
+#[tauri::command]
+pub async fn delete_todo(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    state
+        .vault
+        .delete_kanban_card(&id)
+        .map_err(|e| CommandError::new("VAULT_DELETE_FAILED", &e.to_string()))
+}
+
 #[tauri::command]
 pub async fn get_kanban_cards(state: State<'_, AppState>) -> Result<Vec<KanbanCard>, CommandError> {
     state

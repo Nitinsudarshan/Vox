@@ -40,6 +40,9 @@ pub use correction::CorrectionRecord;
 pub mod para;
 pub use para::*;
 
+pub mod kanban;
+pub use kanban::{KanbanCard, TodoSourceKind, TodoSourceRef, KANBAN_STATUSES};
+
 pub mod scribble;
 pub use scribble::*;
 
@@ -134,19 +137,6 @@ impl VaultNote {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct KanbanCard {
-    pub id: String,
-    pub title: String,
-    pub assignee: String,
-    pub status: String, // "todo", "in_progress", "done"
-    pub priority: String,
-    pub due_date: Option<String>,
-    pub created_at: String,
-    pub description: String,
-    pub source_note_id: Option<String>,
-}
-
 pub struct VaultManager {
     // A `Mutex` (rather than a plain `PathBuf`) so the vault root can be
     // repointed at runtime — e.g. when the user picks a folder via the
@@ -230,17 +220,51 @@ impl VaultManager {
             .vault_dir()
             .join("kanban")
             .join(format!("{}.md", card.id));
-        let due_date_str = card.due_date.as_deref().unwrap_or("");
-        let source_id_str = card.source_note_id.as_deref().unwrap_or("");
 
-        let frontmatter = format!(
-            "---\nid: \"{}\"\ntitle: \"{}\"\nassignee: \"{}\"\nstatus: \"{}\"\npriority: \"{}\"\ndue_date: \"{}\"\ncreated_at: \"{}\"\nsource_note_id: \"{}\"\n---\n\n{}",
-            card.id, card.title, card.assignee, card.status, card.priority, due_date_str, card.created_at, source_id_str, card.description
-        );
-
-        fs::write(&file_path, frontmatter)?;
+        fs::write(&file_path, card.format_markdown())?;
         tracing::info!("Saved Kanban card to {:?}", file_path);
         Ok(file_path)
+    }
+
+    /// One card by id.
+    pub fn get_kanban_card(&self, id: &str) -> Result<KanbanCard, VaultError> {
+        self.init()?;
+        let file_path = self.vault_dir().join("kanban").join(format!("{}.md", id));
+        if !file_path.exists() {
+            return Err(VaultError::NotFound(id.to_string()));
+        }
+        let content = fs::read_to_string(&file_path)?;
+        KanbanCard::parse_markdown(&content)
+            .ok_or_else(|| VaultError::FrontmatterError(format!("Failed to parse card {}", id)))
+    }
+
+    /// Moves a card to another column.
+    ///
+    /// Rejects a status that is not one of the three columns rather than
+    /// writing it: a card in a column the board does not render would
+    /// simply vanish from the surface with no error anywhere.
+    pub fn set_kanban_status(&self, id: &str, status: &str) -> Result<KanbanCard, VaultError> {
+        if !KANBAN_STATUSES.contains(&status) {
+            return Err(VaultError::FrontmatterError(format!(
+                "Unknown Kanban status: {}",
+                status
+            )));
+        }
+        let mut card = self.get_kanban_card(id)?;
+        card.status = status.to_string();
+        self.save_kanban_card(&card)?;
+        Ok(card)
+    }
+
+    /// Removes a card from the board for good.
+    pub fn delete_kanban_card(&self, id: &str) -> Result<(), VaultError> {
+        self.init()?;
+        let file_path = self.vault_dir().join("kanban").join(format!("{}.md", id));
+        if file_path.exists() {
+            fs::remove_file(&file_path)?;
+            tracing::info!("Deleted Kanban card {:?}", file_path);
+        }
+        Ok(())
     }
 
     pub fn get_note(&self, id: &str) -> Result<VaultNote, VaultError> {
@@ -632,81 +656,18 @@ impl VaultManager {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "md") {
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Some(card) = Self::parse_kanban_card_md(&content) {
+                    if let Some(card) = KanbanCard::parse_markdown(&content) {
                         cards.push(card);
                     }
                 }
             }
         }
 
+        // `read_dir` order is filesystem-dependent; the surface groups and
+        // sorts these itself, but a stable base order keeps two reads of an
+        // unchanged board identical.
+        cards.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(cards)
-    }
-
-    fn parse_kanban_card_md(content: &str) -> Option<KanbanCard> {
-        let parts: Vec<&str> = content.split("---").collect();
-        if parts.len() < 3 {
-            return None;
-        }
-
-        let frontmatter = parts[1];
-        let description = parts[2..].join("---").trim().to_string();
-
-        let mut id = String::new();
-        let mut title = String::new();
-        let mut assignee = String::new();
-        let mut status = "todo".to_string();
-        let mut priority = "medium".to_string();
-        let mut due_date = None;
-        let mut created_at = String::new();
-        let mut source_note_id = None;
-
-        /// Frontmatter values are quoted; the value is what's left after the
-        /// key, unquoted and trimmed.
-        fn value_of(line: &str, key: &str) -> Option<String> {
-            line.strip_prefix(key)
-                .map(|rest| rest.trim().trim_matches('"').to_string())
-        }
-
-        for line in frontmatter.lines() {
-            let line = line.trim();
-            if let Some(v) = value_of(line, "id:") {
-                id = v;
-            } else if let Some(v) = value_of(line, "title:") {
-                title = v;
-            } else if let Some(v) = value_of(line, "assignee:") {
-                assignee = v;
-            } else if let Some(v) = value_of(line, "status:") {
-                status = v;
-            } else if let Some(v) = value_of(line, "priority:") {
-                priority = v;
-            } else if let Some(v) = value_of(line, "due_date:") {
-                if !v.is_empty() {
-                    due_date = Some(v);
-                }
-            } else if let Some(v) = value_of(line, "created_at:") {
-                created_at = v;
-            } else if let Some(v) = value_of(line, "source_note_id:") {
-                if !v.is_empty() {
-                    source_note_id = Some(v);
-                }
-            }
-        }
-
-        if id.is_empty() || title.is_empty() {
-            return None;
-        }
-
-        Some(KanbanCard {
-            id,
-            title,
-            assignee,
-            status,
-            priority,
-            due_date,
-            created_at,
-            description,
-            source_note_id,
-        })
     }
 
     pub fn save_scribble(&self, scribble: &Scribble) -> Result<PathBuf, VaultError> {
@@ -2336,6 +2297,10 @@ mod tests {
             created_at: "2026-08-19T01:50:00Z".to_string(),
             description: "Scaffold Rust domain modules per project rules.".to_string(),
             source_note_id: Some("note_001".to_string()),
+            source_kind: None,
+            source_ref: None,
+            para: None,
+            captured_at: None,
         };
 
         let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
@@ -2381,6 +2346,10 @@ mod tests {
             created_at: "2026-08-30T09:00:00Z".to_string(),
             description: "No owner, no deadline, no source.".to_string(),
             source_note_id: None,
+            source_kind: None,
+            source_ref: None,
+            para: None,
+            captured_at: None,
         };
 
         let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));

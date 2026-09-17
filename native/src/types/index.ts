@@ -334,16 +334,50 @@ export interface VaultLocationInfo {
   accessible: boolean;
 }
 
+/** Where a todo came from. Absent means provenance was never recorded. */
+export type TodoSourceKind = 'meeting' | 'voice_note' | 'scribble' | 'manual' | 'talkback';
+
+/** Enough to navigate back to exactly where a todo came from. */
+export interface TodoSourceRef {
+  id: string;
+  turn_ordinal?: number | null;
+  label?: string | null;
+}
+
+export type TodoStatus = 'todo' | 'in_progress' | 'done';
+
+/** The three columns, in board order. Mirrors `KANBAN_STATUSES` in Rust. */
+export const TODO_STATUSES: TodoStatus[] = ['todo', 'in_progress', 'done'];
+
+export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
+  todo: 'To do',
+  in_progress: 'In progress',
+  done: 'Done',
+};
+
+/**
+ * A todo, as the vault stores it.
+ *
+ * Still a Kanban card on disk: the same `kanban/` directory the model
+ * always had, grown the provenance and PARA fields the TODOs surface
+ * needs. Every added field is optional, because a card written before they
+ * existed still loads.
+ */
 export interface KanbanCard {
   id: string;
   title: string;
   assignee: string;
-  status: 'todo' | 'in_progress' | 'done';
-  priority: 'high' | 'medium' | 'low';
-  due_date?: string;
+  status: TodoStatus;
+  priority: 'high' | 'medium' | 'low' | string;
+  due_date?: string | null;
   created_at: string;
   description: string;
-  source_note_id?: string;
+  source_note_id?: string | null;
+  source_kind?: TodoSourceKind | null;
+  source_ref?: TodoSourceRef | null;
+  /** Inherited from the source note; never set by hand. */
+  para?: ParaBand | null;
+  captured_at?: string | null;
 }
 
 export interface TriggerConfig {

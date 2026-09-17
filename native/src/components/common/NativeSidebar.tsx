@@ -12,6 +12,7 @@ import {
   Sparkle,
   Sliders,
   Network,
+  ListChecks,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -100,6 +101,13 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
       label: 'Scribbles',
       icon: Sparkles,
       color: 'text-amber-500',
+      activeBg: 'bg-sidebar-accent text-sidebar-accent-foreground',
+    },
+    {
+      id: 'todos',
+      label: 'TODOs',
+      icon: ListChecks,
+      color: 'text-sky-500',
       activeBg: 'bg-sidebar-accent text-sidebar-accent-foreground',
     },
     {
