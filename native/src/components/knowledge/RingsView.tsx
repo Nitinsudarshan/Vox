@@ -10,7 +10,14 @@ import {
   prefersReducedMotion,
   renderRings,
 } from './graph/ringsRenderer';
-import { RELAY_COLOR_MAP, type CameraState, type SimNode } from './graph/graphTypes';
+import {
+  edgeColorFor,
+  GHOST_EDGE_COLOR,
+  isSuggestedEdge,
+  RELAY_COLOR_MAP,
+  type CameraState,
+  type SimNode,
+} from './graph/graphTypes';
 import { GraphNodeInspector } from './graph/GraphNodeInspector';
 
 const BAND_LABELS: Record<RingBand, string> = {
@@ -294,6 +301,32 @@ export const RingsView: React.FC<RingsViewProps> = ({
         .map(asSimNode)
     : [];
 
+  /**
+   * The relationship types actually present, for the legend.
+   *
+   * Only what is on screen: a legend listing every type Vox can store would
+   * mostly describe links this vault does not have, which teaches the user
+   * to ignore it.
+   */
+  const edgeLegend = useMemo(() => {
+    const kinds = new Map<string, { color: string; suggested: boolean; count: number }>();
+    for (const edge of graphData.edges) {
+      const suggested = isSuggestedEdge(edge);
+      const label = suggested ? 'suggested' : edge.relationship.toLowerCase();
+      const existing = kinds.get(label);
+      if (existing) {
+        existing.count += 1;
+        continue;
+      }
+      kinds.set(label, {
+        color: suggested ? GHOST_EDGE_COLOR : edgeColorFor(edge.relationship),
+        suggested,
+        count: 1,
+      });
+    }
+    return [...kinds.entries()].sort((a, b) => b[1].count - a[1].count);
+  }, [graphData.edges]);
+
   const bandCounts = useMemo(() => {
     const counts = new Map<RingBand, number>(RING_BANDS.map((b) => [b, 0]));
     for (const band of layout.bands) counts.set(band.band, band.count);
@@ -358,6 +391,34 @@ export const RingsView: React.FC<RingsViewProps> = ({
           }}
           onWheel={handleWheel}
         />
+
+        {edgeLegend.length > 0 && (
+          <div className="absolute top-3 right-3 bg-card/90 backdrop-blur-xs border border-border/80 rounded-lg px-2.5 py-2 space-y-1 max-w-[190px] pointer-events-none">
+            <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+              Links
+            </p>
+            {edgeLegend.map(([label, { color, suggested, count }]) => (
+              <div key={label} className="flex items-center gap-1.5 text-[10px]">
+                <svg width="18" height="6" aria-hidden="true" className="shrink-0">
+                  <line
+                    x1="0"
+                    y1="3"
+                    x2="18"
+                    y2="3"
+                    stroke={color}
+                    strokeWidth="2"
+                    strokeDasharray={suggested ? '4 3' : undefined}
+                  />
+                </svg>
+                <span className="text-foreground truncate">{label.replace(/_/g, ' ')}</span>
+                <span className="ml-auto font-mono text-muted-foreground">{count}</span>
+              </div>
+            ))}
+            <p className="text-[9px] text-muted-foreground pt-0.5 leading-snug">
+              Dashed links are guesses, not links you made. Width is confidence.
+            </p>
+          </div>
+        )}
 
         {selectedNode && (
           <GraphNodeInspector

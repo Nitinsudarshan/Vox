@@ -1,5 +1,5 @@
 import type { KnowledgeEdge, KnowledgeNode } from '@/types';
-import { RELAY_COLOR_MAP } from './graphTypes';
+import { edgeColorFor, GHOST_EDGE_COLOR, isSuggestedEdge, RELAY_COLOR_MAP } from './graphTypes';
 import {
   hexToHsl,
   hsla,
@@ -216,13 +216,31 @@ function drawEdges(
 
     const from = entryPosition(a, eased);
     const to = entryPosition(b, eased);
+    const suggested = isSuggestedEdge(edge);
 
+    // Colour says what kind of link this is; a guess takes the reserved
+    // ghost hue instead, so it cannot be read as any real relationship.
+    const color = hexToHsl(suggested ? GHOST_EDGE_COLOR : edgeColorFor(edge.relationship));
+
+    // Width says how sure we are. Clamped below 1 so a zero-confidence edge
+    // is still a hairline rather than invisible — an edge we barely believe
+    // is different from an edge that is not there.
+    const confidence = Math.max(0, Math.min(1, edge.confidence ?? 1));
+    const weight = 0.35 + confidence * 1.15;
+
+    ctx.save();
+    // Dashes say whether the link exists. Solid is asserted, dashed is
+    // proposed — the distinction the old renderer threw away.
+    ctx.setLineDash(suggested ? [5, 4] : []);
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
     ctx.lineTo(to.x, to.y);
-    ctx.strokeStyle = hsla(palette.mutedForeground, alpha * eased);
-    ctx.lineWidth = isRaised ? 1.4 : 0.7;
+    // Edges recede: real links draw low-alpha so the eye lands on nodes
+    // first, and a suggestion is quieter still than a link that exists.
+    ctx.strokeStyle = hsla(color, alpha * eased * (suggested ? 0.75 : 1));
+    ctx.lineWidth = weight * (isRaised ? 1.9 : 1);
     ctx.stroke();
+    ctx.restore();
   }
 }
 

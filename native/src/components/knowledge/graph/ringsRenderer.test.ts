@@ -25,6 +25,9 @@ interface FillRecord {
   arc: { x: number; y: number; r: number } | null;
   shadowBlur: number;
   arcsInPath: number;
+  lineWidth: number;
+  dash: number[];
+  line: { from: [number, number]; to: [number, number] } | null;
 }
 
 interface Recorder {
@@ -41,6 +44,9 @@ function recordingContext(): Recorder {
   const texts: string[] = [];
   const dashes: number[][] = [];
   let pathArcs: Array<{ x: number; y: number; r: number }> = [];
+  let pathFrom: [number, number] | null = null;
+  let pathTo: [number, number] | null = null;
+  let dash: number[] = [];
 
   const state = {
     fillStyle: '' as unknown,
@@ -61,6 +67,9 @@ function recordingContext(): Recorder {
       arc: pathArcs[0] ?? null,
       shadowBlur: state.shadowBlur,
       arcsInPath: pathArcs.length,
+      lineWidth: state.lineWidth,
+      dash: [...dash],
+      line: pathFrom && pathTo ? { from: pathFrom, to: pathTo } : null,
     });
   };
 
@@ -88,11 +97,11 @@ function recordingContext(): Recorder {
     scale: () => {},
     translate: () => {},
     clearRect: () => {},
-    beginPath: () => { pathArcs = []; },
+    beginPath: () => { pathArcs = []; pathFrom = null; pathTo = null; },
     arc: (x: number, y: number, r: number) => { pathArcs.push({ x, y, r }); },
-    moveTo: () => {},
-    lineTo: () => {},
-    setLineDash: (d: number[]) => { dashes.push([...d]); },
+    moveTo: (x: number, y: number) => { pathFrom = [x, y]; },
+    lineTo: (x: number, y: number) => { pathTo = [x, y]; },
+    setLineDash: (d: number[]) => { dash = [...d]; dashes.push([...d]); },
     fill: () => record('fill'),
     stroke: () => record('stroke'),
     fillText: (t: string) => { texts.push(t); },
@@ -363,5 +372,119 @@ describe('hit testing', () => {
     expect(
       hitTestRings(layout, screenX, screenY, 800, 600, camera, new Map([['a', 0.07]])),
     ).toBeNull();
+  });
+});
+
+/**
+ * Edge semantics. Vox stores a typed relationship, a confidence and a
+ * provenance on every link, and the previous renderer discarded all three
+ * in favour of one "is this derived" boolean.
+ */
+describe('edges carry their meaning', () => {
+  const pair = (): KnowledgeNode[] => [
+    node('a', 'projects', { pagerank: 0.2 }),
+    node('b', 'projects', { pagerank: 0.2 }),
+  ];
+
+  const link = (overrides: Partial<KnowledgeEdge>): KnowledgeEdge => ({
+    id: 'e',
+    source_id: 'a',
+    target_id: 'b',
+    relationship: 'RELATED_TO',
+    confidence: 1,
+    source: 'user',
+    ...overrides,
+  });
+
+  /** The single stroke that has a line and no arc is the edge. */
+  const edgeStroke = (rec: Recorder) =>
+    rec.fills.find((f) => f.kind === 'stroke' && f.line !== null)!;
+
+  /** Fails if two different relationship types draw the same colour — the
+   *  type would be stored and still invisible. */
+  it('colours by relationship type', () => {
+    const supersedes = scene(pair(), [link({ relationship: 'supersedes' })]);
+    renderRings(supersedes.rc);
+    const belongs = scene(pair(), [link({ relationship: 'belongs_to' })]);
+    renderRings(belongs.rc);
+
+    expect(String(edgeStroke(supersedes.rec).style)).not.toBe(
+      String(edgeStroke(belongs.rec).style),
+    );
+  });
+
+  /** Both vocabularies reach the graph — frontmatter's SCREAMING_CASE and
+   *  `relationships/model.rs`'s snake_case. Fails if they disagree. */
+  it('reads either spelling of a relationship type as the same link', () => {
+    const upper = scene(pair(), [link({ relationship: 'DERIVED_FROM' })]);
+    renderRings(upper.rc);
+    const lower = scene(pair(), [link({ relationship: 'derived_from' })]);
+    renderRings(lower.rc);
+
+    expect(String(edgeStroke(upper.rec).style)).toBe(String(edgeStroke(lower.rec).style));
+  });
+
+  /** An unreadable type should look unremarkable, not distinctive. */
+  it('falls back to the neutral colour for a type it does not know', () => {
+    const unknown = scene(pair(), [link({ relationship: 'INVENTED_BY_A_MODEL' })]);
+    renderRings(unknown.rc);
+    const neutral = scene(pair(), [link({ relationship: 'related_to' })]);
+    renderRings(neutral.rc);
+
+    expect(String(edgeStroke(unknown.rec).style)).toBe(String(edgeStroke(neutral.rec).style));
+  });
+
+  /** Fails if confidence does not reach line width — a 0.2 link and a 1.0
+   *  link would look equally certain. */
+  it('widens with the stored confidence, and keeps a hairline at zero', () => {
+    const sure = scene(pair(), [link({ confidence: 1 })]);
+    renderRings(sure.rc);
+    const unsure = scene(pair(), [link({ confidence: 0.2 })]);
+    renderRings(unsure.rc);
+    const none = scene(pair(), [link({ confidence: 0 })]);
+    renderRings(none.rc);
+
+    expect(edgeStroke(sure.rec).lineWidth).toBeGreaterThan(edgeStroke(unsure.rec).lineWidth);
+    expect(edgeStroke(unsure.rec).lineWidth).toBeGreaterThan(edgeStroke(none.rec).lineWidth);
+    // Still drawn: barely believed is not the same as absent.
+    expect(edgeStroke(none.rec).lineWidth).toBeGreaterThan(0);
+  });
+
+  /**
+   * The distinction the brief is after: a link the user drew exists, a link
+   * enrichment proposed from shared topics does not. Fails if both draw
+   * solid.
+   */
+  it('dashes a suggested link and draws a real one solid', () => {
+    const asserted = scene(pair(), [link({ source: 'user' })]);
+    renderRings(asserted.rc);
+    const derived = scene(pair(), [link({ source: 'system' })]);
+    renderRings(derived.rc);
+    const guessed = scene(pair(), [link({ source: 'ai', confidence: 0.85 })]);
+    renderRings(guessed.rc);
+
+    expect(edgeStroke(asserted.rec).dash).toEqual([]);
+    expect(edgeStroke(derived.rec).dash).toEqual([]);
+    expect(edgeStroke(guessed.rec).dash.length).toBeGreaterThan(0);
+  });
+
+  /** A guess must not be able to wear a real relationship's colour. */
+  it('gives a suggested link a hue no real relationship uses', () => {
+    const guessed = scene(pair(), [link({ source: 'ai', relationship: 'supersedes' })]);
+    renderRings(guessed.rc);
+    const real = scene(pair(), [link({ source: 'user', relationship: 'supersedes' })]);
+    renderRings(real.rc);
+
+    expect(String(edgeStroke(guessed.rec).style)).not.toBe(String(edgeStroke(real.rec).style));
+  });
+
+  /** Edges recede so the eye lands on nodes. Fails if an edge is drawn
+   *  thicker than a node is wide. */
+  it('draws edges thinner than nodes are big', () => {
+    const s = scene(pair(), [link({ confidence: 1 })]);
+    renderRings(s.rc);
+
+    const smallestNode = Math.min(...s.rc.layout.nodes.map((n) => n.size));
+    expect(edgeStroke(s.rec).lineWidth).toBeLessThan(smallestNode);
   });
 });

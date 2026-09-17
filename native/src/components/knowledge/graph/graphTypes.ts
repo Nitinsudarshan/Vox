@@ -118,6 +118,29 @@ export function edgeColorFor(relationship: string | undefined | null): string {
   );
 }
 
+/**
+ * The hue reserved for suggested links.
+ *
+ * Deliberately outside `RELATIONSHIP_COLOR_MAP`: a guess must not be
+ * mistakable for any real relationship type, so it gets a hue no real edge
+ * can take, plus a dash pattern.
+ */
+export const GHOST_EDGE_COLOR = '#a78bfa'; // Soft violet
+
+/**
+ * Whether an edge is a guess rather than a link that exists.
+ *
+ * Vox already records this and the old renderer discarded it. `source` is
+ * `user` for a link the person drew, `system` for one the graph derives
+ * deterministically from stored fields (a scribble to its topic, to its
+ * entity, to the recording it came from), and `ai` for one enrichment
+ * proposed from shared topics — a similarity guess nobody confirmed. Only
+ * the last of those is a suggestion.
+ */
+export function isSuggestedEdge(edge: { source?: string | null }): boolean {
+  return (edge.source ?? '').toLowerCase() === 'ai';
+}
+
 export const PRESET_GROUP_COLORS = [
   '#ef4444', // Red
   '#f97316', // Orange
