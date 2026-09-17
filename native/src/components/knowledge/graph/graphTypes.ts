@@ -55,6 +55,7 @@ export const DEFAULT_GRAPH_VIEW_MODE: GraphViewMode = 'rings';
 export const IMPLEMENTED_GRAPH_VIEW_MODES: readonly GraphViewMode[] = [
   'rings',
   'focus',
+  'decisions',
   'force',
 ];
 
@@ -78,6 +79,7 @@ export const RELAY_COLOR_MAP: Record<string, string> = {
   file: '#64748b',         // Slate (File)
   document: '#0284c7',     // Sky (Document)
   task: '#84cc16',         // Lime (Task)
+  decision: '#84cc16',     // Lime (Decision — a decided task)
   meeting: '#a855f7',      // Fuchsia (Meeting)
   unresolved: '#6b7280',   // Gray (Unresolved)
   default: '#94a3b8',      // Slate default

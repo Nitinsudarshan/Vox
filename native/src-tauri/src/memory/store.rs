@@ -179,6 +179,17 @@ impl MemoryStore {
             .collect()
     }
 
+    /// Every memory the store holds, in insertion order.
+    ///
+    /// Distinct from `list_active`, which filters out superseded and
+    /// unverified records. Callers that need the history — the Decision
+    /// Tree keeps what was reversed, because that is most of what makes it
+    /// worth reading — need this instead.
+    pub fn list_all(&self) -> Vec<MemoryItem> {
+        let items = self.items.read().unwrap_or_else(|e| e.into_inner());
+        items.clone()
+    }
+
     /// Queries all historical versions in the supersedes lineage of a memory ID.
     pub fn get_lineage(&self, start_id: &str) -> Vec<MemoryItem> {
         let items = self.items.read().unwrap_or_else(|e| e.into_inner());

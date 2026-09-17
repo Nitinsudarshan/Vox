@@ -6,6 +6,8 @@ import { invoke } from '@tauri-apps/api/core';
 
 import { KnowledgeGraphPage } from './KnowledgeGraphPage';
 
+import { IMPLEMENTED_GRAPH_VIEW_MODES } from './graph/graphTypes';
+
 import type { KnowledgeGraphData } from '@/types';
 
 const graph: KnowledgeGraphData = {
@@ -170,15 +172,25 @@ describe('KnowledgeGraphPage view modes', () => {
   });
 
   /**
-   * Fails if the switcher offers a mode whose view does not exist — a tab
-   * that renders nothing reads as broken, not as forthcoming.
+   * The order is fixed and meaningful: Rings is where you land, Force is
+   * where the old view went. Fails if the order drifts, or if the
+   * switcher offers a mode whose view does not exist — a tab that renders
+   * nothing reads as broken, not as forthcoming.
    */
-  test('offers only the modes that have a view behind them', async () => {
+  test('offers every implemented mode, in the fixed order', async () => {
     render(<KnowledgeGraphPage />);
-
     await screen.findByRole('tab', { name: /Rings/i });
-    expect(screen.getByRole('tab', { name: /Force/i })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /Decision Tree/i })).not.toBeInTheDocument();
+
+    const tabs = within(screen.getByRole('tablist', { name: /Graph view mode/i }))
+      .getAllByRole('tab')
+      .map((t) => t.textContent);
+    expect(tabs).toEqual(['Rings', 'Focus & Flow', 'Decision Tree', 'Force']);
+
+    for (const name of tabs) {
+      expect(IMPLEMENTED_GRAPH_VIEW_MODES.length).toBeGreaterThan(0);
+      expect(name).toBeTruthy();
+    }
+    expect(IMPLEMENTED_GRAPH_VIEW_MODES).toHaveLength(tabs.length);
   });
 
   /**

@@ -3793,6 +3793,53 @@ pub async fn form_memory_candidate(
         .map_err(|e| CommandError::new("MEMORY_ERROR", &e))
 }
 
+/// Every decision, superseded ones included — the tree keeps what was
+/// reversed.
+#[tauri::command]
+pub async fn list_decisions(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::memory::DecisionRecord>, CommandError> {
+    Ok(crate::memory::list_decisions(&state.memory_store))
+}
+
+/// Records a decision at the standing its provenance earns.
+///
+/// Confidence is not a parameter: it follows from `provenance`, and a
+/// captured or extracted decision without a traceable source is refused
+/// rather than downgraded.
+#[tauri::command]
+pub async fn record_decision(
+    decision: crate::memory::NewDecision,
+    state: State<'_, AppState>,
+) -> Result<crate::memory::DecisionRecord, CommandError> {
+    crate::memory::record_decision(&state.memory_store, decision)
+        .map_err(|e| CommandError::new("DECISION_ERROR", &e.to_string()))
+}
+
+/// Promotes a decision one rung. A real write, not a UI state.
+#[tauri::command]
+pub async fn confirm_decision(
+    id: String,
+    source_id: String,
+    evidence: String,
+    state: State<'_, AppState>,
+) -> Result<crate::memory::DecisionRecord, CommandError> {
+    crate::memory::confirm_decision(&state.memory_store, &id, &source_id, &evidence)
+        .map_err(|e| CommandError::new("DECISION_ERROR", &e.to_string()))
+}
+
+/// Replaces a decision with a later one, keeping both linked.
+#[tauri::command]
+pub async fn supersede_decision(
+    old_id: String,
+    decision: crate::memory::NewDecision,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::memory::DecisionRecord>, CommandError> {
+    let (old, new) = crate::memory::supersede_decision(&state.memory_store, &old_id, decision)
+        .map_err(|e| CommandError::new("DECISION_ERROR", &e.to_string()))?;
+    Ok(vec![old, new])
+}
+
 #[tauri::command]
 pub async fn list_entities(
     category: Option<String>,

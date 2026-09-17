@@ -1257,3 +1257,46 @@ export type {
   MeetingReminderPayload,
   ReminderKind,
 } from './meetings';
+
+/**
+ * How a decision came to be known, and therefore how sure the tree is
+ * allowed to look about it. Mirrors `memory::decision::DecisionProvenance`.
+ */
+export type DecisionProvenance = 'inferred' | 'extracted' | 'captured' | 'confirmed';
+
+/**
+ * The confidence ladder, derived on the Rust side from a decision's
+ * evidence and never asserted by this one. Kept here so the renderer can
+ * label the rungs without a second source of truth about the numbers.
+ */
+export const DECISION_CONFIDENCE: Record<DecisionProvenance, number> = {
+  inferred: 0.15,
+  extracted: 0.55,
+  captured: 0.9,
+  confirmed: 0.98,
+};
+
+export interface DecisionEvidence {
+  source_id: string;
+  source_type: string;
+  evidence: string;
+  extracted_by: string;
+}
+
+export interface DecisionRecord {
+  id: string;
+  /** What the decision is about — the node it hangs from. */
+  subject: string;
+  /** What was chosen. */
+  choice: string;
+  /** Why, where a reason was given. Never invented when it was not. */
+  rationale?: string | null;
+  provenance: DecisionProvenance;
+  confidence: number;
+  evidence: DecisionEvidence[];
+  superseded_by?: string | null;
+  supersedes_id?: string | null;
+  superseded: boolean;
+  created_at: string;
+  updated_at: string;
+}
