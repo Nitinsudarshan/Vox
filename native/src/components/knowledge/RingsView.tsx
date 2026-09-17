@@ -4,7 +4,12 @@ import { Search } from 'lucide-react';
 import type { KnowledgeGraphData, KnowledgeNode } from '@/types';
 
 import { applyVisibility, bandOf, layoutRings, RING_BANDS, type RingBand } from './graph/ringsLayout';
-import { hitTestRings, renderRings } from './graph/ringsRenderer';
+import {
+  ENTRY_ANIMATION_MS,
+  hitTestRings,
+  prefersReducedMotion,
+  renderRings,
+} from './graph/ringsRenderer';
 import { RELAY_COLOR_MAP, type CameraState, type SimNode } from './graph/graphTypes';
 import { GraphNodeInspector } from './graph/GraphNodeInspector';
 
@@ -49,6 +54,16 @@ export const RingsView: React.FC<RingsViewProps> = ({
     x: 0,
     y: 0,
   });
+
+  /**
+   * Entry animation progress, held in a ref rather than state.
+   *
+   * The loop drives the canvas directly: routing 600ms of frames through
+   * `setState` would re-render the whole subtree ~36 times to move pixels
+   * React does not own.
+   */
+  const entryRef = useRef(1);
+  const frameRef = useRef<number | null>(null);
 
   // The layout depends on the graph and nothing else. Not on the filters,
   // not on the viewport, not on the camera — which is what makes the same
@@ -104,8 +119,58 @@ export const RingsView: React.FC<RingsViewProps> = ({
       camera,
       hoveredNodeId,
       selectedNodeId,
+      entryProgress: entryRef.current,
     });
   }, [layout, nodesById, graphData.edges, opacity, adjacency, camera, hoveredNodeId, selectedNodeId]);
+
+  // The animation loop calls the latest `draw` without depending on its
+  // identity, so a hover does not restart the entry animation.
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
+
+  /**
+   * Nodes ease out to their final coordinates once, then the loop stops.
+   *
+   * No ambient drift and no idle physics: the universe settles and stays
+   * settled, which is what makes the layout's determinism visible rather
+   * than merely true. Re-runs when the layout changes, because a new vault
+   * is a new arrival, not a continuation.
+   */
+  useEffect(() => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+
+    if (prefersReducedMotion()) {
+      entryRef.current = 1;
+      drawRef.current();
+      return;
+    }
+
+    entryRef.current = 0;
+    const started = performance.now();
+
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - started) / ENTRY_ANIMATION_MS);
+      entryRef.current = progress;
+      drawRef.current();
+      if (progress < 1) {
+        frameRef.current = requestAnimationFrame(step);
+      } else {
+        frameRef.current = null;
+      }
+    };
+
+    frameRef.current = requestAnimationFrame(step);
+
+    return () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [layout]);
 
   // Size the canvas to its container at device resolution.
   useEffect(() => {
