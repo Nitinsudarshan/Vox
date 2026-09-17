@@ -19,6 +19,34 @@ import type { CameraState } from './graphTypes';
  * draws, holding no state of its own. Everything that changes between
  * frames — hover, selection, the entry animation's progress — arrives as an
  * argument, so a frame can be reproduced exactly by replaying its context.
+ *
+ * ## Measured cost, and why this is still canvas 2D
+ *
+ * Headless Chromium (software rasterised, in a container), 1600×1000,
+ * synthetic vaults at two edges per node, 120 settled frames each:
+ *
+ * | Nodes | Edges | Layout | Frame (median) | Frame (p95) |
+ * |---|---|---|---|---|
+ * | 250 | 500 | 19ms | 2.2ms | 2.9ms |
+ * | 500 | 1,000 | 45ms | 3.7ms | 6.3ms |
+ * | 1,000 | 2,000 | 55ms | 7.5ms | 9.5ms |
+ * | 2,500 | 5,000 | 144ms | 20.2ms | 23.7ms |
+ * | 5,000 | 10,000 | 305ms | 43.6ms | 50.5ms |
+ * | 10,000 | 20,000 | 677ms | 320.8ms | 337.8ms |
+ *
+ * The 16.7ms budget holds to roughly 2,000 nodes and is gone by 2,500. For
+ * scale: a 500-scribble vault builds 518 nodes, which is 3.7ms.
+ *
+ * Two things make that ceiling less pressing than it looks. Frames are not
+ * continuous — the entry animation decays to nothing and the view then
+ * draws only on hover, pan and zoom, so a 20ms frame is paid while
+ * interacting rather than forever. And these numbers are from software
+ * rasterisation in a container; a GPU-composited webview will do better.
+ *
+ * So there is no case for WebGL here yet. The number that would make one is
+ * a real vault above ~2,500 nodes measured on the target machine, and it
+ * does not exist. Re-run this before reaching for a renderer change rather
+ * than assuming the table above still describes the code.
  */
 
 export interface RingsRenderContext {
