@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { KnowledgeGraphView } from './KnowledgeGraphView';
 import { GraphModeSwitcher } from './GraphModeSwitcher';
 import { RingsView } from './RingsView';
+import { FocusFlowView } from './FocusFlowView';
 import { loadGraphViewMode, saveGraphViewMode } from './graph/graphStorage';
 import type { GraphViewMode } from './graph/graphTypes';
 import type { RingBand } from './graph/ringsLayout';
@@ -232,6 +233,8 @@ export const KnowledgeGraphPage: React.FC<KnowledgeGraphPageProps> = ({ onOpenSc
               onOpenScribbleEditor={onOpenScribble}
               onSetPara={handleSetPara}
             />
+          ) : viewMode === 'focus' ? (
+            <FocusFlowView graphData={graphData} onOpenScribbleEditor={onOpenScribble} />
           ) : (
             <KnowledgeGraphView
               graphData={graphData}

@@ -52,7 +52,11 @@ export const DEFAULT_GRAPH_VIEW_MODE: GraphViewMode = 'rings';
  * forbids, and it reads to the user as a feature that is broken rather than
  * one that is coming.
  */
-export const IMPLEMENTED_GRAPH_VIEW_MODES: readonly GraphViewMode[] = ['rings', 'force'];
+export const IMPLEMENTED_GRAPH_VIEW_MODES: readonly GraphViewMode[] = [
+  'rings',
+  'focus',
+  'force',
+];
 
 export const GRAPH_VIEW_MODE_LABELS: Record<GraphViewMode, string> = {
   rings: 'Rings',
