@@ -10,10 +10,28 @@ import type { KnowledgeGraphData } from '@/types';
 
 const graph: KnowledgeGraphData = {
   nodes: [
-    { id: 'scr_1', node_type: 'scribble', label: 'Chunking strategy', metadata: {}, degree: 2 },
+    {
+      id: 'scr_1',
+      node_type: 'scribble',
+      label: 'Chunking strategy',
+      metadata: {},
+      degree: 2,
+      para: 'projects',
+      pagerank: 0.3,
+      updated_at: '2026-01-05T00:00:00Z',
+    },
     { id: 'topic_1', node_type: 'topic', label: 'Retrieval', metadata: {}, degree: 1 },
     { id: 'ent_1', node_type: 'entity', label: 'Vox', metadata: {}, degree: 1 },
-    { id: 'scr_2', node_type: 'scribble', label: 'Orphan thought', metadata: {}, degree: 0 },
+    {
+      id: 'scr_2',
+      node_type: 'scribble',
+      label: 'Orphan thought',
+      metadata: {},
+      degree: 0,
+      para: 'areas',
+      pagerank: 0.1,
+      updated_at: '2025-02-02T00:00:00Z',
+    },
   ],
   edges: [
     {
@@ -48,6 +66,9 @@ const telemetry = {
 
 describe('KnowledgeGraphPage', () => {
   beforeEach(() => {
+    // The view mode persists in localStorage, so a mode chosen by one test
+    // would otherwise decide which view the next one renders.
+    localStorage.clear();
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       switch (cmd) {
         case 'get_knowledge_graph':
@@ -112,5 +133,123 @@ describe('KnowledgeGraphPage', () => {
     render(<KnowledgeGraphPage />);
 
     expect(await screen.findByText('Nothing to connect yet')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The graph surface is four views over one dataset. These cover the
+ * switching contract — what you land on, what persists, and the promise
+ * that changing view does not cost a vault read.
+ */
+describe('KnowledgeGraphPage view modes', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case 'get_knowledge_graph':
+          return graph;
+        case 'get_scribbles':
+          return [];
+        case 'get_knowledge_telemetry':
+          return telemetry;
+        default:
+          return null;
+      }
+    });
+  });
+
+  test('lands on Rings', async () => {
+    render(<KnowledgeGraphPage />);
+
+    const rings = await screen.findByRole('tab', { name: /Rings/i });
+    expect(rings).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /Force/i })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  /**
+   * Fails if the switcher offers a mode whose view does not exist — a tab
+   * that renders nothing reads as broken, not as forthcoming.
+   */
+  test('offers only the modes that have a view behind them', async () => {
+    render(<KnowledgeGraphPage />);
+
+    await screen.findByRole('tab', { name: /Rings/i });
+    expect(screen.getByRole('tab', { name: /Force/i })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Decision Tree/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The acceptance from the brief. Fails if the graph read count rises when
+   * the mode changes — the data is already in state, and a refetch would
+   * make a view switch cost a vault walk.
+   */
+  test('switching modes does not refetch the graph', async () => {
+    render(<KnowledgeGraphPage />);
+    const user = userEvent.setup();
+
+    await screen.findByRole('tab', { name: /Rings/i });
+    const graphReads = () =>
+      vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'get_knowledge_graph').length;
+    const before = graphReads();
+    expect(before).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('tab', { name: /Force/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Force/i })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+
+    expect(graphReads()).toBe(before);
+  });
+
+  /** Fails if the chosen mode is forgotten — it must survive a restart,
+   *  which a remount stands in for here. */
+  test('remembers the chosen mode across a remount', async () => {
+    const user = userEvent.setup();
+    const first = render(<KnowledgeGraphPage />);
+
+    await screen.findByRole('tab', { name: /Rings/i });
+    await user.click(screen.getByRole('tab', { name: /Force/i }));
+    first.unmount();
+
+    render(<KnowledgeGraphPage />);
+    expect(await screen.findByRole('tab', { name: /Force/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  test('Rings names every band and counts what is in it', async () => {
+    render(<KnowledgeGraphPage />);
+
+    // Two scribbles are filed; the topic and entity nodes are not filed
+    // under PARA at all, so they belong to Unfiled rather than to a band
+    // picked on their behalf.
+    expect(await screen.findByRole('button', { name: new RegExp(`^Projects\\s*1$`) })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(`^Areas\\s*1$`) })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(`^Resources\\s*0$`) })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(`^Archive\\s*0$`) })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(`^Unfiled\\s*2$`) })).toBeInTheDocument();
+  });
+
+  /** The force view is demoted, not deleted. Fails if switching to it
+   *  renders the Rings surface (or nothing at all). */
+  test('the force view stays reachable', async () => {
+    render(<KnowledgeGraphPage />);
+    const user = userEvent.setup();
+
+    await screen.findByRole('tab', { name: /Rings/i });
+    expect(screen.getByPlaceholderText(/Dim everything but/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /Force/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText(/Dim everything but/i)).not.toBeInTheDocument(),
+    );
   });
 });

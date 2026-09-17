@@ -277,3 +277,34 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
     rather than silently showing a stale answer.
 - **Not blocked on anything.** It is a feature-sized piece of work, not a
   dependency problem.
+
+---
+
+### 15. Retire the Knowledge Graph's Node-Position Cache
+
+- **Status**: Deferred — superseded, not yet removed
+- **Area**: Native frontend (`native/src/components/knowledge/graph/graphStorage.ts` —
+  `loadNodePositions`, `saveNodePositions`, `clearNodePositions`, and the
+  `GraphPositionMap` type; the "Reset layout" affordance in
+  `KnowledgeGraphView`)
+- **Original Context**:
+  - The force-directed view's layout is seeded from `Math.random` and
+    settles differently on every run, so coordinates were persisted to
+    localStorage to stop the graph rearranging itself between sessions. The
+    cache exists to paper over an irreproducible layout.
+  - The Rings view removed that need for itself: `ringsLayout` is seeded,
+    runs a fixed iteration count with no convergence exit, and produces
+    bit-identical coordinates for the same vault (`ringsLayout.test.ts`).
+    Rings therefore reads and writes none of this.
+- **Concept & Implementation Blueprint**:
+  - Not removed in the same change that introduced Rings, deliberately: the
+    force view still depends on the cache, and deleting it while that view
+    is the fallback would regress the mode the change promised not to touch.
+  - The removal is unblocked once the force view either adopts a seeded
+    layout of its own or stops being offered. At that point delete the three
+    functions, the `POSITIONS_STORAGE_KEY` entry, the `GraphPositionMap`
+    type, and the "Reset layout" confirmation flow that exists only to clear
+    it — reproducibility makes a reset button meaningless, since there is
+    nothing to reset to.
+  - Leave the stored key unread rather than migrating it; a stale
+    localStorage entry costs nothing and nothing else reads that key.
