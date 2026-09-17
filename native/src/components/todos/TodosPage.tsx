@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { AlertTriangle, CalendarClock, Columns3, Layers, ListChecks, Plus } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarClock,
+  Columns3,
+  Layers,
+  ListChecks,
+  Loader2,
+  Mic,
+  Plus,
+  Square,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -10,6 +20,7 @@ import {
   TODO_STATUS_LABELS,
   type KanbanCard,
   type MainTabType,
+  type ProcessedPipelineResult,
   type TodoStatus,
 } from '@/types';
 
@@ -26,6 +37,17 @@ import {
 } from './todoGrouping';
 
 type TodoView = 'para' | 'date' | 'board';
+
+/**
+ * The capture mode the backend routes to a todo.
+ *
+ * The same recorder, STT, normalisation and dictionary every other spoken
+ * capture uses — this mode differs only in what gets written at the end.
+ * There is no second recording implementation here.
+ */
+const TODO_CAPTURE_MODE = 'todo';
+
+type VoiceState = 'idle' | 'recording' | 'transcribing';
 
 const VIEW_LABELS: Record<TodoView, string> = {
   para: 'By PARA',
@@ -151,6 +173,7 @@ export const TodosPage: React.FC<TodosPageProps> = ({ onNavigateTab }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [voice, setVoice] = useState<VoiceState>('idle');
 
   const refresh = useCallback(async () => {
     try {
@@ -180,6 +203,50 @@ export const TodosPage: React.FC<TodosPageProps> = ({ onNavigateTab }) => {
     } catch (err) {
       console.error('Failed to create a todo:', err);
       setError('That todo could not be saved.');
+    }
+  };
+
+  /**
+   * Click to start, click again to stop.
+   *
+   * Every failure the capture path can produce is reported and produces no
+   * todo: a mic that heard nothing, a transcription that failed, and a
+   * transcript that came back empty are all distinct messages, because
+   * silently creating a blank todo — or silently creating none — is worse
+   * than any of them.
+   */
+  const toggleVoice = async () => {
+    if (voice === 'recording') {
+      setVoice('transcribing');
+      try {
+        const result = await invoke<ProcessedPipelineResult | null>('stop_capture');
+        if (!result) {
+          setError('Nothing was heard, so no todo was created.');
+        } else if (!result.kanban_cards_created) {
+          setError('That recording produced no usable text, so no todo was created.');
+        } else {
+          setError(null);
+          await refresh();
+        }
+      } catch (err) {
+        console.error('Voice todo capture failed:', err);
+        setError(
+          'That recording could not be transcribed, so no todo was created.',
+        );
+      } finally {
+        setVoice('idle');
+      }
+      return;
+    }
+
+    try {
+      await invoke('start_capture', { mode: TODO_CAPTURE_MODE });
+      setVoice('recording');
+      setError(null);
+    } catch (err) {
+      console.error('Could not start recording:', err);
+      setError('Could not start recording. Another capture may be in progress.');
+      setVoice('idle');
     }
   };
 
@@ -270,6 +337,29 @@ export const TodosPage: React.FC<TodosPageProps> = ({ onNavigateTab }) => {
         <Button size="sm" variant="outline" onClick={addTyped} disabled={!draft.trim()}>
           <Plus className="w-3.5 h-3.5" />
           <span className="ml-1">Add</span>
+        </Button>
+        <Button
+          size="sm"
+          variant={voice === 'recording' ? 'destructive' : 'outline'}
+          onClick={toggleVoice}
+          disabled={voice === 'transcribing'}
+          aria-pressed={voice === 'recording'}
+          aria-label={voice === 'recording' ? 'Stop recording' : 'Record a todo'}
+        >
+          {voice === 'transcribing' ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : voice === 'recording' ? (
+            <Square className="w-3.5 h-3.5" />
+          ) : (
+            <Mic className="w-3.5 h-3.5" />
+          )}
+          <span className="ml-1">
+            {voice === 'transcribing'
+              ? 'Transcribing…'
+              : voice === 'recording'
+                ? 'Stop'
+                : 'Speak'}
+          </span>
         </Button>
       </div>
 

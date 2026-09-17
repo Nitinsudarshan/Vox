@@ -45,17 +45,18 @@ const cards: KanbanCard[] = [
 ];
 
 const mockBackend = (list: KanbanCard[] = cards) => {
-  vi.mocked(invoke).mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+  vi.mocked(invoke).mockImplementation(async (cmd: string, rawArgs?: unknown) => {
+    const args = (rawArgs ?? {}) as Record<string, unknown>;
     switch (cmd) {
       case 'get_kanban_cards':
         return list;
       case 'create_manual_todo':
         return card('new-todo', {
-          title: String(args?.title ?? ''),
+          title: String(args.title ?? ''),
           source_kind: 'manual',
         });
       case 'set_todo_status':
-        return { ...list[0], status: args?.status };
+        return { ...list[0], status: args.status };
       default:
         return null;
     }
@@ -224,5 +225,128 @@ describe('TodosPage', () => {
 
     render(<TodosPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not read your todos/i);
+  });
+});
+
+/**
+ * Voice capture. It reuses the existing recorder and STT path — the page
+ * only starts and stops a capture in the `todo` mode — so what is worth
+ * testing here is the part that is this page's own: that every way the
+ * capture can fail is reported, and that none of them creates a todo.
+ */
+describe('TodosPage voice capture', () => {
+  beforeEach(() => mockBackend());
+
+  test('records in the todo capture mode rather than a second implementation', async () => {
+    const user = userEvent.setup();
+    render(<TodosPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Record a todo/i }));
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('start_capture', { mode: 'todo' });
+    expect(await screen.findByRole('button', { name: /Stop recording/i })).toBeInTheDocument();
+  });
+
+  test('stopping a recording that produced a todo refreshes the list', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_kanban_cards') return cards;
+      if (cmd === 'start_capture') return 'ok';
+      if (cmd === 'stop_capture') {
+        return { mode: 'todo', transcript: 'Call the bank', kanban_cards_created: 1 };
+      }
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<TodosPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Record a todo/i }));
+    await user.click(await screen.findByRole('button', { name: /Stop recording/i }));
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith('stop_capture'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The brief's hard requirement. Fails if a failed transcription passes
+   * silently — which would leave the user believing a todo exists.
+   */
+  test('a failed transcription says so and creates nothing', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_kanban_cards') return cards;
+      if (cmd === 'start_capture') return 'ok';
+      if (cmd === 'stop_capture') throw new Error('STT_FAILED');
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<TodosPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Record a todo/i }));
+    await user.click(await screen.findByRole('button', { name: /Stop recording/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /could not be transcribed, so no todo was created/i,
+    );
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      'create_manual_todo',
+      expect.anything(),
+    );
+  });
+
+  /** Silence is distinct from a transcription failure, and says so. */
+  test('a recording that heard nothing says so and creates nothing', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_kanban_cards') return cards;
+      if (cmd === 'start_capture') return 'ok';
+      if (cmd === 'stop_capture') return null;
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<TodosPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Record a todo/i }));
+    await user.click(await screen.findByRole('button', { name: /Stop recording/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Nothing was heard/i);
+  });
+
+  /** Audio that yielded no usable words is a third, distinct outcome. */
+  test('a recording that yielded no usable text says so and creates nothing', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_kanban_cards') return cards;
+      if (cmd === 'start_capture') return 'ok';
+      if (cmd === 'stop_capture') {
+        return { mode: 'todo', transcript: '', kanban_cards_created: 0 };
+      }
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<TodosPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Record a todo/i }));
+    await user.click(await screen.findByRole('button', { name: /Stop recording/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/no usable text/i);
+  });
+
+  /** The recorder is shared with dictation and meetings; a refusal to
+   *  start must be visible rather than looking like a dead button. */
+  test('reports a recorder that will not start', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_kanban_cards') return cards;
+      if (cmd === 'start_capture') throw new Error('DICTATION_HOTKEY_ACTIVE');
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<TodosPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Record a todo/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not start recording/i);
+    expect(screen.getByRole('button', { name: /Record a todo/i })).toBeInTheDocument();
   });
 });

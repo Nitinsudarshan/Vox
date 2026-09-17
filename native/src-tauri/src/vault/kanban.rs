@@ -40,6 +40,14 @@ pub enum TodoSourceKind {
     Scribble,
     Manual,
     Talkback,
+    /// A page or AI conversation captured by the browser extension.
+    ///
+    /// Not in the original five: the brief expected `capture/web/context.rs`
+    /// to be the meetings extractor, and it is not — it serves browser
+    /// captures, and meetings have no structured action-item extraction at
+    /// all. Labelling these as meetings would have been the one thing worse
+    /// than an extra variant.
+    WebCapture,
 }
 
 impl TodoSourceKind {
@@ -50,6 +58,7 @@ impl TodoSourceKind {
             Self::Scribble => "scribble",
             Self::Manual => "manual",
             Self::Talkback => "talkback",
+            Self::WebCapture => "web_capture",
         }
     }
 
@@ -60,6 +69,7 @@ impl TodoSourceKind {
             "scribble" => Some(Self::Scribble),
             "manual" => Some(Self::Manual),
             "talkback" => Some(Self::Talkback),
+            "web_capture" | "webcapture" | "capture" => Some(Self::WebCapture),
             _ => None,
         }
     }
@@ -77,6 +87,22 @@ pub struct TodoSourceRef {
     /// require a second lookup per card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// One action item an extractor found, before it becomes a card.
+///
+/// A named struct rather than a tuple because every one of these fields is
+/// optional-looking at the call site and three of them are `Option`s —
+/// positional arguments there are a swap waiting to happen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedTodo {
+    pub title: String,
+    pub kind: TodoSourceKind,
+    pub source_ref: TodoSourceRef,
+    /// Inherited from the source, where the source has a band.
+    pub para: Option<ParaBand>,
+    /// When the originating moment happened, if known.
+    pub captured_at: Option<String>,
 }
 
 pub const STATUS_TODO: &str = "todo";
@@ -473,6 +499,15 @@ mod tests {
         let raw = "---\nid: \"c1\"\ntitle: \"t\"\nsource_kind: \"telepathy\"\n---\n\nbody";
         let card = KanbanCard::parse_markdown(raw).expect("the card still loads");
         assert_eq!(card.source_kind, None);
+    }
+
+    #[test]
+    fn a_web_capture_kind_round_trips_under_its_stored_spelling() {
+        assert_eq!(TodoSourceKind::WebCapture.as_str(), "web_capture");
+        assert_eq!(
+            TodoSourceKind::from_str_opt("web_capture"),
+            Some(TodoSourceKind::WebCapture)
+        );
     }
 
     #[test]

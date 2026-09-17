@@ -41,7 +41,9 @@ pub mod para;
 pub use para::*;
 
 pub mod kanban;
-pub use kanban::{KanbanCard, TodoSourceKind, TodoSourceRef, KANBAN_STATUSES};
+pub use kanban::{
+    ExtractedTodo, KanbanCard, TodoSourceKind, TodoSourceRef, KANBAN_STATUSES,
+};
 
 pub mod scribble;
 pub use scribble::*;
@@ -236,6 +238,66 @@ impl VaultManager {
         let content = fs::read_to_string(&file_path)?;
         KanbanCard::parse_markdown(&content)
             .ok_or_else(|| VaultError::FrontmatterError(format!("Failed to parse card {}", id)))
+    }
+
+    /// Records extracted action items as todos, skipping ones already on
+    /// the board.
+    ///
+    /// Re-analysing a capture is a normal thing to do — the user presses
+    /// the button again after configuring a better model — and it must not
+    /// deal a second copy of every action item. Identity is the source
+    /// reference plus the exact title, which is what a re-run reproduces
+    /// when nothing has changed. Returns the cards it actually created.
+    pub fn record_extracted_todos(
+        &self,
+        candidates: &[ExtractedTodo],
+    ) -> Result<Vec<KanbanCard>, VaultError> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let existing = self.list_kanban_cards()?;
+        let already: std::collections::HashSet<(String, String)> = existing
+            .iter()
+            .map(|c| {
+                (
+                    c.source_ref
+                        .as_ref()
+                        .map(|r| r.id.clone())
+                        .or_else(|| c.source_note_id.clone())
+                        .unwrap_or_default(),
+                    c.title.trim().to_lowercase(),
+                )
+            })
+            .collect();
+
+        let mut created = Vec::new();
+        for candidate in candidates {
+            let trimmed = candidate.title.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if already.contains(&(candidate.source_ref.id.clone(), trimmed.to_lowercase())) {
+                continue;
+            }
+
+            let card = KanbanCard::from_source(
+                trimmed,
+                candidate.kind,
+                candidate.source_ref.clone(),
+                candidate.para,
+                candidate.captured_at.clone(),
+            );
+            self.save_kanban_card(&card)?;
+            created.push(card);
+        }
+
+        tracing::info!(
+            candidates = candidates.len(),
+            created = created.len(),
+            "recorded extracted action items as todos"
+        );
+        Ok(created)
     }
 
     /// Moves a card to another column.
@@ -2283,6 +2345,152 @@ mod tests {
 
         let _ = fs::remove_dir_all(dir_a);
         let _ = fs::remove_dir_all(dir_b);
+    }
+
+    /// Extraction runs again every time the user re-analyses a capture.
+    /// Fails if a second run deals a second copy of every action item.
+    #[test]
+    fn recording_the_same_extracted_items_twice_creates_them_once() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let candidates = vec![
+            ExtractedTodo {
+                title: "Send the pricing deck".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_1".to_string(),
+                    turn_ordinal: Some(4),
+                    label: Some("Pricing thread".to_string()),
+                },
+                para: None,
+                captured_at: None,
+            },
+            ExtractedTodo {
+                title: "Book the room".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_1".to_string(),
+                    turn_ordinal: Some(9),
+                    label: Some("Pricing thread".to_string()),
+                },
+                para: None,
+                captured_at: None,
+            },
+        ];
+
+        let first = manager.record_extracted_todos(&candidates).unwrap();
+        assert_eq!(first.len(), 2);
+
+        let second = manager.record_extracted_todos(&candidates).unwrap();
+        assert!(second.is_empty(), "re-analysis must not duplicate todos");
+        assert_eq!(manager.list_kanban_cards().unwrap().len(), 2);
+
+        // The same wording from a *different* capture is a different
+        // commitment and must still be recorded.
+        let elsewhere = vec![ExtractedTodo {
+            title: "Send the pricing deck".to_string(),
+            kind: TodoSourceKind::WebCapture,
+            source_ref: TodoSourceRef {
+                id: "capture_2".to_string(),
+                turn_ordinal: None,
+                label: None,
+            },
+            para: None,
+            captured_at: None,
+        }];
+        assert_eq!(manager.record_extracted_todos(&elsewhere).unwrap().len(), 1);
+        assert_eq!(manager.list_kanban_cards().unwrap().len(), 3);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Provenance has to survive the trip to disk, or the surface cannot
+    /// link a todo back to the capture it came from.
+    #[test]
+    fn an_extracted_todo_keeps_the_turn_it_came_from() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        manager
+            .record_extracted_todos(&[ExtractedTodo {
+                title: "Follow up with legal".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_9".to_string(),
+                    turn_ordinal: Some(17),
+                    label: Some("Contract review".to_string()),
+                },
+                para: Some(ParaBand::Projects),
+                captured_at: Some("2026-02-03T00:00:00Z".to_string()),
+            }])
+            .unwrap();
+
+        let cards = manager.list_kanban_cards().unwrap();
+        assert_eq!(cards.len(), 1);
+        let card = &cards[0];
+        assert_eq!(card.source_kind, Some(TodoSourceKind::WebCapture));
+        assert_eq!(card.para, Some(ParaBand::Projects));
+        assert_eq!(card.captured_at.as_deref(), Some("2026-02-03T00:00:00Z"));
+        let source_ref = card.source_ref.as_ref().unwrap();
+        assert_eq!(source_ref.id, "capture_9");
+        assert_eq!(source_ref.turn_ordinal, Some(17));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// An extractor that returns an empty string must not create a blank
+    /// card — a todo with no text is indistinguishable from a bug.
+    #[test]
+    fn a_blank_extracted_item_creates_nothing() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let created = manager
+            .record_extracted_todos(&[ExtractedTodo {
+                title: "   ".to_string(),
+                kind: TodoSourceKind::WebCapture,
+                source_ref: TodoSourceRef {
+                    id: "capture_1".to_string(),
+                    turn_ordinal: None,
+                    label: None,
+                },
+                para: None,
+                captured_at: None,
+            }])
+            .unwrap();
+
+        assert!(created.is_empty());
+        assert!(manager.list_kanban_cards().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Rejects a column the board does not render, rather than writing a
+    /// card that would silently vanish from every view.
+    #[test]
+    fn an_unknown_kanban_status_is_refused() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let card = KanbanCard::new_manual("Something to do");
+        manager.save_kanban_card(&card).unwrap();
+
+        assert!(manager.set_kanban_status(&card.id, "blocked").is_err());
+        assert_eq!(
+            manager.get_kanban_card(&card.id).unwrap().status,
+            "todo",
+            "a refused move must not have been written"
+        );
+
+        let moved = manager.set_kanban_status(&card.id, "in_progress").unwrap();
+        assert_eq!(moved.status, "in_progress");
+        assert_eq!(
+            manager.get_kanban_card(&card.id).unwrap().status,
+            "in_progress"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

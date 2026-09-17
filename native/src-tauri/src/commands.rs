@@ -473,16 +473,41 @@ pub const VOICE_NOTE_SAVED_EVENT: &str = "voice-note-saved";
 /// Failure to write is logged, not surfaced — a Voice Note write failure
 /// must never interrupt dictation/injection, which have already succeeded
 /// by the time this is called.
-pub fn save_voice_note(app: &AppHandle, vault: &VaultManager, transcript: &str) {
+/// Returns the new note's id, so a caller that derives something from this
+/// recording — a todo, say — can point at the note rather than at nothing.
+/// `None` means the write failed, which is logged and never fatal.
+pub fn save_voice_note(app: &AppHandle, vault: &VaultManager, transcript: &str) -> Option<String> {
     let note = VaultNote::new_voice_note(transcript);
     match vault.save_note(&note) {
         Ok(_) => {
             let _ = app.emit(VOICE_NOTE_SAVED_EVENT, &note);
+            Some(note.id.clone())
         }
         Err(e) => {
             tracing::error!("Failed to save voice note: {}", e);
+            None
         }
     }
+}
+
+/// The capture mode the TODOs page records in.
+pub const TODO_CAPTURE_MODE: &str = "todo";
+
+/// One spoken line, as a todo title.
+///
+/// Press-and-hold on the TODOs page is deliberately narrow: whatever was
+/// said becomes one todo, not an extraction pass that might yield three or
+/// none. Newlines are collapsed so the title stays one line, and a long
+/// utterance is truncated for the title while the full text is kept as the
+/// card's description — the recording is the record, and the title is only
+/// how it is listed.
+fn todo_title_from(transcript: &str) -> String {
+    let single_line = transcript.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= 120 {
+        return single_line;
+    }
+    let truncated: String = single_line.chars().take(119).collect();
+    format!("{}…", truncated.trim_end())
 }
 
 /// Stops the active capture session and, only if the microphone actually
@@ -646,9 +671,46 @@ async fn process_captured_audio(
     // Every successful, non-empty transcript becomes a Voice Note — this
     // must not depend on which mode-specific pipeline runs next, or on
     // whether it succeeds.
-    save_voice_note(app, &state.vault, &transcript);
+    let voice_note_id = save_voice_note(app, &state.vault, &transcript);
 
     match captured.mode.as_str() {
+        // Press-and-hold on the TODOs page. Reuses this whole path —
+        // recorder, STT, normalisation, dictionary — and differs only in
+        // what it writes at the end. Everything upstream that can fail
+        // (no audio, STT error, an empty transcript) has already returned
+        // by here, so this arm cannot produce an empty todo.
+        TODO_CAPTURE_MODE => {
+            let mut card = KanbanCard::from_source(
+                &todo_title_from(&transcript),
+                crate::vault::TodoSourceKind::VoiceNote,
+                crate::vault::TodoSourceRef {
+                    // A voice note that failed to save leaves the todo
+                    // pointing at nothing, which the surface reports as an
+                    // unknown source rather than inventing an id.
+                    id: voice_note_id.clone().unwrap_or_default(),
+                    turn_ordinal: None,
+                    label: Some("Spoken on the TODOs page".to_string()),
+                },
+                None,
+                None,
+            );
+            card.description = transcript.clone();
+
+            state
+                .vault
+                .save_kanban_card(&card)
+                .map_err(|e| CommandError::new("VAULT_WRITE_FAILED", &e.to_string()))?;
+
+            Ok(Some(ProcessedPipelineResult {
+                mode: TODO_CAPTURE_MODE.to_string(),
+                transcript: transcript.clone(),
+                note_id: voice_note_id,
+                kanban_cards_created: 1,
+                output_markdown: card.title,
+                sources: Vec::new(),
+                spoken_audio_base64: None,
+            }))
+        }
         "voice_note" => Ok(Some(ProcessedPipelineResult {
             mode: "voice_note".to_string(),
             transcript: transcript.clone(),
@@ -3433,6 +3495,43 @@ pub async fn analyze_capture_context(
         .vault
         .save_capture_context(&id, &context)
         .map_err(|e| CommandError::new("SAVE_CONTEXT_FAILED", &e.to_string()))?;
+
+    // The action items this analysis found were, until now, written into
+    // `context.json` and never seen again. Persist them as todos so the
+    // TODOs surface shows work the user has already had extracted for
+    // them rather than making them re-read the capture to find it.
+    if let Some(conversation) = context.conversation() {
+        let candidates: Vec<_> = conversation
+            .action_items
+            .iter()
+            .map(|item| crate::vault::ExtractedTodo {
+                title: item.description.clone(),
+                kind: crate::vault::TodoSourceKind::WebCapture,
+                source_ref: crate::vault::TodoSourceRef {
+                    id: id.clone(),
+                    // The extractor records which turns an item came from;
+                    // the first is where to land the reader.
+                    turn_ordinal: item.source_turn_ordinals.first().copied(),
+                    label: Some(conversation.title.clone()),
+                },
+                // A web capture is not a scribble and carries no PARA band,
+                // so these arrive uncategorised rather than filed somewhere
+                // chosen on the user's behalf.
+                para: None,
+                captured_at: Some(context.generated_at.clone()),
+            })
+            .collect();
+
+        // A failure to record todos must not lose the analysis that was
+        // already written above — the context is the primary result here.
+        match state.vault.record_extracted_todos(&candidates) {
+            Ok(created) if !created.is_empty() => {
+                tracing::info!(capture = %id, created = created.len(), "captured action items became todos");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!(capture = %id, "failed to record extracted todos: {}", e),
+        }
+    }
 
     Ok(context)
 }
