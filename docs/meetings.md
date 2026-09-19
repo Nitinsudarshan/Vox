@@ -43,6 +43,7 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 ├── speakers.json     the voices detection proposed, and the names you gave them
 ├── summary.json      the report, its cache fingerprint, and the English original
 ├── notes.md          whatever the user typed
+├── transcript.live.json  what the live pass produced, kept once a final pass replaces it
 ├── diagnostics.jsonl one line per decoded segment, appended as it goes
 ├── diagnostics.json  the run's rollup, written once on stop
 └── audio/
@@ -132,6 +133,45 @@ and reports what it could not do rather than saving the transcript unchanged.
 The report pipeline ensures English exists before it summarises, because every
 report is written in English and translated afterwards whatever the configured
 report language.
+
+## Two passes over the same audio
+
+A live pass and a final pass optimize for different things, and the difference
+is the clock.
+
+A live decode races one. Audio keeps arriving at wall-clock rate, so a decoder
+averaging slower than real time builds a backlog and eventually drops speech —
+`pipeline_rtf` above 1.0 in the diagnostics is exactly that. A final pass has
+no clock: the recording is on disk and is not going anywhere. It can afford a
+wider beam, a bigger model, and the encoder clamp turned off.
+
+Vox already decoded the two differently — the live worker takes
+`SttPreset::Balanced` and keeps a cheaper profile for scripts Whisper writes
+expensively, and `WhisperDecodingConfig::for_meeting_batch` defaults to
+Quality with the clamp off. What was missing was any record of *which* had
+produced the transcript on screen.
+
+`Meeting.transcript` now carries it: the pass, the engine, the model filename
+(never its path — a meeting record gets exported), the language actually
+pinned, the decode profile, and when it finished. Meeting Detail shows "Live
+transcript" or "Final transcript", with the rest on hover.
+
+**The final pass replaces; it does not append.** `run_batch` truncates the
+transcript and decodes from sequence zero, so running it twice with the same
+model, language and profile produces the same transcript rather than two
+copies of it.
+
+**The live transcript survives that.** `transcript.live.json` is written once,
+before the first final pass, and never overwritten — a second final pass would
+otherwise archive the first one over it and lose the thing worth comparing
+against. An *empty* transcript is never archived, because `create` writes one
+and filling the once-only slot with nothing would hide the live transcript
+from every later pass.
+
+That archive does two jobs. A crash part-way through a re-transcription used
+to leave a truncated `transcript.json` and nothing to restore from, since the
+only copy was in the caller's memory. And "the new transcript is worse than the
+old one" is now a comparison rather than a memory.
 
 ## Decoding, and what a re-transcription changes
 

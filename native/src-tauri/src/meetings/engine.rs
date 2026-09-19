@@ -47,7 +47,7 @@ use super::capture::{
     emit_recording_warning, DualCapture, MeetingCaptureError, MeetingDevices, OpenedDevices,
 };
 use super::checkpoint::{self, CheckpointWriter};
-use super::model::{Meeting, MeetingSource, MeetingState};
+use super::model::{Meeting, MeetingSource, MeetingState, TranscriptProvenance, TranscriptionPass};
 use super::segmenter::Segmenter;
 use super::store::{MeetingStore, MeetingStoreError};
 use super::telemetry;
@@ -280,7 +280,6 @@ impl MeetingEngine {
             .unwrap_or_else(default_meeting_title);
 
         let mut meeting = Meeting::new(id.clone(), title.clone(), MeetingSource::Recorded);
-        meeting.transcript_model = Some(model_path.to_string_lossy().to_string());
         meeting.language = Some(settings.language.primary_dictation_language.clone());
         self.store.create(&meeting)?;
 
@@ -517,7 +516,21 @@ impl MeetingEngine {
         // 4. Write the finished record.
         let segments = self.store.load_transcript(&id)?;
         let lost = dropped + queued.saturating_sub(completed);
+        // What produced this transcript, recorded now rather than at start:
+        // the language may have been auto-detected, and the profile may have
+        // switched part-way through a bilingual meeting.
+        let provenance = stats.as_ref().map(|stats| TranscriptProvenance {
+            pass: TranscriptionPass::Live,
+            engine: crate::capture::recognizer::RecognizerKind::Whisper
+                .id()
+                .to_string(),
+            model: transcription::model_name(&stats.model_path),
+            language: (stats.language != "auto-detect").then(|| stats.language.clone()),
+            profile: stats.strategy.clone(),
+            completed_at: chrono::Utc::now().to_rfc3339(),
+        });
         let meeting = self.store.update_meeting(&id, |record| {
+            record.transcript = provenance.clone();
             record.state = MeetingState::Completed;
             record.duration_seconds = pump.duration_seconds;
             record.audio_path = pump.audio_path.clone();

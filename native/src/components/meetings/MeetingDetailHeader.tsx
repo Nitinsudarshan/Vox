@@ -201,6 +201,24 @@ export const MeetingDetailHeader: React.FC<MeetingDetailHeaderProps> = ({
               Recording
             </span>
           )}
+          {!live && meeting.state === 'transcribing' && (
+            <span className="text-muted-foreground">Transcribing…</span>
+          )}
+          {!live && meeting.state !== 'transcribing' && meeting.transcript && (
+            // Which pass produced what is on screen. A live transcript raced a
+            // clock and a final one did not, so "this reads worse than last
+            // time" has somewhere to start.
+            <span
+              className="text-muted-foreground"
+              title={`${meeting.transcript.engine} · ${meeting.transcript.model}${
+                meeting.transcript.language ? ` · ${meeting.transcript.language}` : ''
+              } · ${meeting.transcript.profile}`}
+            >
+              {meeting.transcript.pass === 'final'
+                ? 'Final transcript'
+                : 'Live transcript'}
+            </span>
+          )}
         </span>
       }
       footer={

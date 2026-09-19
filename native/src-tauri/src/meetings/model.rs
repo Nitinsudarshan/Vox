@@ -111,6 +111,56 @@ pub struct TranscriptSegment {
     pub speaker_id: Option<String>,
 }
 
+/// Which pass produced a transcript.
+///
+/// The two exist because they optimize for different things over the same
+/// audio. A live pass runs against a clock: audio keeps arriving, so a decoder
+/// slower than real time builds a backlog and eventually drops speech. A final
+/// pass has no clock at all — the recording is on disk and is not going
+/// anywhere — so it can afford a wider beam and a bigger model.
+///
+/// Recorded on the meeting rather than inferred, because "why is this
+/// transcript worse than the one I got last time" is otherwise unanswerable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionPass {
+    /// Decoded while the meeting was being recorded.
+    Live,
+    /// Decoded from the durable recording afterwards.
+    Final,
+}
+
+impl TranscriptionPass {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Final => "final",
+        }
+    }
+}
+
+/// What produced the transcript currently on disk.
+///
+/// Every field is something that changes the answer, which is what makes this
+/// worth storing: re-transcribing with the same model, language and profile
+/// should produce the same transcript, and when it does not, this is what
+/// says which of them moved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptProvenance {
+    pub pass: TranscriptionPass,
+    /// Recognizer id — `whisper`, `parakeet`.
+    pub engine: String,
+    /// Model filename, never its path. A meeting record is exported and
+    /// shared, and a path names a machine and usually a person.
+    pub model: String,
+    /// The language the decode was pinned to, or `None` for auto-detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Decode profile, in the engine's own terms.
+    pub profile: String,
+    pub completed_at: String,
+}
+
 /// One person Vox believes spoke during a meeting.
 ///
 /// The name is the user's; everything else is evidence. Vox proposes the
@@ -163,9 +213,13 @@ pub struct Meeting {
     /// Absolute path to the merged recording, once one exists.
     #[serde(default)]
     pub audio_path: Option<String>,
-    /// The STT model file that produced the current transcript.
+    /// What produced the transcript currently on disk.
+    ///
+    /// `None` for a meeting transcribed before this was recorded, and for one
+    /// still recording. Replaces an earlier `transcript_model` field that held
+    /// a full filesystem path and that nothing ever read.
     #[serde(default)]
-    pub transcript_model: Option<String>,
+    pub transcript: Option<TranscriptProvenance>,
     #[serde(default)]
     pub language: Option<String>,
     #[serde(default)]
@@ -211,7 +265,7 @@ impl Meeting {
             source,
             duration_seconds: 0.0,
             audio_path: None,
-            transcript_model: None,
+            transcript: None,
             language: None,
             mic_device: None,
             system_audio_captured: false,

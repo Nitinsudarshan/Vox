@@ -43,6 +43,8 @@ pub const MEETINGS_DIR: &str = "meetings";
 
 const MEETING_FILE: &str = "meeting.json";
 const TRANSCRIPT_FILE: &str = "transcript.json";
+/// The live transcript, kept when a final pass replaces it.
+const LIVE_TRANSCRIPT_FILE: &str = "transcript.live.json";
 const SUMMARY_FILE: &str = "summary.json";
 const NOTES_FILE: &str = "notes.md";
 const SPEAKERS_FILE: &str = "speakers.json";
@@ -338,6 +340,54 @@ impl MeetingStore {
             return Ok(None);
         }
         Ok(serde_json::from_slice(&fs::read(&path)?).ok())
+    }
+
+    /// Copies the live transcript aside before a final pass replaces it.
+    ///
+    /// Written once and never overwritten: the point is to keep what the
+    /// *live* pass produced, and a second final pass would otherwise archive
+    /// the first final pass over it and lose the thing worth comparing
+    /// against.
+    ///
+    /// Two jobs at once. A crash part-way through a re-transcription used to
+    /// leave a truncated `transcript.json` and nothing to restore from, since
+    /// the only copy was in the caller's memory. And "the new transcript is
+    /// worse than the old one" was unanswerable without one to compare.
+    ///
+    /// Returns whether an archive was made.
+    pub fn archive_live_transcript(&self, id: &str) -> Result<bool, MeetingStoreError> {
+        let dir = self.meeting_dir(id)?;
+        let archive = dir.join(LIVE_TRANSCRIPT_FILE);
+        if archive.exists() {
+            return Ok(false);
+        }
+        // An *empty* transcript must not be archived. `create` writes one, so
+        // a meeting that produced no text at all would otherwise fill the
+        // once-only archive slot with nothing and hide the real live
+        // transcript from every later pass.
+        let current = self.load_transcript(id)?;
+        if current.is_empty() {
+            return Ok(false);
+        }
+        write_atomic(&archive, &serde_json::to_vec_pretty(&current)?)?;
+        Ok(true)
+    }
+
+    /// The live transcript, where a final pass has since replaced it.
+    ///
+    /// `None` means no final pass has run, so `transcript.json` *is* the live
+    /// one — not that the live transcript was lost.
+    pub fn load_live_transcript(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TranscriptSegment>>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(LIVE_TRANSCRIPT_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut segments: Vec<TranscriptSegment> = serde_json::from_slice(&fs::read(&path)?)?;
+        segments.sort_by_key(|segment| segment.sequence);
+        Ok(Some(segments))
     }
 
     pub fn save_summary(&self, summary: &MeetingSummary) -> Result<(), MeetingStoreError> {
@@ -988,6 +1038,109 @@ mod tests {
             text_chars: 12,
             queue_depth_after: 0,
         }
+    }
+
+    #[test]
+    fn the_live_transcript_is_kept_when_a_final_pass_replaces_it() {
+        let store = MeetingStore::new(temp_vault("live-archive"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Passes".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .save_transcript("meeting-p", &[segment(0, "live text")])
+            .unwrap();
+
+        assert!(store.archive_live_transcript("meeting-p").unwrap());
+        store
+            .save_transcript("meeting-p", &[segment(0, "final text")])
+            .unwrap();
+
+        assert_eq!(store.load_transcript("meeting-p").unwrap()[0].text, "final text");
+        let live = store
+            .load_live_transcript("meeting-p")
+            .unwrap()
+            .expect("the live transcript must survive the pass that replaced it");
+        assert_eq!(live[0].text, "live text");
+    }
+
+    #[test]
+    fn a_second_final_pass_does_not_archive_over_the_live_transcript() {
+        // Archiving again would replace the live transcript with the first
+        // final one, which is the only thing worth comparing against.
+        let store = MeetingStore::new(temp_vault("live-archive-twice"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Twice".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .save_transcript("meeting-p", &[segment(0, "live text")])
+            .unwrap();
+
+        assert!(store.archive_live_transcript("meeting-p").unwrap());
+        store
+            .save_transcript("meeting-p", &[segment(0, "first final")])
+            .unwrap();
+        assert!(
+            !store.archive_live_transcript("meeting-p").unwrap(),
+            "a second pass must not archive again"
+        );
+
+        let live = store.load_live_transcript("meeting-p").unwrap().unwrap();
+        assert_eq!(live[0].text, "live text");
+    }
+
+    #[test]
+    fn a_meeting_with_no_final_pass_has_no_archive_and_that_is_not_a_loss() {
+        // `None` means transcript.json *is* the live one, not that it is gone.
+        let store = MeetingStore::new(temp_vault("live-none"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Live".into(), MeetingSource::Recorded))
+            .unwrap();
+        store.save_transcript("meeting-p", &[segment(0, "only")]).unwrap();
+        assert!(store.load_live_transcript("meeting-p").unwrap().is_none());
+    }
+
+    #[test]
+    fn an_empty_transcript_is_not_archived_over_the_real_one() {
+        // `create` writes an empty transcript.json, so archiving
+        // unconditionally would fill the once-only slot with nothing and hide
+        // the live transcript from every later pass.
+        let store = MeetingStore::new(temp_vault("live-empty"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Empty".into(), MeetingSource::Recorded))
+            .unwrap();
+        assert!(!store.archive_live_transcript("meeting-p").unwrap());
+        assert!(store.load_live_transcript("meeting-p").unwrap().is_none());
+
+        // Once there is something to keep, the slot is still free.
+        store.save_transcript("meeting-p", &[segment(0, "live")]).unwrap();
+        assert!(store.archive_live_transcript("meeting-p").unwrap());
+        assert_eq!(
+            store.load_live_transcript("meeting-p").unwrap().unwrap()[0].text,
+            "live"
+        );
+    }
+
+    #[test]
+    fn a_meeting_records_what_produced_its_transcript_without_naming_a_machine() {
+        use crate::meetings::model::{TranscriptProvenance, TranscriptionPass};
+        let store = MeetingStore::new(temp_vault("provenance"));
+        let mut meeting =
+            Meeting::new("meeting-p".into(), "Prov".into(), MeetingSource::Recorded);
+        meeting.transcript = Some(TranscriptProvenance {
+            pass: TranscriptionPass::Final,
+            engine: "whisper".into(),
+            model: "ggml-large-v3-turbo.bin".into(),
+            language: Some("hi".into()),
+            profile: "BeamSearch { beam_size: 5, patience: 1.0 }".into(),
+            completed_at: "2026-09-19T10:00:00Z".into(),
+        });
+        store.create(&meeting).unwrap();
+
+        let loaded = store.load_meeting("meeting-p").unwrap();
+        let provenance = loaded.transcript.expect("provenance survives a round trip");
+        assert_eq!(provenance.pass, TranscriptionPass::Final);
+        assert_eq!(provenance.model, "ggml-large-v3-turbo.bin");
+        assert!(!provenance.model.contains('/'), "a filename, never a path");
     }
 
     #[test]

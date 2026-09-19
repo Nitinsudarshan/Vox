@@ -23,6 +23,28 @@ export type MeetingState =
  */
 export type SegmentChannel = 'microphone' | 'system' | 'mixed';
 
+/**
+ * Which pass produced a transcript.
+ *
+ * They optimize for different things over the same audio: a live pass races a
+ * clock and must average faster than real time, a final pass has no clock and
+ * can afford a wider beam and a bigger model.
+ */
+export type TranscriptionPass = 'live' | 'final';
+
+/** What produced the transcript currently on disk. */
+export interface TranscriptProvenance {
+  pass: TranscriptionPass;
+  /** Recognizer id — `whisper`, `parakeet`. */
+  engine: string;
+  /** Model filename, never its path. */
+  model: string;
+  language?: string | null;
+  /** Decode profile, in the engine's own terms. */
+  profile: string;
+  completed_at: string;
+}
+
 export type SummaryStatus =
   | 'pending'
   | 'processing'
@@ -81,7 +103,11 @@ export interface Meeting {
   source: MeetingSource;
   duration_seconds: number;
   audio_path?: string | null;
-  transcript_model?: string | null;
+  /**
+   * What produced the transcript currently on disk. Absent for a meeting
+   * transcribed before this was recorded, and for one still recording.
+   */
+  transcript?: TranscriptProvenance | null;
   language?: string | null;
   mic_device?: string | null;
   /** False means only this machine's microphone was recorded. */

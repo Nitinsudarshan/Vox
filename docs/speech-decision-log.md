@@ -554,6 +554,51 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-026 — Live speed and final accuracy are separate targets, and which one ran is recorded
+
+- **Context**: Vox already decoded a live meeting and a re-transcription
+  differently — Balanced against Quality, the encoder clamp on against off, a
+  cheap profile for expensive scripts on the live path only. Nothing recorded
+  which of them had produced the transcript on screen, so "why is this worse
+  than last time" had no starting point.
+- **Decision**: `TranscriptionPass` and `TranscriptProvenance` on the meeting —
+  pass, engine, model filename, language actually pinned, decode profile, and
+  when it finished. Meeting Detail shows which pass produced what it is
+  displaying.
+- **Reason the two passes differ at all**: the clock. A live decode races one,
+  so a decoder slower than real time builds a backlog and eventually drops
+  speech. A final pass has no clock — the recording is on disk — so it can
+  afford a wider beam and a bigger model.
+- **Replaces `Meeting::transcript_model`**, which held a full filesystem path
+  and which nothing ever read. A meeting record gets exported; a path names a
+  machine and usually a person (D-018).
+- **Idempotence**: the final pass truncates and decodes from sequence zero, so
+  running it twice with the same inputs produces the same transcript rather
+  than two copies of it.
+
+---
+
+### D-027 — The live transcript is kept when a final pass replaces it
+
+- **Context**: `run_batch` truncated `transcript.json` before decoding
+  anything, and `retranscribe`'s only copy of the previous transcript was in
+  memory. A crash part-way through therefore left a truncated transcript and
+  nothing to restore from — the audit recorded this as F9.
+- **Decision**: `transcript.live.json`, written once before the first final
+  pass.
+- **Written once, not per pass**: a second final pass would archive the first
+  final one over it, and the live transcript is the thing worth comparing
+  against.
+- **Never written empty**: `MeetingStore::create` writes an empty
+  `transcript.json`, so archiving unconditionally would fill the once-only slot
+  with nothing and hide the live transcript from every later pass. This was a
+  real bug in the first implementation, caught by a test whose premise was
+  wrong for an interesting reason.
+- **Two jobs**: a crash mid-re-transcription now costs nothing, and "the new
+  transcript is worse than the old one" is a comparison rather than a memory.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -564,9 +609,8 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-026 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already, and D-023's interface is where it plugs in |
-| D-027 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
-| D-028 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-027 |
-| D-029 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-030 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-031 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-030 |
+| D-028 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
+| D-029 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-028 |
+| D-030 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-031 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-032 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-031 |
