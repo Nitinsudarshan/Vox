@@ -308,22 +308,76 @@ impl BenchmarkManifest {
     }
 }
 
+/// Directory a corpus keeps its reports in.
+const RESULTS_DIR: &str = "results";
+
+/// Whether a path would leave the directory it is resolved against.
+///
+/// Absolute paths, `..`, UNC shares and Windows drive letters. One rule, used
+/// for the files a run reads and for the directory it writes — a corpus that
+/// cannot read outside itself but can write anywhere is not contained.
+///
+/// **Judged as a string, not only through [`Path`].** Vox ships for Windows
+/// and its tests run on Linux, where `Path` sees no drive prefix and no
+/// backslash separator: `C:\windows` is one ordinary component and
+/// `..\..\elsewhere` contains no `ParentDir` at all. Asking the host
+/// platform would mean the check passing in CI and failing on a user's
+/// machine, which is the failure this function exists to prevent.
+fn escapes_root(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    // A UNC share (\\host\share) or a rooted path in either convention.
+    if value.starts_with('/') || value.starts_with('\\') {
+        return true;
+    }
+    // A drive letter, absolute (C:\x) or drive-relative (C:x) — both leave.
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return true;
+    }
+    if Path::new(value).is_absolute() {
+        return true;
+    }
+    value
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+}
+
 /// Rejects an absolute path, a parent escape, or a Windows drive prefix.
 fn check_relative(value: &str, case_id: &str, field: &str) -> Result<(), BenchmarkError> {
-    let path = Path::new(value);
-    let escapes = path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir | std::path::Component::Prefix(_)
-            )
-        });
-    if escapes {
+    if escapes_root(value) {
         return Err(BenchmarkError::Invalid(format!(
             "case '{case_id}' has a {field} path that leaves the corpus directory: {value}"
         )));
     }
     Ok(())
+}
+
+/// Where a report may be written.
+///
+/// Under the corpus root, always. The caller is a Tauri command, which means
+/// the path arrives from the webview — the same surface that renders a model's
+/// summary and a captured web page. An unconstrained output directory there is
+/// a write-anywhere primitive reachable from content Vox did not write, and a
+/// benchmark has no reason to want one: its results belong beside the
+/// recordings they score.
+///
+/// `None` is the ordinary case and lands in a timestamped directory, so two
+/// runs over one corpus do not overwrite each other.
+pub fn resolve_output_dir(
+    corpus_root: &Path,
+    requested: Option<&str>,
+) -> Result<PathBuf, BenchmarkError> {
+    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
+    let Some(requested) = requested else {
+        return Ok(corpus_root
+            .join(RESULTS_DIR)
+            .join(chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()));
+    };
+    if escapes_root(requested) {
+        return Err(BenchmarkError::Invalid(format!(
+            "the report directory must sit inside the corpus, and '{requested}' leaves it"
+        )));
+    }
+    Ok(corpus_root.join(requested))
 }
 
 // --- the engine seam ----------------------------------------------------
@@ -1530,13 +1584,54 @@ mod tests {
         let err = manifest.validate().expect_err("traversal must be refused");
         assert!(matches!(err, BenchmarkError::Invalid(_)), "{err}");
 
-        let mut absolute = BenchmarkManifest::template();
-        absolute.cases[0].audio = if cfg!(windows) {
-            "C:\\windows\\system32\\config".into()
-        } else {
-            "/etc/passwd".into()
-        };
-        assert!(absolute.validate().is_err(), "an absolute path must be refused");
+        // Every one of these, on every platform. Vox ships for Windows and is
+        // tested on Linux, where `Path` sees no drive prefix and no backslash
+        // separator — so a check that asked the host would pass in CI and let
+        // the first two through on a user's machine.
+        for outside in [
+            "C:\\windows\\system32\\config",
+            "..\\..\\elsewhere",
+            "\\\\server\\share",
+            "/etc/passwd",
+        ] {
+            let mut manifest = BenchmarkManifest::template();
+            manifest.cases[0].audio = outside.into();
+            assert!(
+                manifest.validate().is_err(),
+                "{outside} must be refused whatever platform this runs on"
+            );
+        }
+    }
+
+    #[test]
+    fn a_report_cannot_be_written_outside_the_corpus() {
+        // The path arrives from the webview, which renders a model's summary
+        // and a captured web page. Unconstrained, it is a write-anywhere
+        // primitive reachable from content Vox did not write.
+        let root = Path::new("/corpus");
+
+        let inside = resolve_output_dir(root, Some("results/tuesday")).expect("inside is fine");
+        assert!(inside.starts_with(root));
+
+        for outside in ["../elsewhere", "results/../../elsewhere", "/etc", "C:\\windows"] {
+            assert!(
+                matches!(
+                    resolve_output_dir(root, Some(outside)),
+                    Err(BenchmarkError::Invalid(_))
+                ),
+                "{outside} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn two_runs_over_one_corpus_do_not_overwrite_each_other() {
+        let root = Path::new("/corpus");
+        let chosen = resolve_output_dir(root, None).expect("a default");
+        assert!(chosen.starts_with(root.join("results")));
+        // Blank is not a choice, so it takes the default rather than writing
+        // the report over the corpus root itself.
+        assert_eq!(resolve_output_dir(root, Some("   ")).unwrap().parent(), chosen.parent());
     }
 
     #[test]

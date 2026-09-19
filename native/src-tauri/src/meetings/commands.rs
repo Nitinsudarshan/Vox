@@ -1333,8 +1333,10 @@ pub struct BenchmarkRequest {
     pub engine: crate::capture::recognizers::RecognizerChoice,
     #[serde(default)]
     pub pacing: Option<String>,
-    /// Where to write the report. Defaults to a timestamped directory beside
-    /// the manifest.
+    /// Where to write the report, **relative to the corpus root**. Defaults to
+    /// a timestamped directory under it. A path that leaves the corpus is
+    /// refused: this arrives from the webview, and a benchmark's results
+    /// belong beside the recordings they score.
     #[serde(default)]
     pub out_dir: Option<String>,
     /// Decode overrides, so two profiles can be compared over one corpus.
@@ -1413,16 +1415,7 @@ pub async fn run_speech_benchmark(
         state.meeting_imports.finish(BENCHMARK_RUN_KEY);
         let report = result?;
 
-        let out_dir = request
-            .out_dir
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                corpus_root.join("results").join(
-                    chrono::Utc::now()
-                        .format("%Y%m%dT%H%M%SZ")
-                        .to_string(),
-                )
-            });
+        let out_dir = benchmark::resolve_output_dir(&corpus_root, request.out_dir.as_deref())?;
         report.write_to(&out_dir)?;
         Ok(report)
     })

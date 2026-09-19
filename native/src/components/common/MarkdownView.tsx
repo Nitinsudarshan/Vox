@@ -1,8 +1,17 @@
 import React, { useEffect, useRef, useState, useId } from 'react';
 import mermaid from 'mermaid';
+import { Code2, AlertTriangle, Check, Copy, Eye, GitFork, Sparkles } from 'lucide-react';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Code2, AlertTriangle, Check, Copy, Eye, GitFork, Sparkles } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { DiagramViewport } from '@/components/shared/DiagramViewport';
 
 interface MarkdownViewProps {
   content: string;
@@ -39,6 +48,65 @@ function getDiagramLabel(code: string): string {
   return 'Mermaid Diagram';
 }
 
+/**
+ * Mermaid's settings, in one place so the security posture is reviewable and
+ * testable rather than buried in an effect.
+ */
+export const mermaidConfig = (isDark: boolean): Parameters<typeof mermaid.initialize>[0] => ({
+  startOnLoad: false,
+  theme: isDark ? 'dark' : 'default',
+  themeVariables: isDark
+    ? {
+        darkMode: true,
+        background: '#18181b',
+        primaryColor: '#3b82f6',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#3b82f6',
+        lineColor: '#94a3b8',
+        secondaryColor: '#27272a',
+        tertiaryColor: '#1e293b',
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
+        fontSize: '12px',
+      }
+    : {
+        darkMode: false,
+        background: '#ffffff',
+        primaryColor: '#2563eb',
+        primaryTextColor: '#0f172a',
+        primaryBorderColor: '#2563eb',
+        lineColor: '#64748b',
+        secondaryColor: '#f1f5f9',
+        tertiaryColor: '#e2e8f0',
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
+        fontSize: '12px',
+      },
+  // Never 'loose'. Vox renders markdown it did not write — a model's meeting
+  // summary, a captured web page — and 'loose' passes HTML in diagram labels
+  // straight through to the SVG this component injects, in a webview with the
+  // full Tauri command surface behind it. 'strict' encodes that HTML and
+  // disables click bindings; `sanitizeSvgMarkup` is the second line, at the
+  // point of injection.
+  securityLevel: 'strict',
+  flowchart: {
+    // The diagram keeps its own size and `DiagramViewport` decides what is
+    // visible. Letting mermaid fit it to the container is what made a wide
+    // flowchart render as an unreadable strip: every label scaled below body
+    // text, with no way to get closer.
+    useMaxWidth: false,
+    htmlLabels: true,
+    curve: 'basis',
+  },
+  sequence: { useMaxWidth: false },
+  gantt: { useMaxWidth: false },
+  class: { useMaxWidth: false },
+  state: { useMaxWidth: false },
+  er: { useMaxWidth: false },
+  journey: { useMaxWidth: false },
+  pie: { useMaxWidth: false },
+  mindmap: { useMaxWidth: false },
+  timeline: { useMaxWidth: false },
+});
+
 interface MermaidBlockProps {
   code: string;
 }
@@ -64,6 +132,7 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
   const [svgContent, setSvgContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const uniqueId = useId().replace(/[^a-zA-Z0-9_-]/g, 'm');
 
@@ -77,43 +146,7 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
         if (!cleanCode) return;
 
         const isDark = document.documentElement.classList.contains('dark');
-
-        // Configure Mermaid with theme corresponding to active dark/light mode
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: isDark ? 'dark' : 'default',
-          themeVariables: isDark
-            ? {
-                darkMode: true,
-                background: '#18181b',
-                primaryColor: '#3b82f6',
-                primaryTextColor: '#f8fafc',
-                primaryBorderColor: '#3b82f6',
-                lineColor: '#94a3b8',
-                secondaryColor: '#27272a',
-                tertiaryColor: '#1e293b',
-                fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
-                fontSize: '12px',
-              }
-            : {
-                darkMode: false,
-                background: '#ffffff',
-                primaryColor: '#2563eb',
-                primaryTextColor: '#0f172a',
-                primaryBorderColor: '#2563eb',
-                lineColor: '#64748b',
-                secondaryColor: '#f1f5f9',
-                tertiaryColor: '#e2e8f0',
-                fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
-                fontSize: '12px',
-              },
-          securityLevel: 'loose',
-          flowchart: {
-            useMaxWidth: true,
-            htmlLabels: true,
-            curve: 'basis',
-          },
-        });
+        mermaid.initialize(mermaidConfig(isDark));
 
         const renderId = `m_${uniqueId}_${Date.now()}`;
         const { svg } = await mermaid.render(renderId, cleanCode);
@@ -241,11 +274,31 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
           <span>Rendering diagram…</span>
         </div>
       ) : (
-        <div
-          className="p-4 flex items-center justify-center overflow-x-auto bg-card/60 [&>svg]:max-w-full [&>svg]:h-auto [&>svg]:mx-auto"
-          dangerouslySetInnerHTML={{ __html: svgContent }}
+        <DiagramViewport
+          svg={svgContent}
+          label={diagramTitle}
+          onExpand={() => setIsExpanded(true)}
         />
       )}
+
+      <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
+        <DialogContent className="flex h-[92vh] max-w-[96vw] flex-col gap-3 p-4">
+          <DialogHeader className="pr-8 text-left">
+            <DialogTitle className="text-sm font-semibold">{diagramTitle}</DialogTitle>
+            <DialogDescription className="text-xs">
+              Drag to move, arrow keys to pan, plus and minus to zoom, zero to fit.
+            </DialogDescription>
+          </DialogHeader>
+          {svgContent ? (
+            <DiagramViewport
+              svg={svgContent}
+              label={diagramTitle}
+              variant="stage"
+              className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60"
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

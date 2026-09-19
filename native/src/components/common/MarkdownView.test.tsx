@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, test } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MarkdownView } from './MarkdownView';
+import { MarkdownView, mermaidConfig } from './MarkdownView';
 
 describe('MarkdownView layout and containment', () => {
   test('renders markdown tables into structured HTML table with horizontal scroll container', () => {
@@ -54,5 +54,29 @@ const veryLongSymbol = "unbreakable-string-value-that-should-never-blow-out-the-
 
     const codeWrapper = container.querySelector('.overflow-x-auto.max-w-full');
     expect(codeWrapper).not.toBeNull();
+  });
+});
+
+describe('mermaid configuration', () => {
+  test('never renders diagram labels as live HTML', () => {
+    // Vox renders markdown it did not write — a model's meeting summary, a
+    // captured web page — and 'loose' passes HTML in a diagram label straight
+    // into the SVG the component injects, inside a webview holding the whole
+    // Tauri command surface. This was 'loose'; it must not go back.
+    expect(mermaidConfig(false).securityLevel).toBe('strict');
+    expect(mermaidConfig(true).securityLevel).toBe('strict');
+  });
+
+  test('lets a diagram keep its own size so the viewport can decide what is shown', () => {
+    // Fitting to the container is what made a wide flowchart render as an
+    // unreadable strip with no way to get closer.
+    const config = mermaidConfig(false);
+    expect(config.flowchart?.useMaxWidth).toBe(false);
+    expect(config.sequence?.useMaxWidth).toBe(false);
+  });
+
+  test('follows the active theme', () => {
+    expect(mermaidConfig(true).theme).toBe('dark');
+    expect(mermaidConfig(false).theme).toBe('default');
   });
 });
