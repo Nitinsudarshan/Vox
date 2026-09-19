@@ -143,6 +143,21 @@ impl BatchConfig {
     }
 }
 
+/// What a batch run should record as having produced the transcript.
+///
+/// A filename rather than the configured path: a meeting record is exported
+/// and shared, and a path names a machine and usually a person.
+fn final_provenance(config: &BatchConfig) -> super::model::TranscriptProvenance {
+    super::model::TranscriptProvenance {
+        pass: super::model::TranscriptionPass::Final,
+        engine: crate::capture::recognizer::RecognizerKind::Whisper.id().to_string(),
+        model: super::transcription::model_name(&config.model_path),
+        language: config.language.whisper_language.clone(),
+        profile: format!("{:?}", config.decoding.strategy),
+        completed_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
 /// Whether Vox will attempt this file.
 pub fn is_supported(path: &Path) -> bool {
     path.extension()
@@ -191,7 +206,7 @@ pub fn import_audio(
 
     let mut meeting = Meeting::new(id.clone(), title, MeetingSource::Imported);
     meeting.state = MeetingState::Transcribing;
-    meeting.transcript_model = Some(config.model_path.clone());
+    meeting.transcript = Some(final_provenance(&config));
     // An imported file is one mixed track: there is no second stream to
     // attribute anything to, so every segment will be `Mixed`. Saying the
     // system audio was not captured is what stops a summary being written as
@@ -234,10 +249,19 @@ pub fn retranscribe(
     // Keep the old transcript until the new one is written: a re-transcription
     // that fails halfway must not leave the meeting with nothing.
     let previous = store.load_transcript(meeting_id)?;
+    // And keep it on *disk* too, once, so a crash — which the in-memory copy
+    // above cannot survive — costs nothing, and so "the new transcript is
+    // worse than the old one" stays answerable.
+    if let Err(err) = store.archive_live_transcript(meeting_id) {
+        tracing::warn!(
+            "meeting {}: could not archive the live transcript: {}",
+            meeting_id,
+            err
+        );
+    }
 
     store.update_meeting(meeting_id, |record| {
         record.state = MeetingState::Transcribing;
-        record.transcript_model = Some(config.model_path.clone());
     })?;
 
     let result = run_batch(
@@ -250,6 +274,13 @@ pub fn retranscribe(
         &cancel,
         false,
     );
+
+    if result.is_ok() {
+        let provenance = final_provenance(&config);
+        let _ = store.update_meeting(meeting_id, |record| {
+            record.transcript = Some(provenance.clone());
+        });
+    }
 
     if result.is_err() {
         if let Err(err) = store.save_transcript(meeting_id, &previous) {
@@ -572,7 +603,11 @@ fn run_batch(
         None
     };
 
-    // A fresh transcript: a re-run replaces, it does not append.
+    // A fresh transcript: a re-run replaces, it does not append. That is what
+    // makes a final pass idempotent — running it twice with the same model,
+    // language and profile produces the same transcript rather than two copies
+    // of it — and it is why the live one is archived first.
+    let _ = store.archive_live_transcript(meeting_id);
     store.save_transcript(meeting_id, &[])?;
 
     let mut segmenter = Segmenter::new();
@@ -745,7 +780,13 @@ fn decode_one(
         return None;
     }
 
-    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &config.glossary);
+    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &[]);
+    let glossary = crate::capture::glossary::Glossary::from_settings(&config.glossary);
+    let (normalized_text, corrections) = glossary.apply(&normalized.text);
+    let normalized = crate::capture::text_normalize::SegmentOutcome {
+        text: normalized_text,
+        applied_rules: normalized.applied_rules,
+    };
     let (text, original_text, romanized_text) = if crate::capture::romanize::contains_devanagari(&normalized.text) {
         let romanized = crate::capture::romanize::to_latin(&normalized.text);
         (normalized.text.clone(), Some(normalized.text), Some(romanized))
@@ -760,6 +801,7 @@ fn decode_one(
         channel: segment.channel,
         no_speech_prob: mean_no_speech_prob,
         recorded_at: chrono::Utc::now().to_rfc3339(),
+        cut_at_ceiling: segment.forced_split(),
         original_text,
         romanized_text,
         // The English pass decoded the same samples, so it needs no
@@ -769,7 +811,9 @@ fn decode_one(
         translated_text: english
             .map(|text| text.trim().to_string())
             .filter(|text| !text.is_empty()),
-        speaker_id: None,
+        corrections,
+        // Import decodes a finished file, so there is no live decode to
+        // measure; the telemetry a recording produces has no counterpart here.
         telemetry: None,
     })
 }

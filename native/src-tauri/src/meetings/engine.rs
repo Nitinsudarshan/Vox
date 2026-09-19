@@ -43,11 +43,14 @@ use crate::capture::stt::{
 use crate::settings::AppSettings;
 use crate::sync::MutexExt;
 
-use super::capture::{DualCapture, MeetingCaptureError, MeetingDevices, OpenedDevices};
+use super::capture::{
+    emit_recording_warning, DualCapture, MeetingCaptureError, MeetingDevices, OpenedDevices,
+};
 use super::checkpoint::{self, CheckpointWriter};
-use super::model::{Meeting, MeetingSource, MeetingState};
+use super::model::{Meeting, MeetingSource, MeetingState, TranscriptProvenance, TranscriptionPass};
 use super::segmenter::Segmenter;
 use super::store::{MeetingStore, MeetingStoreError};
+use super::telemetry;
 use super::transcription::{self, TranscriptionQueue, WorkerConfig};
 
 /// Recording lifecycle, for every surface that shows recording state.
@@ -151,11 +154,34 @@ impl MeetingRecordingStatus {
     }
 }
 
+/// What the stop path knows that the per-segment log cannot.
+struct DiagnosticsFacts {
+    recording_seconds: f64,
+    drain_seconds: f64,
+    drain_completed: bool,
+    microphone_opened: bool,
+    system_audio_opened: bool,
+    microphone_heard: bool,
+    system_audio_heard: bool,
+    checkpoints_written: bool,
+    checkpoint_failures: u64,
+    audio_lost_seconds: f64,
+    segments_emitted: u64,
+    segments_dropped: u64,
+}
+
 /// What the pump thread reports back when the recording ends.
 struct PumpResult {
     /// The merged recording, if any audio was captured.
     audio_path: Option<String>,
     duration_seconds: f64,
+    /// Whether a checkpoint writer existed at all. `false` means the recording
+    /// was never being saved — the worst failure in the subsystem, and until
+    /// now one that only appeared in the log.
+    checkpoints_written: bool,
+    /// Checkpoint writes that failed mid-recording. Non-zero means the audio
+    /// has gaps in it.
+    checkpoint_failures: u64,
 }
 
 struct ActiveMeeting {
@@ -254,7 +280,6 @@ impl MeetingEngine {
             .unwrap_or_else(default_meeting_title);
 
         let mut meeting = Meeting::new(id.clone(), title.clone(), MeetingSource::Recorded);
-        meeting.transcript_model = Some(model_path.to_string_lossy().to_string());
         meeting.language = Some(settings.language.primary_dictation_language.clone());
         self.store.create(&meeting)?;
 
@@ -269,18 +294,31 @@ impl MeetingEngine {
             }
         };
         let binding = capture.binding();
-        let warning = if capture_system_audio && !binding.system_audio {
-            Some(
+        // Both directions, not just one. A recording with no far end and a
+        // recording with no near end are equally partial, and until now only
+        // the first said so — which left the worse case, the one where the
+        // person running Vox is the one missing, entirely silent.
+        let warning = if !binding.microphone {
+            Some((
+                "microphone",
+                "No microphone could be opened, so this machine's own audio is not being \
+                 recorded. Only the other participants will appear in the transcript."
+                    .to_string(),
+            ))
+        } else if capture_system_audio && !binding.system_audio {
+            Some((
+                "system_audio",
                 "System audio could not be captured, so only this machine's microphone is being \
                  recorded. The other participants will not appear in the transcript."
                     .to_string(),
-            )
+            ))
         } else {
             None
         };
-        if let Some(message) = &warning {
-            tracing::warn!("meeting {}: {}", id, message);
+        if let Some((kind, message)) = &warning {
+            emit_recording_warning(&app, kind, message);
         }
+        let warning = warning.map(|(_, message)| message);
 
         let cancel = Arc::new(AtomicBool::new(false));
         let (queue, worker) = transcription::spawn_worker(
@@ -313,9 +351,10 @@ impl MeetingEngine {
 
         let audio_dir = self.store.audio_dir(&id)?;
         let pump_queue = queue.clone();
+        let pump_app = app.clone();
         let pump = std::thread::Builder::new()
             .name("vox-meeting-pump".into())
-            .spawn(move || run_pump(audio_rx, audio_dir, pump_queue))
+            .spawn(move || run_pump(audio_rx, audio_dir, pump_queue, pump_app))
             .map_err(|err| MeetingCaptureError::StartFailed(err.to_string()))?;
 
         let meeting = self.store.update_meeting(&id, |record| {
@@ -395,6 +434,8 @@ impl MeetingEngine {
         active.capture.stop();
         let binding = active.capture.binding();
         let heard_system = active.capture.system_audio_heard();
+        let microphone_heard = active.capture.microphone_heard();
+        let losses = active.capture.losses();
 
         // 2. The pump flushes the segmenter, submitting whatever sentence was
         //    still open, then merges the audio.
@@ -405,6 +446,8 @@ impl MeetingEngine {
                 PumpResult {
                     audio_path: None,
                     duration_seconds: 0.0,
+                    checkpoints_written: false,
+                    checkpoint_failures: 0,
                 }
             }
         };
@@ -438,19 +481,59 @@ impl MeetingEngine {
         };
         let drain_seconds = t_drain_start.elapsed().as_secs_f64();
 
-        if let Some(stats) = stats {
+        if let Some(stats) = &stats {
             transcription::print_meeting_summary(
                 &id,
-                &stats,
-                pump.duration_seconds as f64,
+                stats,
+                pump.duration_seconds,
                 drain_seconds,
             );
         }
 
+        // The diagnostics rollup, built from the per-segment log the worker
+        // wrote plus the facts only the stop path holds: how long the
+        // recording ran, whether the drain finished, and what the devices did.
+        // Written before the meeting record so a crash between the two leaves
+        // diagnostics for a meeting that reads as interrupted, rather than a
+        // finished meeting with nothing explaining it.
+        self.write_diagnostics(
+            &id,
+            stats.as_ref(),
+            DiagnosticsFacts {
+                recording_seconds: pump.duration_seconds,
+                drain_seconds,
+                drain_completed: drained,
+                microphone_opened: binding.microphone,
+                system_audio_opened: binding.system_audio,
+                microphone_heard,
+                system_audio_heard: heard_system,
+                checkpoints_written: pump.checkpoints_written,
+                checkpoint_failures: pump.checkpoint_failures,
+                audio_lost_seconds: losses
+                    .lost_seconds((super::segmenter::SEGMENT_SAMPLE_RATE as u64 * 20) / 1000),
+                segments_emitted: queued,
+                segments_dropped: dropped,
+            },
+        );
+
         // 4. Write the finished record.
         let segments = self.store.load_transcript(&id)?;
         let lost = dropped + queued.saturating_sub(completed);
+        // What produced this transcript, recorded now rather than at start:
+        // the language may have been auto-detected, and the profile may have
+        // switched part-way through a bilingual meeting.
+        let provenance = stats.as_ref().map(|stats| TranscriptProvenance {
+            pass: TranscriptionPass::Live,
+            engine: crate::capture::recognizer::RecognizerKind::Whisper
+                .id()
+                .to_string(),
+            model: transcription::model_name(&stats.model_path),
+            language: (stats.language != "auto-detect").then(|| stats.language.clone()),
+            profile: stats.strategy.clone(),
+            completed_at: chrono::Utc::now().to_rfc3339(),
+        });
         let meeting = self.store.update_meeting(&id, |record| {
+            record.transcript = provenance.clone();
             record.state = MeetingState::Completed;
             record.duration_seconds = pump.duration_seconds;
             record.audio_path = pump.audio_path.clone();
@@ -503,6 +586,57 @@ impl MeetingEngine {
         recovered
     }
 
+    /// Writes the meeting's diagnostics rollup.
+    ///
+    /// Never fatal: a meeting whose telemetry could not be written is still a
+    /// meeting, and failing the stop over it would trade the recording for the
+    /// notes about the recording.
+    fn write_diagnostics(
+        &self,
+        id: &str,
+        stats: Option<&transcription::TranscriptionStats>,
+        facts: DiagnosticsFacts,
+    ) {
+        let segments = match self.store.load_segment_diagnostics(id) {
+            Ok(segments) => segments,
+            Err(err) => {
+                tracing::warn!("meeting {}: could not read segment diagnostics: {}", id, err);
+                return;
+            }
+        };
+
+        let capture = telemetry::CaptureHealth {
+            recording_seconds: facts.recording_seconds,
+            microphone_opened: facts.microphone_opened,
+            system_audio_opened: facts.system_audio_opened,
+            microphone_heard: facts.microphone_heard,
+            system_audio_heard: facts.system_audio_heard,
+            audio_checkpoints_written: facts.checkpoints_written,
+            checkpoint_failures: facts.checkpoint_failures,
+            audio_lost_seconds: facts.audio_lost_seconds,
+        };
+        let stop = telemetry::StopFacts {
+            model: stats
+                .map(|s| transcription::model_name(&s.model_path))
+                .unwrap_or_default(),
+            language: stats.map(|s| s.language.clone()),
+            strategy: stats.map(|s| s.strategy.clone()).unwrap_or_default(),
+            threads: stats.map(|s| s.threads.clone()).unwrap_or_default(),
+            profile_switches: stats.map(|s| s.switches.clone()).unwrap_or_default(),
+            segments_on_cheap_profile: stats.map_or(0, |s| s.segments_on_cheap_profile),
+            segments_emitted: facts.segments_emitted,
+            segments_dropped: facts.segments_dropped,
+            peak_queue_depth: stats.map_or(0, |s| s.peak_in_queue),
+            drain_seconds: facts.drain_seconds,
+            drain_completed: facts.drain_completed,
+        };
+
+        let diagnostics = telemetry::MeetingDiagnostics::summarize(id, &segments, capture, stop);
+        if let Err(err) = self.store.save_diagnostics(&diagnostics) {
+            tracing::warn!("meeting {}: could not save diagnostics: {}", id, err);
+        }
+    }
+
     fn emit_state(&self, app: &Option<AppHandle>) {
         if let Some(handle) = app {
             let _ = handle.emit(MEETING_STATE_EVENT, self.status());
@@ -519,15 +653,26 @@ fn run_pump(
     audio_rx: std::sync::mpsc::Receiver<super::capture::MixedAudio>,
     audio_dir: std::path::PathBuf,
     queue: TranscriptionQueue,
+    app: Option<AppHandle>,
 ) -> PumpResult {
     let mut segmenter = Segmenter::new();
+    let mut checkpoint_failures = 0u64;
     let mut writer = match CheckpointWriter::new(&audio_dir) {
         Ok(writer) => Some(writer),
         Err(err) => {
-            // No checkpoints means no recording and no crash recovery, but
-            // the transcript can still be produced — which is most of the
-            // value — so this degrades rather than aborts.
-            tracing::error!("meeting audio will not be saved: {}", err);
+            // No checkpoints means no recording and no crash recovery. The
+            // transcript can still be produced, so this degrades rather than
+            // aborts — but it is the worst failure in the subsystem and the
+            // user has to be told while there is still a meeting to move.
+            // Until now it was a log line, which nobody reads during a call.
+            emit_recording_warning(
+                &app,
+                "audio_storage",
+                &format!(
+                    "This meeting's audio cannot be saved, so there will be no recording to \
+                     play back or re-transcribe: {err}. The transcript is still being written."
+                ),
+            );
             None
         }
     };
@@ -545,6 +690,19 @@ fn run_pump(
         }
         if let Some(writer) = writer.as_mut() {
             if let Err(err) = writer.push(&block.mixed) {
+                checkpoint_failures += 1;
+                // Once, not per failure: a full disk fails every write, and a
+                // warning per 30 seconds of audio would bury the first one.
+                if checkpoint_failures == 1 {
+                    emit_recording_warning(
+                        &app,
+                        "audio_storage",
+                        &format!(
+                            "Part of this meeting's audio could not be written to disk, so the \
+                             recording will have gaps in it: {err}"
+                        ),
+                    );
+                }
                 tracing::error!("meeting checkpoint failed: {}", err);
             }
         }
@@ -555,6 +713,7 @@ fn run_pump(
         queue.submit(segment);
     }
 
+    let checkpoints_written = writer.is_some();
     let duration_seconds = writer
         .as_ref()
         .map(|writer| writer.duration_seconds())
@@ -562,7 +721,14 @@ fn run_pump(
     let audio_path = writer.and_then(|writer| match writer.finalize() {
         Ok(path) => Some(path.to_string_lossy().to_string()),
         Err(err) => {
-            tracing::error!("could not merge the meeting recording: {}", err);
+            emit_recording_warning(
+                &app,
+                "audio_storage",
+                &format!(
+                    "The meeting's audio checkpoints could not be merged into one recording: \
+                     {err}. They are still on disk under the meeting's audio folder."
+                ),
+            );
             None
         }
     });
@@ -570,6 +736,8 @@ fn run_pump(
     PumpResult {
         audio_path,
         duration_seconds,
+        checkpoints_written,
+        checkpoint_failures,
     }
 }
 
@@ -597,6 +765,7 @@ pub fn default_meeting_title() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::model::MeetingSource;
 
     #[test]
     fn a_generated_title_is_one_the_summary_may_replace() {
@@ -710,6 +879,259 @@ mod tests {
         let audio = record.audio_path.expect("recovered audio path");
         assert!(std::path::Path::new(&audio).exists());
         assert!((record.duration_seconds - 60.0).abs() < 0.1);
+    }
+
+    /// Speech-shaped audio: loud enough to clear the segmenter's absolute
+    /// floor, modulated so it does not read as a constant tone.
+    fn speech_block(seconds: f64) -> super::super::capture::MixedAudio {
+        let rate = super::super::segmenter::SEGMENT_SAMPLE_RATE as f64;
+        let count = (rate * seconds) as usize;
+        let mixed: Vec<f32> = (0..count)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                0.25 * (t * 220.0 * std::f32::consts::TAU).sin()
+                    * (1.0 + 0.5 * (t * 3.0 * std::f32::consts::TAU).sin())
+            })
+            .collect();
+        super::super::capture::MixedAudio {
+            mic: mixed.clone(),
+            sys: vec![0.0; mixed.len()],
+            mixed,
+            discontinuity: false,
+        }
+    }
+
+    /// The smallest thing the queue will carry, for a test that is about the
+    /// queue rather than about what is in it.
+    fn tiny_segment() -> super::super::segmenter::SpeechSegment {
+        super::super::segmenter::SpeechSegment {
+            samples: vec![0.1; 1_600],
+            start_seconds: 0.0,
+            end_seconds: 0.1,
+            channel: super::super::model::SegmentChannel::Microphone,
+            end_reason: super::super::speech_state::TurnEnd::Silence,
+            hangover_ms: 0,
+            audio_stats: crate::capture::AudioStats::compute(&[0.1; 1_600], 16_000, 1),
+        }
+    }
+
+    fn durability_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "vox-durability-{}-{}-{:?}",
+            name,
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn dead_queue(store: &Arc<MeetingStore>, cancelled: bool) -> (TranscriptionQueue, std::thread::JoinHandle<transcription::TranscriptionStats>) {
+        let cancel = Arc::new(AtomicBool::new(cancelled));
+        transcription::spawn_worker(
+            WorkerConfig {
+                meeting_id: "meeting-durable".into(),
+                // No model: every decode fails, which is the point.
+                model_path: String::new(),
+                language: SttLanguageConfig {
+                    whisper_language: None,
+                    translate: false,
+                },
+                decoding: WhisperDecodingConfig::default(),
+                decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
+                glossary: Vec::new(),
+                vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
+            },
+            SttEngine::new(),
+            Arc::clone(store),
+            None,
+            cancel,
+        )
+    }
+
+    #[test]
+    fn a_decoder_that_fails_every_segment_still_leaves_a_complete_recording() {
+        // D-002: transcription is downstream of recording and subordinate to
+        // it. A decoder that cannot decode anything is a transcript problem,
+        // and it must cost exactly nothing on the audio side.
+        let dir = durability_dir("stt-fails");
+        let store = Arc::new(MeetingStore::new(dir.join("vault")));
+        store
+            .create(&Meeting::new(
+                "meeting-durable".into(),
+                "Durable".into(),
+                MeetingSource::Recorded,
+            ))
+            .unwrap();
+        let audio_dir = store.audio_dir("meeting-durable").unwrap();
+
+        let (queue, worker) = dead_queue(&store, false);
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        for _ in 0..4 {
+            tx.send(speech_block(1.0)).unwrap();
+            tx.send(super::super::capture::MixedAudio {
+                mixed: vec![0.0; 16_000],
+                mic: vec![0.0; 16_000],
+                sys: vec![0.0; 16_000],
+                discontinuity: false,
+            })
+            .unwrap();
+        }
+        drop(tx);
+
+        let result = run_pump(rx, audio_dir.clone(), queue.clone(), None);
+        drop(queue);
+        let _ = worker.join();
+
+        let path = result.audio_path.expect("the recording must exist");
+        assert!(std::path::Path::new(&path).exists());
+        assert!(
+            (result.duration_seconds - 8.0).abs() < 0.1,
+            "every second of audio must be accounted for, got {}",
+            result.duration_seconds
+        );
+        assert!(result.checkpoints_written);
+        assert_eq!(result.checkpoint_failures, 0);
+        // And the transcript is empty, which is the failure that was allowed
+        // to happen.
+        assert!(store.load_transcript("meeting-durable").unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_recorder_survives_the_decoder_disappearing_entirely() {
+        let dir = durability_dir("stt-gone");
+        let store = Arc::new(MeetingStore::new(dir.join("vault")));
+        store
+            .create(&Meeting::new(
+                "meeting-durable".into(),
+                "Gone".into(),
+                MeetingSource::Recorded,
+            ))
+            .unwrap();
+        let audio_dir = store.audio_dir("meeting-durable").unwrap();
+
+        // Cancelled before it starts: the worker takes one job, sees the flag
+        // and returns, dropping the receiver — so the decoder is gone while
+        // audio is still arriving, which is the case being tested. It has to
+        // be woken with a job first: a worker parked on an empty channel has
+        // not looked at the flag yet, and joining it would wait forever.
+        let (queue, worker) = dead_queue(&store, true);
+        queue.submit(tiny_segment());
+        let _ = worker.join();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        for _ in 0..3 {
+            tx.send(speech_block(1.0)).unwrap();
+            tx.send(super::super::capture::MixedAudio {
+                mixed: vec![0.0; 16_000],
+                mic: vec![0.0; 16_000],
+                sys: vec![0.0; 16_000],
+                discontinuity: false,
+            })
+            .unwrap();
+        }
+        drop(tx);
+
+        let result = run_pump(rx, audio_dir, queue.clone(), None);
+        let (_, _, dropped) = queue.counts();
+
+        assert!(result.audio_path.is_some(), "the recording must still exist");
+        assert!((result.duration_seconds - 6.0).abs() < 0.1);
+        assert!(dropped > 0, "and the lost segments must be counted, not hidden");
+    }
+
+    #[test]
+    fn a_full_queue_refuses_segments_without_ever_blocking_the_caller() {
+        // The recorder calls `submit` from the same thread that writes
+        // checkpoints. A blocking send there would make durable audio a
+        // function of decode speed, which is the inversion D-002 forbids.
+        let dir = durability_dir("queue-full");
+        let store = Arc::new(MeetingStore::new(dir.join("vault")));
+        let (queue, worker) = dead_queue(&store, true);
+        queue.submit(tiny_segment());
+        let _ = worker.join();
+
+        let started = Instant::now();
+        for _ in 0..(transcription::MAX_QUEUED_SEGMENTS * 3) {
+            queue.submit(tiny_segment());
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "submitting against a dead decoder must not block"
+        );
+        let (_, _, dropped) = queue.counts();
+        assert!(dropped > 0);
+    }
+
+    #[test]
+    fn audio_that_cannot_be_saved_does_not_abort_the_meeting_and_says_so() {
+        // A file where the audio directory should be: `create_dir_all` fails,
+        // so there is no checkpoint writer at all. The transcript is still
+        // worth producing, and the result has to report that no audio exists
+        // rather than implying one does.
+        let dir = durability_dir("no-audio-dir");
+        let store = Arc::new(MeetingStore::new(dir.join("vault")));
+        store
+            .create(&Meeting::new(
+                "meeting-durable".into(),
+                "Blocked".into(),
+                MeetingSource::Recorded,
+            ))
+            .unwrap();
+        let blocked = store.meeting_dir("meeting-durable").unwrap().join("audio");
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"not a directory").unwrap();
+
+        let (queue, worker) = dead_queue(&store, false);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        tx.send(speech_block(1.0)).unwrap();
+        drop(tx);
+
+        let result = run_pump(rx, blocked, queue.clone(), None);
+        drop(queue);
+        let _ = worker.join();
+
+        assert!(result.audio_path.is_none());
+        assert!(!result.checkpoints_written);
+        // Duration falls back to the segmenter's own clock, so the meeting
+        // record still says how long it ran.
+        assert!(result.duration_seconds > 0.9);
+    }
+
+    #[test]
+    fn pausing_marks_the_join_so_a_sentence_does_not_continue_across_it() {
+        // Paused audio is excised rather than stored as silence, so the audio
+        // either side of a pause is not contiguous and a decode must not read
+        // across it.
+        let dir = durability_dir("pause");
+        let store = Arc::new(MeetingStore::new(dir.join("vault")));
+        store
+            .create(&Meeting::new(
+                "meeting-durable".into(),
+                "Paused".into(),
+                MeetingSource::Recorded,
+            ))
+            .unwrap();
+        let audio_dir = store.audio_dir("meeting-durable").unwrap();
+
+        let (queue, worker) = dead_queue(&store, false);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        tx.send(speech_block(1.0)).unwrap();
+        let mut after = speech_block(1.0);
+        after.discontinuity = true;
+        tx.send(after).unwrap();
+        drop(tx);
+
+        let result = run_pump(rx, audio_dir, queue.clone(), None);
+        let (queued, _, _) = queue.counts();
+        drop(queue);
+        let _ = worker.join();
+
+        // Two spans rather than one: the flush at the discontinuity closed
+        // the first before the second was fed in.
+        assert_eq!(queued, 2);
+        assert!((result.duration_seconds - 2.0).abs() < 0.1);
     }
 
     #[test]

@@ -23,6 +23,90 @@ export type MeetingState =
  */
 export type SegmentChannel = 'microphone' | 'system' | 'mixed';
 
+/** What kind of thing a glossary term is. The categories carry different risk. */
+export type TermCategory =
+  | 'person'
+  | 'organization'
+  | 'product'
+  | 'technical'
+  | 'acronym'
+  | 'custom';
+
+/** One word the glossary changed, and the evidence for it. */
+export interface TermCorrection {
+  /** What the decoder actually said. */
+  from: string;
+  /** What it was changed to. */
+  to: string;
+  /** The glossary term responsible. */
+  term: string;
+  category: TermCategory;
+  reason: { kind: 'casing' | 'near_miss' };
+}
+
+/**
+ * One line of the transcript as everything downstream reads it: raw evidence
+ * ordered, sentences the decoder's window cut back together, repeats at the
+ * joins stripped, speakers attached.
+ */
+export interface CanonicalSegment {
+  /** Position in this transcript, not a raw sequence — see `sources`. */
+  id: number;
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+  channel: SegmentChannel;
+  speaker_id?: string | null;
+  /** A user-given name, else the channel's own label. */
+  speaker_label: string;
+  language?: string | null;
+  /** The raw sequence numbers this line was built from. */
+  sources: number[];
+  /** Whether more than one raw segment was joined into this line. */
+  merged: boolean;
+}
+
+/** Speech that was recorded and never transcribed. */
+export interface TranscriptGap {
+  missing_sequences: number[];
+  after_segment?: number | null;
+  start_seconds?: number | null;
+  end_seconds?: number | null;
+}
+
+/** A meeting's transcript, assembled. */
+export interface CanonicalTranscript {
+  meeting_id: string;
+  built_at: string;
+  source?: TranscriptProvenance | null;
+  segments: CanonicalSegment[];
+  /** Holes in the raw sequence — speech the recording has and this does not. */
+  gaps: TranscriptGap[];
+  raw_segment_count: number;
+}
+
+/**
+ * Which pass produced a transcript.
+ *
+ * They optimize for different things over the same audio: a live pass races a
+ * clock and must average faster than real time, a final pass has no clock and
+ * can afford a wider beam and a bigger model.
+ */
+export type TranscriptionPass = 'live' | 'final';
+
+/** What produced the transcript currently on disk. */
+export interface TranscriptProvenance {
+  pass: TranscriptionPass;
+  /** Recognizer id — `whisper`, `parakeet`. */
+  engine: string;
+  /** Model filename, never its path. */
+  model: string;
+  language?: string | null;
+  /** Decode profile, in the engine's own terms. */
+  profile: string;
+  completed_at: string;
+}
+
 export type SummaryStatus =
   | 'pending'
   | 'processing'
@@ -42,8 +126,12 @@ export interface TranscriptSegment {
   original_text?: string | null;
   romanized_text?: string | null;
   translated_text?: string | null;
-  /** Which `Speaker` this line was attributed to, if any. */
-  speaker_id?: string | null;
+  /**
+   * What the glossary changed in this line, and why. Empty for almost every
+   * line; where it is not, applying these backwards reconstructs exactly what
+   * the decoder said.
+   */
+  corrections?: TermCorrection[];
 }
 
 /**
@@ -81,7 +169,11 @@ export interface Meeting {
   source: MeetingSource;
   duration_seconds: number;
   audio_path?: string | null;
-  transcript_model?: string | null;
+  /**
+   * What produced the transcript currently on disk. Absent for a meeting
+   * transcribed before this was recorded, and for one still recording.
+   */
+  transcript?: TranscriptProvenance | null;
   language?: string | null;
   mic_device?: string | null;
   /** False means only this machine's microphone was recorded. */
@@ -148,6 +240,19 @@ export interface MeetingSummary {
   model?: string | null;
   language?: string | null;
   fingerprint?: string | null;
+  /**
+   * The transcript this report was written from — a different question from
+   * the cache fingerprint beside it. The fingerprint says whether the report
+   * may be reused; this says what it was made from.
+   */
+  transcript_source?: TranscriptProvenance | null;
+  /** Canonical lines the report was written from. */
+  transcript_segments?: number;
+  /**
+   * Recorded speech the transcript did not contain. Non-zero means the report
+   * describes an incomplete record.
+   */
+  transcript_missing_segments?: number;
   chunk_count: number;
   processing_ms: number;
   started_at?: string | null;
@@ -165,6 +270,17 @@ export interface MeetingDetail {
    * optional rather than merely empty.
    */
   speakers?: Speaker[];
+  /**
+   * The transcript as everything downstream reads it. `segments` is the raw
+   * evidence underneath it.
+   */
+  canonical?: CanonicalTranscript;
+  /**
+   * How the recording and the transcription went. Absent for a meeting
+   * recorded before diagnostics existed, or one that never finished — both
+   * ordinary, so the surface renders nothing rather than claiming zeroes.
+   */
+  diagnostics?: MeetingDiagnostics | null;
 }
 
 export interface MeetingSearchHit {
@@ -277,10 +393,24 @@ export const MEETING_EVENTS = {
   segment: 'meeting-transcript-segment',
   transcriptionProgress: 'meeting-transcription-progress',
   transcriptionWarning: 'meeting-transcription-warning',
+  recordingWarning: 'meeting-recording-warning',
   summaryProgress: 'meeting-summary-progress',
   importProgress: 'meeting-import-progress',
   translationProgress: 'meeting-translation-progress',
 } as const;
+
+/**
+ * Something went wrong with the *recording*, as distinct from the transcript.
+ *
+ * Kept separate because a transcript can be regenerated from a recording and a
+ * recording cannot be regenerated from anything, so these are the more serious
+ * of the two and must not be mixed in with decoder complaints.
+ */
+export interface RecordingWarning {
+  /** `microphone`, `system_audio`, `audio_storage` or `audio_shed`. */
+  kind: string;
+  message: string;
+}
 
 /** How far a transcript translation has got. */
 export interface TranslationProgress {
@@ -344,4 +474,143 @@ export interface MeetingReminderPayload {
   participants: string[];
   /** Whether there is a conferencing link behind the Join button. */
   can_join: boolean;
+}
+
+// --- diagnostics ---------------------------------------------------------
+
+/** What happened to one decoded segment. */
+export type SegmentStatus = 'kept' | 'discarded' | 'failed';
+
+/**
+ * Why a turn ended. `ceiling` means it was cut mid-speech and the next
+ * segment continues the same sentence.
+ */
+export type TurnEnd = 'silence' | 'ceiling' | 'flush';
+
+/**
+ * One segment's journey from the segmenter to the transcript.
+ *
+ * Every duration is milliseconds and they are deliberately separate: a single
+ * total cannot tell "the model is slow" from "something else held the model"
+ * from "the queue was behind", and those need three different fixes.
+ *
+ * There is no confidence field. What Whisper reports is `no_speech_prob`, and
+ * an engine that reports none sends none rather than a stand-in.
+ */
+export interface SegmentDiagnostics {
+  version: number;
+  /** Joins to `TranscriptSegment.sequence`, including for segments that never produced one. */
+  sequence: number;
+  start_seconds: number;
+  end_seconds: number;
+  channel: SegmentChannel;
+  forced_split: boolean;
+  /** Why the turn ended. */
+  end_reason: TurnEnd;
+  /**
+   * Quiet the segmenter waited through before judging the turn over. The part
+   * of a line's latency that no decoder can remove.
+   */
+  hangover_ms: number;
+  voiced_seconds: number;
+  total_seconds: number;
+  no_speech_prob?: number | null;
+  queue_wait_ms: number;
+  lock_wait_ms: number;
+  model_load_ms: number;
+  model_reloaded: boolean;
+  decode_ms: number;
+  post_ms: number;
+  persist_ms: number;
+  model: string;
+  language?: string | null;
+  expensive_script_profile: boolean;
+  audio_ctx?: number | null;
+  status: SegmentStatus;
+  /** The `speech_health` reason key, for a discarded segment. */
+  rejection?: string | null;
+  error?: string | null;
+  text_chars: number;
+  queue_depth_after: number;
+}
+
+/**
+ * How the recording itself went.
+ *
+ * Separate from {@link TranscriptionHealth} because they fail for different
+ * reasons: a microphone that heard nothing is a device problem, a backlog is a
+ * model problem. `opened && !heard` is the signature of the wrong device.
+ */
+export interface CaptureHealth {
+  recording_seconds: number;
+  microphone_opened: boolean;
+  system_audio_opened: boolean;
+  microphone_heard: boolean;
+  system_audio_heard: boolean;
+  audio_checkpoints_written: boolean;
+  checkpoint_failures: number;
+  /**
+   * Audio that was captured and never reached the writer. Should be 0 on any
+   * ordinary recording; non-zero is a hole in the recording itself, which is
+   * worse than anything on the transcription side because nothing can
+   * regenerate it.
+   */
+  audio_lost_seconds: number;
+}
+
+/** How transcription went. */
+export interface TranscriptionHealth {
+  segments_emitted: number;
+  segments_kept: number;
+  segments_discarded: number;
+  segments_failed: number;
+  /** Speech that exists in the recording and not in the transcript. */
+  segments_dropped: number;
+  peak_queue_depth: number;
+  speech_seconds: number;
+  transcribed_seconds: number;
+  mean_decode_rtf: number;
+  worst_decode_rtf: number;
+  worst_decode_sequence: number;
+  /**
+   * Decode time against wall-clock recording length. Above 1.0 the backlog
+   * grows; below it nothing accumulates.
+   */
+  pipeline_rtf: number;
+  finalization_p50_ms: number;
+  finalization_p95_ms: number;
+  finalization_max_ms: number;
+  /**
+   * Median quiet waited through before a turn was judged over. Read beside the
+   * finalization percentiles: together they say how much of the wait is the
+   * decoder and how much is the hangover, and no model shrinks the second.
+   */
+  hangover_p50_ms: number;
+  /** Turns cut at the ceiling — each is a sentence split across two lines. */
+  segments_forced_split: number;
+  lock_wait_ms_total: number;
+  model_load_ms_total: number;
+  model_reloads: number;
+  drain_seconds: number;
+  /** False when the drain gave up on a backlog it could not clear. */
+  drain_completed: boolean;
+  /** Discarded segments by `speech_health` reason key. */
+  rejections: Record<string, number>;
+}
+
+/** One meeting's diagnostics rollup. */
+export interface MeetingDiagnostics {
+  version: number;
+  meeting_id: string;
+  completed_at: string;
+  /** Model filename, never its path. */
+  model: string;
+  language?: string | null;
+  strategy: string;
+  threads: string;
+  /** Each decode-profile change, as [first segment on the new profile, is the cheaper one]. */
+  profile_switches: [number, boolean][];
+  segments_on_cheap_profile: number;
+  capture: CaptureHealth;
+  transcription: TranscriptionHealth;
 }

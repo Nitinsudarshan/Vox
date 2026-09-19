@@ -11,6 +11,13 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
 
 ### 1. Neural Turn Detection and Wake Word for Talkback
 
+> [!IMPORTANT]
+> **The code this item points at is not in the tree.** `talkback/` and `tts/`
+> were removed, and `docs/decisions.md` Decision 69 records that. The research
+> and the blueprint below still stand; the claims about what already exists do
+> not. Read "the seam is ready" as "here is the seam to build".
+
+
 - **Status**: Deferred (V2) — architecture ready, models not shipped
 - **Area**: Native backend (`native/src-tauri/src/talkback/turn.rs::TurnDetector::push`, `talkback::ActivationMode`)
 - **Original Context**:
@@ -25,6 +32,13 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
 
 ### 2. A Second Local TTS Provider for Talkback (Kokoro)
 
+> [!IMPORTANT]
+> **The code this item points at is not in the tree.** `talkback/` and `tts/`
+> were removed, and `docs/decisions.md` Decision 69 records that. The research
+> and the blueprint below still stand; the claims about what already exists do
+> not. Read "the seam is ready" as "here is the seam to build".
+
+
 - **Status**: Deferred (V2) — trait shipped, provider not
 - **Area**: Native backend (`native/src-tauri/src/tts/`)
 - **Original Context**:
@@ -36,6 +50,13 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
   - Benchmark on real Windows hardware before adopting: time-to-first-audio, total synthesis, CPU, RAM, English, Hindi, mixed-language speech, startup time, packaging size, and interruptibility. Piper stays the default until a measurement says otherwise — being newer is not evidence.
 
 ### 3. Acoustic Echo Cancellation for Talkback Barge-In
+
+> [!IMPORTANT]
+> **The code this item points at is not in the tree.** `talkback/` and `tts/`
+> were removed, and `docs/decisions.md` Decision 69 records that. The research
+> and the blueprint below still stand; the claims about what already exists do
+> not. Read "the seam is ready" as "here is the seam to build".
+
 
 - **Status**: Deferred — mitigated, not solved
 - **Area**: Native backend (`native/src-tauri/src/talkback/turn.rs`)
@@ -59,11 +80,18 @@ This document tracks deferred features, rejected/postponed UI patterns, and arch
   - Changing `base_dir` relocates every existing user's vault, notes, Kanban cards, meetings and settings. Getting that wrong loses data, and getting it right means a detection-and-migration path with its own testing.
   - It is not a Talkback problem, and bundling it into a Talkback change would hide a data migration inside a feature diff.
 - **Concept & Implementation Blueprint**:
-  - Resolve `base_dir` from the OS application-data directory, as `tts::discovery::default_tts_root` already does.
+  - Resolve `base_dir` from the OS application-data directory. `tts::discovery::default_tts_root` used to do exactly this and was removed with the rest of `tts/` (Decision 69); the approach was right and is worth reinstating.
   - On startup, if the new location is empty and a process-relative `.relay` exists beside the executable, offer to move it — explicitly, with the old copy left in place, matching the "never move, migrate or delete" promise the Vault Directory Location setting already makes (`docs/decisions.md` Decision 38).
   - The configurable Vault Directory Location setting already overrides this for the vault, so the migration mainly concerns `config/` — settings, models, and the STT cache.
 
 ### 5. Offline and ARM64 Voice Installation
+
+> [!IMPORTANT]
+> **The code this item points at is not in the tree.** `talkback/` and `tts/`
+> were removed, and `docs/decisions.md` Decision 69 records that. The research
+> and the blueprint below still stand; the claims about what already exists do
+> not. Read "the seam is ready" as "here is the seam to build".
+
 
 - **Status**: Deferred — a packaging decision, not missing code
 - **Area**: Native backend (`native/src-tauri/src/tts/{manifest,installer}.rs`, `native/src-tauri/resources/voice-manifest.json`)

@@ -42,7 +42,7 @@ use crate::sync::MutexExt;
 
 use super::super::model::{MeetingSummary, SummaryStatus};
 use super::super::store::{MeetingStore, MeetingStoreError};
-use super::super::transcription::render_transcript_with_speakers;
+use super::super::canonical;
 use super::processor::{self, LanguageAction, MeetingContext};
 use super::templates::{Template, TemplateLibrary, DEFAULT_TEMPLATE_ID};
 
@@ -266,7 +266,25 @@ impl SummaryService {
         self.ensure_english(&app, meeting_id, &mut segments, &provider, cancel)
             .await;
         let speakers = self.store.load_speakers(meeting_id).unwrap_or_default();
-        let transcript = render_transcript_with_speakers(&segments, &speakers);
+        let attribution = self.store.load_attribution(meeting_id).unwrap_or_default();
+        // Through the assembler, not straight off the raw segments. That is
+        // what puts a sentence the decoder's window cut in half back together
+        // before a model reads it as two turns, strips the phrase Whisper
+        // repeated across the join, and marks the speech that never made it
+        // into the transcript rather than letting the model summarize a
+        // conversation in which nobody spoke for ninety seconds.
+        let canonical = canonical::assemble(
+            meeting_id,
+            &segments,
+            &attribution,
+            &speakers,
+            meeting.transcript.clone(),
+            &canonical::AssemblyOptions {
+                rendering: canonical::Rendering::PreferTranslated,
+                ..canonical::AssemblyOptions::default()
+            },
+        );
+        let transcript = canonical::render_transcript(&canonical);
         let template = templates.get_or_default(Some(&options.template_id));
 
         // Back up before touching anything: from here on, every exit path
@@ -286,6 +304,12 @@ impl SummaryService {
 
         let mut record = MeetingSummary::pending(meeting_id, &template.id);
         record.status = SummaryStatus::Processing;
+        // What this report was made from, recorded before it is made: a
+        // report generated from a transcript with a hole in it is a different
+        // object from one generated from a complete transcript.
+        record.transcript_source = canonical.source.clone();
+        record.transcript_segments = canonical.segments.len();
+        record.transcript_missing_segments = canonical.missing_sequences().len();
         record.previous_markdown = previous_markdown.clone();
         record.provider = Some(format!("{:?}", client.provider_type()));
         record.model = Some(client.model_name());

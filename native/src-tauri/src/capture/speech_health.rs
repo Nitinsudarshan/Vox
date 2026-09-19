@@ -366,6 +366,18 @@ impl SegmentQualityStatus {
             Self::Rejected(_) => "rejected",
         }
     }
+
+    /// Why this was rejected, as a stable key, or `None` if it was not.
+    ///
+    /// Diagnostics record the key rather than the prose: "empty" and "looped"
+    /// need different fixes, and a discard with no reason is a line that
+    /// vanished from the transcript with nothing to say about it.
+    pub fn rejection_key(&self) -> Option<&'static str> {
+        match self {
+            Self::Rejected(reason) => Some(reason.key()),
+            _ => None,
+        }
+    }
 }
 
 /// A rejected decode, recorded on the transcript segment in place of text.

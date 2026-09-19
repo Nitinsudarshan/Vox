@@ -95,20 +95,40 @@ pub struct TranscriptSegment {
     /// to users as if it were a confidence score.
     pub no_speech_prob: f32,
     pub recorded_at: String,
+    /// Whether the segmenter cut this span at its ceiling rather than at a
+    /// silence — so the *next* segment continues the same sentence.
+    ///
+    /// The segmenter knew this and threw it away, which meant nothing
+    /// downstream could tell a sentence split across two lines from two
+    /// sentences. It is what lets the assembler put them back together.
+    #[serde(default)]
+    pub cut_at_ceiling: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub romanized_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translated_text: Option<String>,
-    /// Which [`Speaker`] this line was attributed to, if any.
+    /// What the glossary changed in this line, and why.
     ///
-    /// Absent means "not attributed", which is a real and common answer: a
-    /// line too short to fingerprint gets no vote on who was speaking, and
-    /// saying so is better than guessing. [`SegmentChannel`] still applies
-    /// either way — it is measured rather than inferred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speaker_id: Option<String>,
+    /// Empty for almost every line. Where it is not, applying these backwards
+    /// reconstructs exactly what the decoder said — which is how the raw ASR
+    /// text is preserved without keeping a second copy of every line, and how
+    /// a wrong correction stays visible instead of reading as a correct
+    /// transcription.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<crate::capture::glossary::TermCorrection>,
+    /// How the decode of this line went.
+    ///
+    /// Absent on every line that was not decoded live — an import, a
+    /// re-transcription, a meeting recorded before this existed — and omitted
+    /// from the file entirely when absent, so it costs a line nothing.
+    ///
+    /// **This overlaps with [`crate::meetings::telemetry::SegmentDiagnostics`]**,
+    /// which records the same decode to `diagnostics.jsonl` and rather more of
+    /// it. The two arrived independently and both are live; `docs/speech-decision-log.md`
+    /// D-017 is the argument for the log being the right home, and reconciling
+    /// them is a decision for whoever owns the format, not for a merge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<SegmentTelemetry>,
 }
@@ -139,6 +159,56 @@ pub struct SegmentTelemetry {
     pub near_clipping_percent: f32,
 }
 
+/// Which pass produced a transcript.
+///
+/// The two exist because they optimize for different things over the same
+/// audio. A live pass runs against a clock: audio keeps arriving, so a decoder
+/// slower than real time builds a backlog and eventually drops speech. A final
+/// pass has no clock at all — the recording is on disk and is not going
+/// anywhere — so it can afford a wider beam and a bigger model.
+///
+/// Recorded on the meeting rather than inferred, because "why is this
+/// transcript worse than the one I got last time" is otherwise unanswerable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionPass {
+    /// Decoded while the meeting was being recorded.
+    Live,
+    /// Decoded from the durable recording afterwards.
+    Final,
+}
+
+impl TranscriptionPass {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Final => "final",
+        }
+    }
+}
+
+/// What produced the transcript currently on disk.
+///
+/// Every field is something that changes the answer, which is what makes this
+/// worth storing: re-transcribing with the same model, language and profile
+/// should produce the same transcript, and when it does not, this is what
+/// says which of them moved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptProvenance {
+    pub pass: TranscriptionPass,
+    /// Recognizer id — `whisper`, `parakeet`.
+    pub engine: String,
+    /// Model filename, never its path. A meeting record is exported and
+    /// shared, and a path names a machine and usually a person.
+    pub model: String,
+    /// The language the decode was pinned to, or `None` for auto-detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Decode profile, in the engine's own terms.
+    pub profile: String,
+    pub completed_at: String,
+}
+
 /// One person Vox believes spoke during a meeting.
 ///
 /// The name is the user's; everything else is evidence. Vox proposes the
@@ -147,8 +217,11 @@ pub struct SegmentTelemetry {
 /// the honest shape for the technique underneath.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Speaker {
-    /// Stable within a meeting, and what [`TranscriptSegment::speaker_id`]
-    /// points at.
+    /// Stable within a meeting, and what
+    /// [`crate::meetings::speakers::SpeakerAttribution`] maps a sequence
+    /// number to. It used to be a field on the transcript line itself; see
+    /// `docs/speech-decision-log.md` D-031 for why attribution moved off the
+    /// record of what the decoder said.
     pub id: String,
     /// What to call this person. Starts as "Speaker 1"; the user renames it.
     pub label: String,
@@ -191,9 +264,13 @@ pub struct Meeting {
     /// Absolute path to the merged recording, once one exists.
     #[serde(default)]
     pub audio_path: Option<String>,
-    /// The STT model file that produced the current transcript.
+    /// What produced the transcript currently on disk.
+    ///
+    /// `None` for a meeting transcribed before this was recorded, and for one
+    /// still recording. Replaces an earlier `transcript_model` field that held
+    /// a full filesystem path and that nothing ever read.
     #[serde(default)]
-    pub transcript_model: Option<String>,
+    pub transcript: Option<TranscriptProvenance>,
     #[serde(default)]
     pub language: Option<String>,
     #[serde(default)]
@@ -239,7 +316,7 @@ impl Meeting {
             source,
             duration_seconds: 0.0,
             audio_path: None,
-            transcript_model: None,
+            transcript: None,
             language: None,
             mic_device: None,
             system_audio_captured: false,
@@ -305,6 +382,23 @@ pub struct MeetingSummary {
     /// skips straight to the translation pass.
     #[serde(default)]
     pub fingerprint: Option<String>,
+    /// The transcript this report was written from.
+    ///
+    /// Not the same question as the cache fingerprint beside it. The
+    /// fingerprint answers "may this be reused"; this answers "what was it
+    /// made from" — which model, which pass, how many lines, and whether any
+    /// speech was missing from them. A report generated from a transcript
+    /// with a hole in it is a different object from one generated from a
+    /// complete transcript, and until now nothing said which it was.
+    #[serde(default)]
+    pub transcript_source: Option<TranscriptProvenance>,
+    /// Canonical lines the report was written from.
+    #[serde(default)]
+    pub transcript_segments: usize,
+    /// Segments of recorded speech the transcript did not contain. Non-zero
+    /// means the report describes an incomplete record, and says so.
+    #[serde(default)]
+    pub transcript_missing_segments: usize,
     #[serde(default)]
     pub chunk_count: u32,
     #[serde(default)]
@@ -330,6 +424,9 @@ impl MeetingSummary {
             model: None,
             language: None,
             fingerprint: None,
+            transcript_source: None,
+            transcript_segments: 0,
+            transcript_missing_segments: 0,
             chunk_count: 0,
             processing_ms: 0,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -385,10 +482,11 @@ mod tests {
             channel: SegmentChannel::Mixed,
             no_speech_prob: 0.0,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            cut_at_ceiling: false,
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
             telemetry: None,
         };
         assert_eq!(segment.duration_seconds(), 0.0);

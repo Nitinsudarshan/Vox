@@ -65,6 +65,8 @@ Vox is a native-first Windows desktop assistant built with a Rust backend and Ta
 - `vault`: Reads and writes markdown note files with frontmatter headers. `search_notes`/`list_notes` provide keyword-ranked retrieval over vault notes — a placeholder for the embedded LanceDB vector search Decision 6 commits to (see `docs/roadmap.md`).
 - `mcp`: Interface for dispatching trigger actions (`google-calendar`, `notion`, `gdrive`, OS notifications) — currently returns stubbed success results; real MCP client wiring is tracked as backlog (`docs/roadmap.md`).
 - `hotkeys`: Registers the show/hide and universal-dictation global OS hotkeys (`tauri-plugin-global-shortcut`), manages the always-on-top listening indicator window, and (`hotkeys::injection`) types transcribed text into whatever field has OS focus via `enigo`.
+- `tts`: Speech synthesis, as an interface with no provider behind it. `TextToSpeech` plus declared `TtsCapabilities`; `tts::phrases` splits a streaming answer into speakable phrases so time to first audio is *first phrase plus one synthesis* rather than *whole generation plus synthesis*; `tts::queue::SpeechQueue` is a bounded, single-consumer, cancellable synthesis queue whose ordering is structural. `NullTts` reports "no voice is set up", which is the ordinary state of a fresh install rather than a fault. The Talkback subsystem this replaces was removed — see `docs/decisions.md` Decision 69.
+- `conversation`: Who is talking, and who may interrupt whom. A pure state machine — `ConversationMachine` takes `ConversationEvent`s (chiefly a frame's verdict from `meetings::speech_state`) and returns `ConversationAction`s, with no audio, no model and nothing wired to it. The microphone stays open while Vox speaks, which is the one property full duplex cannot acquire later; barge-in requires consecutive held speech under a `BargeInPolicy`, because without acoustic echo cancellation a laptop's microphone hears its own speaker and a first-frame detector interrupts Vox with Vox. See `docs/speech-duplex.md`.
 - `settings`: Loads/saves `AppSettings` (provider, STT, hotkey config) at `.Vox/config/settings.json`.
 - `commands.rs`: Exposes thin `#[tauri::command]` functions returning `Result<T, CommandError>`.
 
@@ -72,6 +74,35 @@ Vox is a native-first Windows desktop assistant built with a Rust backend and Ta
 
 - **Persistent Custom Tauri Windows**: Reserved strictly for UI surfaces that genuinely require custom interactive windows (`"main"` application window and `"dictation-pill"` overlay). Meetings are recorded and controlled from the main window and the tray — there is no meeting overlay window.
 - **Transient Notifications**: Native OS Toast Notifications (`tauri_plugin_notification`), presented directly without any React WebView or Tauri window of their own.
+
+## Rendered Markdown And Diagrams (`native/src/components/common/MarkdownView.tsx`)
+
+Vox renders markdown it did not write — a model's meeting summary, a captured
+web page — so this surface is treated as untrusted input, not as presentation.
+See `docs/decisions.md` Decision 70.
+
+- **Mermaid runs at `securityLevel: 'strict'`**, configured through an exported
+  `mermaidConfig()` that a test asserts against. `'loose'`, which this used to
+  be, passes HTML in a diagram label straight into the injected SVG.
+- **Every SVG passes `sanitizeSvgMarkup` at the point of injection**
+  (`native/src/lib/svgSafety.ts`), which removes script elements, `on*`
+  handlers and executable URL schemes while leaving the `foreignObject` that
+  flowchart labels need. Hand-written rather than a generic profile, because
+  the standard SVG allowlists drop `foreignObject` and take every label with
+  it.
+- **The webview has a content security policy** (`tauri.conf.json`), whose
+  load-bearing clause is `script-src 'self'`.
+
+Diagrams render inside `DiagramViewport`
+(`native/src/components/shared/DiagramViewport.tsx`) rather than being scaled
+to fit. A summary's flowchart is often several times wider than the panel it
+lands in, and fitting it produces a picture of a diagram with every label below
+body-text size. Instead the viewport opens at a legible zoom, overflows on
+purpose past that point, and is pannable — by drag, by wheel, by arrow key
+(shift for a screenful), with `+`/`-` to zoom, `0` to fit and `F` for a
+full-screen dialog. The arithmetic lives in `native/src/lib/diagramViewport.ts`
+and is tested there: jsdom has no layout, so a test rendering the component
+would measure zeroes.
 
 ## Data Access & Security Model
 - **Local-Only Mode**: Default operating mode. No authentication required. Notes, scribbles, audio, and captures saved in `.Vox/vault`. Vector indices stored in `.Vox/lancedb`. Zero network transmission of user notes or audio.

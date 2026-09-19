@@ -6,6 +6,7 @@ import { MeetingTranscript } from './MeetingTranscript';
 import { MeetingSummaryPanel } from './MeetingSummaryPanel';
 import { MeetingDetailHeader } from './MeetingDetailHeader';
 import { SpeakerPanel } from './SpeakerPanel';
+import { MeetingDiagnosticsPanel } from './MeetingDiagnosticsPanel';
 import { SeriesPanel } from './series/SeriesPanel';
 import type {
   MeetingDetail as MeetingDetailData,
@@ -212,6 +213,18 @@ export const MeetingView: React.FC<MeetingViewProps> = ({
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{meeting.error}</span>
           </p>
+        )}
+
+        {/* Only once the recording has finished: a rollup of a meeting still
+            being recorded would be a snapshot of an unfinished run, read as a
+            verdict on it. */}
+        {!live && detail.diagnostics && (
+          <div className="mb-3">
+            <MeetingDiagnosticsPanel
+              meetingId={meeting.id}
+              diagnostics={detail.diagnostics}
+            />
+          </div>
         )}
 
         {showSeries && seriesTitle && (

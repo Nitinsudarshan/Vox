@@ -502,10 +502,11 @@ mod tests {
             channel: SegmentChannel::Microphone,
             no_speech_prob: 0.01,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            cut_at_ceiling: false,
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
             telemetry: None,
         }
     }

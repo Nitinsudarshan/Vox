@@ -3,6 +3,7 @@ pub mod calendar;
 pub mod capture;
 pub mod commands;
 pub mod context;
+pub mod conversation;
 pub mod developer;
 pub mod diagnostics;
 pub mod entities;
@@ -22,6 +23,7 @@ pub mod startup;
 pub mod sync;
 pub mod theme_icon;
 pub mod triggers;
+pub mod tts;
 pub mod updates;
 pub mod vault;
 
@@ -565,6 +567,11 @@ pub fn run() {
             meetings::commands::detect_meeting_speakers,
             meetings::commands::rename_meeting_speaker,
             meetings::commands::cancel_meeting_import,
+            meetings::commands::get_meeting_segment_diagnostics,
+            meetings::commands::speech_benchmark_template,
+            meetings::commands::inspect_speech_benchmark,
+            meetings::commands::run_speech_benchmark,
+            meetings::commands::cancel_speech_benchmark,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

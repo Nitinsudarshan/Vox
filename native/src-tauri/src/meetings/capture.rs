@@ -26,7 +26,7 @@
 //! and the information is gone, which is the position meetily is in.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,6 +53,26 @@ const LEVEL_SMOOTHING_ALPHA: f32 = 0.35;
 /// enough that the pad it inserts is not audible as a gap.
 const MAX_STREAM_LAG_SAMPLES: usize = (SEGMENT_SAMPLE_RATE as f64 * 0.25) as usize;
 
+/// Mixed blocks the channel to the pump holds before the mixer sheds one.
+///
+/// Ten seconds at [`MIXER_TICK`]. The pump segments and writes checkpoints, so
+/// a disk stall of a second or two is ordinary and must cost nothing; ten
+/// seconds of slack absorbs that and still bounds memory.
+///
+/// Unbounded was the previous answer and it is the worse one. A pump that
+/// stalls indefinitely against an unbounded channel grows memory until the
+/// process dies, which loses every second of the meeting after the last
+/// checkpoint. Shedding twenty milliseconds and counting it loses twenty
+/// milliseconds. Neither is good; only one of them is bounded.
+const AUDIO_CHANNEL_BLOCKS: usize = 500;
+
+/// Samples one device FIFO holds before its oldest are discarded.
+///
+/// A minute. The mixer drains both FIFOs every tick and never blocks, so
+/// reaching this means the mixer thread itself is not running — and at that
+/// point the choice is between a bounded loss and an unbounded one.
+const MAX_FIFO_SAMPLES: usize = SEGMENT_SAMPLE_RATE as usize * 60;
+
 /// RMS under which a block is treated as silence for the meter and for
 /// "did this source ever carry anything".
 const AUDIBLE_RMS_THRESHOLD: f32 = 0.004;
@@ -64,6 +84,37 @@ const METER_CEILING_DB: f32 = -15.0;
 
 /// Live microphone and system-audio levels, for the recording surface.
 pub const MEETING_LEVEL_EVENT: &str = "meeting-audio-level";
+
+/// Something went wrong with the *recording*, as distinct from with the
+/// transcript.
+///
+/// A separate event from `meeting-transcription-warning` because they are
+/// different failures with different remedies, and because the audio one is
+/// the more serious of the two: a transcript can be regenerated from a
+/// recording and a recording cannot be regenerated from anything.
+pub const MEETING_RECORDING_WARNING_EVENT: &str = "meeting-recording-warning";
+
+/// What the recorder could not do.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecordingWarning {
+    /// `microphone`, `system_audio`, `audio_storage` or `audio_shed`.
+    pub kind: String,
+    pub message: String,
+}
+
+/// Emits a recording warning, if there is a window to emit it to.
+pub fn emit_recording_warning(app: &Option<AppHandle>, kind: &str, message: &str) {
+    tracing::warn!("meeting recording warning [{}]: {}", kind, message);
+    if let Some(handle) = app {
+        let _ = handle.emit(
+            MEETING_RECORDING_WARNING_EVENT,
+            RecordingWarning {
+                kind: kind.to_string(),
+                message: message.to_string(),
+            },
+        );
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MeetingLevels {
@@ -151,8 +202,36 @@ pub struct DualCapture {
     sys_active: Arc<AtomicBool>,
     mic_heard: Arc<AtomicBool>,
     sys_heard: Arc<AtomicBool>,
+    losses: Arc<AudioLosses>,
     binding: CaptureBinding,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Audio that was captured and did not reach the pump.
+///
+/// Both counters should be zero on every ordinary recording. They exist so
+/// that when they are not, the recording says so instead of quietly having a
+/// hole in it.
+#[derive(Debug, Default)]
+pub struct AudioLosses {
+    /// Mixed blocks dropped because the channel to the pump was full.
+    pub blocks_shed: AtomicU64,
+    /// Samples discarded from a device FIFO that the mixer stopped draining.
+    pub fifo_samples_dropped: AtomicU64,
+}
+
+impl AudioLosses {
+    /// Seconds of audio lost, across both causes.
+    pub fn lost_seconds(&self, block_samples: u64) -> f64 {
+        let shed = self.blocks_shed.load(Ordering::SeqCst) * block_samples;
+        let fifo = self.fifo_samples_dropped.load(Ordering::SeqCst);
+        (shed + fifo) as f64 / SEGMENT_SAMPLE_RATE as f64
+    }
+
+    pub fn any(&self) -> bool {
+        self.blocks_shed.load(Ordering::SeqCst) > 0
+            || self.fifo_samples_dropped.load(Ordering::SeqCst) > 0
+    }
 }
 
 impl DualCapture {
@@ -168,7 +247,9 @@ impl DualCapture {
         devices: MeetingDevices,
     ) -> Result<(Self, std_mpsc::Receiver<MixedAudio>), MeetingCaptureError> {
         let (stop_tx, stop_rx) = std_mpsc::channel();
-        let (audio_tx, audio_rx) = std_mpsc::channel();
+        // Bounded: see [`AUDIO_CHANNEL_BLOCKS`]. The mixer never blocks on it,
+        // so a stalled pump cannot back up into the device FIFOs either.
+        let (audio_tx, audio_rx) = std_mpsc::sync_channel(AUDIO_CHANNEL_BLOCKS);
         let (init_tx, init_rx) = std_mpsc::channel();
 
         let paused = Arc::new(AtomicBool::new(false));
@@ -176,6 +257,7 @@ impl DualCapture {
         let sys_active = Arc::new(AtomicBool::new(false));
         let mic_heard = Arc::new(AtomicBool::new(false));
         let sys_heard = Arc::new(AtomicBool::new(false));
+        let losses = Arc::new(AudioLosses::default());
 
         let ctx = LoopContext {
             paused: paused.clone(),
@@ -183,6 +265,7 @@ impl DualCapture {
             sys_active: sys_active.clone(),
             mic_heard: mic_heard.clone(),
             sys_heard: sys_heard.clone(),
+            losses: Arc::clone(&losses),
             app,
             capture_system_audio,
             devices,
@@ -209,6 +292,7 @@ impl DualCapture {
                 sys_active,
                 mic_heard,
                 sys_heard,
+                losses,
                 binding,
                 thread: Some(thread),
             },
@@ -237,6 +321,12 @@ impl DualCapture {
 
     pub fn system_audio_heard(&self) -> bool {
         self.sys_heard.load(Ordering::SeqCst)
+    }
+
+    /// Audio that was captured and never reached the pump. Zero on every
+    /// ordinary recording.
+    pub fn losses(&self) -> Arc<AudioLosses> {
+        Arc::clone(&self.losses)
     }
 
     /// Discards incoming audio until [`DualCapture::resume`].
@@ -281,6 +371,7 @@ struct LoopContext {
     sys_active: Arc<AtomicBool>,
     mic_heard: Arc<AtomicBool>,
     sys_heard: Arc<AtomicBool>,
+    losses: Arc<AudioLosses>,
     app: Option<AppHandle>,
     capture_system_audio: bool,
     devices: MeetingDevices,
@@ -289,7 +380,7 @@ struct LoopContext {
 fn run_capture_loop(
     ctx: LoopContext,
     stop_rx: std_mpsc::Receiver<()>,
-    audio_tx: std_mpsc::Sender<MixedAudio>,
+    audio_tx: std_mpsc::SyncSender<MixedAudio>,
     init_tx: std_mpsc::Sender<Result<CaptureBinding, ()>>,
 ) {
     let host = cpal::default_host();
@@ -310,8 +401,8 @@ fn run_capture_loop(
         system_audio: sys_device.as_ref().and_then(|d| d.name().ok()),
     };
 
-    let mic_stream = build_stream(mic_device, false, &mic_fifo, &ctx.mic_active);
-    let sys_stream = build_stream(sys_device, true, &sys_fifo, &ctx.sys_active);
+    let mic_stream = build_stream(mic_device, false, &mic_fifo, &ctx.mic_active, &ctx.losses);
+    let sys_stream = build_stream(sys_device, true, &sys_fifo, &ctx.sys_active, &ctx.losses);
 
     let has_mic = mic_stream.is_some();
     let has_sys = sys_stream.is_some();
@@ -334,6 +425,11 @@ fn run_capture_loop(
     let mut last_level_emit = Instant::now();
     let mut was_paused = false;
     let mut pending_discontinuity = false;
+    // The device callbacks discard a FIFO's oldest samples if the mixer has
+    // stopped draining it. They cannot reach `pending_discontinuity` from
+    // there, so the mixer notices the counter moving instead — a loss nobody
+    // marks is a sentence stitched across a hole.
+    let mut fifo_dropped_seen = 0u64;
 
     loop {
         let stopping = stop_rx.try_recv().is_ok();
@@ -379,6 +475,13 @@ fn run_capture_loop(
             (mixed, mic, sys, mic_sq, sys_sq)
         };
 
+        if loss_marks_discontinuity(
+            ctx.losses.fifo_samples_dropped.load(Ordering::SeqCst),
+            &mut fifo_dropped_seen,
+        ) {
+            pending_discontinuity = true;
+        }
+
         let drained = mixed.len();
         if drained > 0 {
             mark_heard(&ctx.mic_heard, mic_sum_sq, drained);
@@ -396,10 +499,33 @@ fn run_capture_loop(
                 discontinuity: pending_discontinuity,
             };
             pending_discontinuity = false;
-            // A closed receiver means the engine is gone; there is nothing
-            // left to record for.
-            if audio_tx.send(block).is_err() {
-                break;
+            match audio_tx.try_send(block) {
+                Ok(()) => {}
+                Err(std_mpsc::TrySendError::Full(_)) => {
+                    // The pump has not drained for ten seconds. Blocking here
+                    // would push the backlog into the device FIFOs instead, so
+                    // the block is shed and counted.
+                    //
+                    // Shedding *is* a discontinuity: the audio on either side
+                    // of the hole does not join, so the next block must carry
+                    // the flag or the segmenter stitches a sentence across
+                    // missing speech and the transcript reads as continuous
+                    // over a gap. This subsumes any flag the shed block was
+                    // already carrying.
+                    pending_discontinuity = true;
+                    let shed = ctx.losses.blocks_shed.fetch_add(1, Ordering::SeqCst) + 1;
+                    if shed == 1 {
+                        emit_recording_warning(
+                            &ctx.app,
+                            "audio_shed",
+                            "Audio is arriving faster than it can be written to disk, so some \
+                             of the recording is being lost. Recording continues.",
+                        );
+                    }
+                }
+                // A closed receiver means the engine is gone; there is nothing
+                // left to record for.
+                Err(std_mpsc::TrySendError::Disconnected(_)) => break,
             }
         }
 
@@ -413,6 +539,9 @@ fn run_capture_loop(
             // device FIFOs when the streams are dropped below.
             let remainder = drain_remaining(&mic_fifo, &sys_fifo);
             if !remainder.mixed.is_empty() {
+                // Blocking, unlike the loop above: this is the last audio of
+                // the meeting and the pump is about to be asked to finish, so
+                // there is no backlog left to protect against.
                 let _ = audio_tx.send(remainder);
             }
             break;
@@ -509,6 +638,7 @@ fn build_stream(
     loopback: bool,
     fifo: &Arc<Mutex<VecDeque<f32>>>,
     active_flag: &Arc<AtomicBool>,
+    losses: &Arc<AudioLosses>,
 ) -> Option<cpal::Stream> {
     let label = if loopback { "system audio" } else { "microphone" };
     let Some(device) = device else {
@@ -546,10 +676,11 @@ fn build_stream(
     macro_rules! build {
         ($sample:ty, $convert:expr) => {{
             let fifo_ref = fifo.clone();
+            let losses_ref = Arc::clone(losses);
             device.build_input_stream(
                 &stream_config,
                 move |data: &[$sample], _: &cpal::InputCallbackInfo| {
-                    enqueue_frames(data, channels, sample_rate, $convert, &fifo_ref);
+                    enqueue_frames(data, channels, sample_rate, $convert, &fifo_ref, &losses_ref);
                 },
                 err_fn,
                 None,
@@ -603,6 +734,7 @@ fn enqueue_frames<T: Copy>(
     sample_rate: u32,
     convert: impl Fn(T) -> f32,
     fifo: &Arc<Mutex<VecDeque<f32>>>,
+    losses: &Arc<AudioLosses>,
 ) {
     if data.is_empty() || channels == 0 {
         return;
@@ -617,6 +749,33 @@ fn enqueue_frames<T: Copy>(
     let resampled = crate::capture::resample_to_16k_mono(&mono, sample_rate);
     let mut guard = fifo.lock_or_recover();
     guard.extend(resampled);
+    // The mixer drains this every tick without ever blocking, so reaching the
+    // cap means the mixer thread is not running. Discarding the oldest keeps
+    // the most recent minute rather than letting the FIFO grow without limit,
+    // and counting it is what stops the loss being invisible.
+    if guard.len() > MAX_FIFO_SAMPLES {
+        let excess = guard.len() - MAX_FIFO_SAMPLES;
+        guard.drain(..excess);
+        losses
+            .fifo_samples_dropped
+            .fetch_add(excess as u64, Ordering::SeqCst);
+    }
+}
+
+/// Whether a loss counter has moved since the mixer last looked.
+///
+/// Extracted so the rule can be tested without a device. The device callbacks
+/// discard a FIFO's oldest samples when the mixer has stopped draining it, and
+/// they have no way to reach the mixer's discontinuity flag from there — so
+/// the mixer watches the counter instead. Audio that was discarded is a hole,
+/// and the block after a hole does not continue the block before it.
+fn loss_marks_discontinuity(dropped_now: u64, seen: &mut u64) -> bool {
+    if dropped_now > *seen {
+        *seen = dropped_now;
+        true
+    } else {
+        false
+    }
 }
 
 /// Decides how many samples to consume from each FIFO this tick.
@@ -805,6 +964,90 @@ mod tests {
     fn rms_of_nothing_is_zero_rather_than_a_division_by_zero() {
         assert_eq!(rms_from_sum_sq(0.0, 0), 0.0);
     }
+    #[test]
+    fn a_fifo_the_mixer_stopped_draining_keeps_the_newest_minute_and_counts_the_rest() {
+        // The mixer drains every tick and never blocks, so reaching the cap
+        // means the mixer thread is not running. At that point the choice is
+        // between a bounded loss and an unbounded one — and the loss has to be
+        // counted, or the recording quietly has a hole in it.
+        let fifo: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let losses = Arc::new(AudioLosses::default());
+
+        let overflow = MAX_FIFO_SAMPLES + 8_000;
+        // Real sample values: the resampler clamps to full scale, so a plain
+        // index ramp would arrive as a wall of 1.0 and prove nothing.
+        let mut data = vec![0.25f32; overflow];
+        *data.last_mut().unwrap() = -0.5;
+        enqueue_frames(&data, 1, SEGMENT_SAMPLE_RATE, |s: f32| s, &fifo, &losses);
+
+        let guard = fifo.lock_or_recover();
+        assert_eq!(guard.len(), MAX_FIFO_SAMPLES, "the cap must hold");
+        assert_eq!(
+            losses.fifo_samples_dropped.load(Ordering::SeqCst),
+            8_000,
+            "and every discarded sample must be counted"
+        );
+        // The newest audio survives, not the oldest: what someone just said
+        // matters more than what they said a minute ago.
+        assert_eq!(*guard.back().unwrap(), -0.5);
+    }
+
+    #[test]
+    fn a_fifo_inside_the_cap_is_left_alone() {
+        let fifo: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let losses = Arc::new(AudioLosses::default());
+        enqueue_frames(&vec![0.1f32; 16_000], 1, SEGMENT_SAMPLE_RATE, |s| s, &fifo, &losses);
+        assert_eq!(fifo.lock_or_recover().len(), 16_000);
+        assert!(!losses.any());
+    }
+
+    #[test]
+    fn lost_audio_is_reported_in_seconds_across_both_causes() {
+        let losses = AudioLosses::default();
+        assert!(!losses.any());
+        assert_eq!(losses.lost_seconds(320), 0.0);
+
+        // Fifty shed blocks of 20 ms, plus half a second of FIFO overrun.
+        losses.blocks_shed.store(50, Ordering::SeqCst);
+        losses
+            .fifo_samples_dropped
+            .store(SEGMENT_SAMPLE_RATE as u64 / 2, Ordering::SeqCst);
+        assert!(losses.any());
+        assert!((losses.lost_seconds(320) - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dropped_audio_marks_the_join_once_per_loss_and_not_every_tick() {
+        // The mixer asks this every tick. A loss has to raise the flag
+        // exactly once: raising it forever would flush the segmenter on every
+        // block after the first hole and cut the meeting into single blocks,
+        // and never raising it stitches a sentence across missing speech.
+        let mut seen = 0u64;
+        assert!(!loss_marks_discontinuity(0, &mut seen));
+
+        assert!(loss_marks_discontinuity(320, &mut seen));
+        assert_eq!(seen, 320);
+        assert!(
+            !loss_marks_discontinuity(320, &mut seen),
+            "the same loss must not re-mark on the next tick"
+        );
+
+        assert!(
+            loss_marks_discontinuity(640, &mut seen),
+            "a second loss is a second hole"
+        );
+        assert_eq!(seen, 640);
+    }
+
+    #[test]
+    fn the_channel_to_the_pump_is_bounded_at_ten_seconds_of_audio() {
+        // The bound is the whole point: unbounded, a stalled pump grows memory
+        // until the process dies, which costs every second since the last
+        // checkpoint rather than the twenty milliseconds shedding costs.
+        let blocks_per_second = 1000 / MIXER_TICK.as_millis() as usize;
+        assert_eq!(AUDIO_CHANNEL_BLOCKS / blocks_per_second, 10);
+    }
+
     #[test]
     fn device_selection_is_empty_until_something_is_chosen() {
         assert!(MeetingDevices::default().is_empty());

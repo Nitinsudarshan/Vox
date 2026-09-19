@@ -30,13 +30,17 @@
 //!   arbitrary sample.
 
 use super::model::SegmentChannel;
+use super::speech_state::{self, FrameOutcome, SpeechState, SpeechStateMachine, TurnEnd};
 
 /// Rate the segmenter (and everything downstream of it) works at.
 pub const SEGMENT_SAMPLE_RATE: u32 = 16_000;
 
 /// Analysis frame. 20 ms is short enough to place a boundary tightly and long
 /// enough that one plosive does not read as speech.
-const FRAME_MS: usize = 20;
+///
+/// Owned by [`speech_state`], because the frame is the unit the turn decision
+/// is made in. Re-exported here so nothing downstream has to know that.
+const FRAME_MS: usize = speech_state::FRAME_MS;
 const FRAME_SAMPLES: usize = (SEGMENT_SAMPLE_RATE as usize * FRAME_MS) / 1000;
 
 /// Audio prepended to every segment, so onset detection latency does not eat
@@ -45,15 +49,14 @@ const PRE_ROLL_MS: usize = 300;
 const PRE_ROLL_FRAMES: usize = PRE_ROLL_MS / FRAME_MS;
 
 /// Silence tolerated inside a segment before it is considered finished.
-const REDEMPTION_MS: usize = 400;
-const REDEMPTION_FRAMES: usize = REDEMPTION_MS / FRAME_MS;
+const REDEMPTION_FRAMES: usize = speech_state::REDEMPTION_FRAMES;
 
 /// Speech shorter than this is a cough, a click, or a door.
 const MIN_SPEECH_MS: usize = 250;
 const MIN_SPEECH_FRAMES: usize = MIN_SPEECH_MS / FRAME_MS;
 
 /// Consecutive above-threshold frames needed to open a segment.
-const ONSET_FRAMES: usize = 3;
+const ONSET_FRAMES: usize = speech_state::ONSET_FRAMES;
 
 /// Longest segment handed to a decoder in one piece.
 ///
@@ -62,25 +65,6 @@ const ONSET_FRAMES: usize = 3;
 /// long blocks the single serial worker for its whole duration.
 pub const MAX_SEGMENT_SECONDS: f64 = 25.0;
 const MAX_SEGMENT_FRAMES: usize = (MAX_SEGMENT_SECONDS as usize * 1000) / FRAME_MS;
-
-/// How many recent frames the adaptive noise floor is estimated over.
-const NOISE_WINDOW_FRAMES: usize = 150; // 3 seconds
-
-/// Fraction of the noise window treated as "the quiet part of the room".
-const NOISE_PERCENTILE: f32 = 0.2;
-
-/// How far above the floor a frame must sit to open a segment.
-const ONSET_MARGIN: f32 = 0.008;
-
-/// How far above the floor a frame must sit to keep one open. Lower than the
-/// onset margin on purpose: it is much easier to stay in speech than to enter
-/// it, which is what stops a trailing-off sentence from being clipped.
-const HOLD_MARGIN: f32 = 0.0048;
-
-/// Absolute floor under which nothing counts as speech regardless of how quiet
-/// the room is. Without it, a perfectly silent input makes its own noise floor
-/// zero and every rounding artefact becomes a segment.
-const MIN_ONSET_ENERGY: f32 = 0.006;
 
 /// How much louder one capture channel must be than the other before a segment
 /// is attributed to it rather than to both.
@@ -96,10 +80,20 @@ pub struct SpeechSegment {
     pub end_seconds: f64,
     /// Which capture channel dominated this span.
     pub channel: SegmentChannel,
-    /// Whether the segmenter cut this segment at [`MAX_SEGMENT_SECONDS`]
-    /// rather than at a real silence. The next segment continues the same
-    /// sentence, which is worth knowing when joining transcript text.
-    pub forced_split: bool,
+    /// Why the turn ended. A [`TurnEnd::Ceiling`] cut means the next segment
+    /// continues the same sentence, which is worth knowing when joining
+    /// transcript text.
+    ///
+    /// This replaced a `forced_split: bool`, which is one of the three things
+    /// this answers — [`SpeechSegment::forced_split`] still reports it, now
+    /// derived rather than stored, so the two cannot drift apart.
+    pub end_reason: TurnEnd,
+    /// Quiet the segmenter waited through before deciding the turn was over.
+    ///
+    /// Zero for a ceiling cut or a flush. This is the part of the wait before
+    /// a transcript line appears that no decoder can remove, and separating it
+    /// from decode time is the whole reason it is recorded.
+    pub hangover_ms: u64,
     /// Audio measurements and signal health for this segment.
     pub audio_stats: crate::capture::AudioStats,
 }
@@ -107,6 +101,11 @@ pub struct SpeechSegment {
 impl SpeechSegment {
     pub fn duration_seconds(&self) -> f64 {
         self.end_seconds - self.start_seconds
+    }
+
+    /// Whether this segment was cut at the ceiling rather than at a silence.
+    pub fn forced_split(&self) -> bool {
+        matches!(self.end_reason, TurnEnd::Ceiling)
     }
 }
 
@@ -140,11 +139,9 @@ pub struct Segmenter {
     pre_roll: std::collections::VecDeque<Frame>,
     /// Frames belonging to the segment currently open.
     open: Vec<Frame>,
-    /// Recent frame energies, for the adaptive noise floor.
-    noise_window: std::collections::VecDeque<f32>,
-    in_speech: bool,
-    consecutive_above: usize,
-    consecutive_below: usize,
+    /// The turn decision. Owns the thresholds, the noise floor and the
+    /// hysteresis; this struct owns only the audio behind them.
+    turn: SpeechStateMachine,
     /// Frames of real speech seen in the open segment — trailing redemption
     /// silence does not count towards [`MIN_SPEECH_FRAMES`].
     speech_frames: usize,
@@ -172,10 +169,7 @@ impl Segmenter {
             pending_sys_sum_sq: 0.0,
             pre_roll: std::collections::VecDeque::with_capacity(PRE_ROLL_FRAMES + 1),
             open: Vec::new(),
-            noise_window: std::collections::VecDeque::with_capacity(NOISE_WINDOW_FRAMES),
-            in_speech: false,
-            consecutive_above: 0,
-            consecutive_below: 0,
+            turn: SpeechStateMachine::new(),
             speech_frames: 0,
             last_speech_frame: 0,
             frames_emitted: 0,
@@ -190,7 +184,16 @@ impl Segmenter {
 
     /// Whether a segment is currently open.
     pub fn is_in_speech(&self) -> bool {
-        self.in_speech
+        self.turn.state().is_speaking()
+    }
+
+    /// Where the speaker is, as of the last frame consumed.
+    ///
+    /// Observable so that a caller can act on the turn without waiting for a
+    /// transcript — which is what a live surface, barge-in or a cancelled
+    /// playback would each need, and none of which exist yet.
+    pub fn speech_state(&self) -> SpeechState {
+        self.turn.state()
     }
 
     /// Feeds mixed audio in, returning any segments that completed.
@@ -229,12 +232,12 @@ impl Segmenter {
                 done.push(segment);
             }
         }
-        if self.in_speech {
-            if let Some(segment) = self.close_segment(false) {
+        if self.turn.state().is_speaking() {
+            if let Some(segment) = self.close_segment(TurnEnd::Flush) {
                 done.push(segment);
             }
         }
-        self.in_speech = false;
+        self.turn.close();
         self.open.clear();
         self.pre_roll.clear();
         done
@@ -251,51 +254,36 @@ impl Segmenter {
         };
         self.frames_emitted += 1;
 
-        let (onset, hold) = self.thresholds();
-        // The floor is made only of frames the segmenter judged to be
-        // non-speech. Recording every frame is what made a steady voice raise
-        // its own threshold: after a few seconds of talking the "noise"
-        // estimate *is* the voice, the hold threshold climbs above it, and the
-        // segment closes mid-sentence and cannot re-open.
-        //
-        // The very first frame is recorded regardless, to seed the estimate. A
-        // room with real background noise clears the absolute floor from its
-        // opening frame, so with nothing seeded nothing would ever be recorded
-        // and the whole recording would read as one unbroken segment.
-        if !self.in_speech && (self.noise_window.is_empty() || energy.mixed_rms < onset) {
-            self.record_noise(energy.mixed_rms);
-        }
-
+        // The decision is the state machine's; the audio is this struct's.
+        let was_speaking = self.turn.state().is_speaking();
+        let outcome = self.turn.observe(energy.mixed_rms);
         let frame = Frame { samples, energy };
 
-        if !self.in_speech {
-            self.push_pre_roll(frame);
-            if energy.mixed_rms >= onset {
-                self.consecutive_above += 1;
-                if self.consecutive_above >= ONSET_FRAMES {
+        if !was_speaking {
+            match outcome {
+                // The pre-roll is what the opened segment is made of, so the
+                // frame that confirmed the onset has to reach it first.
+                FrameOutcome::Opened => {
+                    self.push_pre_roll(frame);
                     self.open_segment();
                 }
-            } else {
-                self.consecutive_above = 0;
+                _ => self.push_pre_roll(frame),
             }
             return None;
         }
 
-        // Inside a segment.
         self.open.push(frame);
-        if energy.mixed_rms >= hold {
-            self.last_speech_frame = self.open.len() - 1;
-            self.speech_frames += 1;
-            self.consecutive_below = 0;
-        } else {
-            self.consecutive_below += 1;
-            if self.consecutive_below >= REDEMPTION_FRAMES {
-                return self.close_segment(false);
+        match outcome {
+            FrameOutcome::Voiced => {
+                self.last_speech_frame = self.open.len() - 1;
+                self.speech_frames += 1;
             }
+            FrameOutcome::Ended => return self.close_segment(TurnEnd::Silence),
+            _ => {}
         }
 
         if self.open.len() >= MAX_SEGMENT_FRAMES {
-            return self.close_segment(true);
+            return self.close_segment(TurnEnd::Ceiling);
         }
         None
     }
@@ -305,9 +293,6 @@ impl Segmenter {
         let pre_roll: Vec<Frame> = self.pre_roll.drain(..).collect();
         self.segment_start_frame = self.frames_emitted.saturating_sub(pre_roll.len() as u64);
         self.open = pre_roll;
-        self.in_speech = true;
-        self.consecutive_above = 0;
-        self.consecutive_below = 0;
         // The frames that triggered the onset are real speech, and they are
         // already in `open` via the pre-roll.
         self.speech_frames = ONSET_FRAMES.min(self.open.len());
@@ -319,14 +304,16 @@ impl Segmenter {
     /// Returns `None` — and throws the audio away — when what was captured was
     /// shorter than [`MIN_SPEECH_MS`], because a decode of that is noise with
     /// a transcript attached.
-    fn close_segment(&mut self, forced: bool) -> Option<SpeechSegment> {
+    fn close_segment(&mut self, reason: TurnEnd) -> Option<SpeechSegment> {
+        let forced = matches!(reason, TurnEnd::Ceiling);
         let frames = std::mem::take(&mut self.open);
-        self.in_speech = false;
-        self.consecutive_above = 0;
-        self.consecutive_below = 0;
+        // Read before the machine is reset: this is the quiet the segmenter
+        // waited through, and it is gone the moment the turn closes.
+        let hangover_ms = if forced { 0 } else { self.turn.hangover_ms() };
         let speech_frames = std::mem::take(&mut self.speech_frames);
 
         if frames.is_empty() || speech_frames < MIN_SPEECH_FRAMES {
+            self.turn.close();
             return None;
         }
 
@@ -359,13 +346,15 @@ impl Segmenter {
 
         if forced {
             // Everything after the cut is the start of the next segment: the
-            // speaker has not stopped, so it must not be dropped or replayed.
+            // speaker has not stopped, so it must not be dropped or replayed —
+            // and must not have to re-confirm an onset either.
             self.open = rest.to_vec();
-            self.in_speech = true;
+            self.turn.continue_after_ceiling(self.open.len());
             self.segment_start_frame = end_frame;
             self.speech_frames = self.open.len();
             self.last_speech_frame = self.open.len().saturating_sub(1);
         } else {
+            self.turn.close();
             self.pre_roll.clear();
         }
 
@@ -376,7 +365,8 @@ impl Segmenter {
             start_seconds: frame_to_seconds(start_frame),
             end_seconds: frame_to_seconds(end_frame),
             channel: classify_channel(mic_sum_sq, sys_sum_sq, sample_count),
-            forced_split: forced,
+            end_reason: reason,
+            hangover_ms,
             audio_stats,
         })
     }
@@ -388,32 +378,6 @@ impl Segmenter {
         self.pre_roll.push_back(frame);
     }
 
-    fn record_noise(&mut self, rms: f32) {
-        if self.noise_window.len() == NOISE_WINDOW_FRAMES {
-            self.noise_window.pop_front();
-        }
-        self.noise_window.push_back(rms);
-    }
-
-    /// Onset and hold thresholds for the current room.
-    fn thresholds(&self) -> (f32, f32) {
-        let floor = self.noise_floor();
-        (
-            (floor + ONSET_MARGIN).max(MIN_ONSET_ENERGY),
-            (floor + HOLD_MARGIN).max(MIN_ONSET_ENERGY * 0.75),
-        )
-    }
-
-    /// The quiet part of the recent past, as an RMS level.
-    fn noise_floor(&self) -> f32 {
-        if self.noise_window.is_empty() {
-            return 0.0;
-        }
-        let mut sorted: Vec<f32> = self.noise_window.iter().copied().collect();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let count = ((sorted.len() as f32 * NOISE_PERCENTILE).ceil() as usize).max(1);
-        sorted[..count].iter().sum::<f32>() / count as f32
-    }
 }
 
 fn frame_to_seconds(frames: u64) -> f64 {
@@ -533,7 +497,8 @@ mod tests {
             "segment {:.2}s should cover the speech plus pre-roll",
             segment.duration_seconds()
         );
-        assert!(!segment.forced_split);
+        assert!(!segment.forced_split());
+        assert_eq!(segment.end_reason, TurnEnd::Silence);
     }
 
     #[test]
@@ -614,7 +579,9 @@ mod tests {
         segments.extend(segmenter.flush());
 
         assert!(segments.len() >= 2, "40s of speech must not be one decode");
-        assert!(segments[0].forced_split);
+        assert!(segments[0].forced_split());
+        assert_eq!(segments[0].end_reason, TurnEnd::Ceiling);
+        assert_eq!(segments[0].hangover_ms, 0, "a ceiling cut waits for nothing");
         for segment in &segments {
             assert!(
                 segment.duration_seconds() <= MAX_SEGMENT_SECONDS + 0.5,
@@ -684,6 +651,60 @@ mod tests {
         segments.extend(segmenter.flush());
 
         assert_eq!(segments.len(), 1, "speech over noise should be one segment");
+    }
+
+    #[test]
+    fn the_turn_state_is_observable_without_waiting_for_a_transcript() {
+        // The seam a live surface, barge-in or a cancelled playback would
+        // each need: where the speaker is, known from acoustics alone, with
+        // no decode involved.
+        let mut segmenter = Segmenter::new();
+        assert_eq!(segmenter.speech_state(), SpeechState::Silence);
+
+        // A moment of room first: the very first frame seeds the noise floor,
+        // so a recording that opens mid-word calibrates against the word.
+        push_mixed(&mut segmenter, &silence(0.5));
+        push_mixed(&mut segmenter, &tone(1.0, 0.2));
+        assert_eq!(segmenter.speech_state(), SpeechState::Speaking);
+
+        // Quiet, but not yet long enough to be a turn boundary.
+        push_mixed(&mut segmenter, &silence(0.1));
+        assert_eq!(segmenter.speech_state(), SpeechState::ProbableEnd);
+        assert!(segmenter.is_in_speech(), "a breath is not the end of a turn");
+
+        push_mixed(&mut segmenter, &silence(1.0));
+        assert_eq!(segmenter.speech_state(), SpeechState::Silence);
+        assert!(!segmenter.is_in_speech());
+    }
+
+    #[test]
+    fn a_segment_reports_the_quiet_it_waited_through_to_be_sure() {
+        // Separating the hangover from decode time is what makes "why is the
+        // transcript slow" answerable: no model makes this number smaller.
+        let mut segmenter = Segmenter::new();
+        let mut samples = silence(0.5);
+        samples.extend(tone(1.0, 0.2));
+        samples.extend(silence(1.0));
+        let segments = push_mixed(&mut segmenter, &samples);
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].end_reason, TurnEnd::Silence);
+        assert_eq!(
+            segments[0].hangover_ms,
+            super::super::speech_state::REDEMPTION_MS as u64,
+            "a turn closed by silence waited exactly the redemption window"
+        );
+    }
+
+    #[test]
+    fn a_flushed_segment_says_it_was_cut_short_by_the_recording_stopping() {
+        let mut segmenter = Segmenter::new();
+        push_mixed(&mut segmenter, &silence(0.5));
+        push_mixed(&mut segmenter, &tone(1.0, 0.2));
+        let flushed = segmenter.flush();
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].end_reason, TurnEnd::Flush);
+        assert!(!flushed[0].forced_split());
     }
 
     #[test]

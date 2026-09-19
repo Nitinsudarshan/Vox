@@ -47,6 +47,31 @@ impl Default for DetectionSettings {
     }
 }
 
+/// Which transcript line belongs to whom.
+///
+/// Its own record, keyed by raw sequence, rather than a field on the segment.
+/// A segment is evidence about a span of audio; who Vox believes was speaking
+/// is an interpretation of that evidence, and re-running detection must not
+/// rewrite the file holding what the decoder said.
+///
+/// Keyed by sequence and not by index, because a re-transcription renumbers
+/// from zero and an index would then point at a different sentence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeakerAttribution {
+    #[serde(default)]
+    pub by_sequence: std::collections::BTreeMap<u64, String>,
+}
+
+impl SpeakerAttribution {
+    pub fn speaker_for(&self, sequence: u64) -> Option<&str> {
+        self.by_sequence.get(&sequence).map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_sequence.is_empty()
+    }
+}
+
 /// What a detection run found.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SpeakerReport {
@@ -55,29 +80,33 @@ pub struct SpeakerReport {
     pub attributed: usize,
     /// Lines left unattributed — too short to fingerprint, or silent.
     pub unattributed: usize,
+    /// Which line belongs to whom.
+    #[serde(default)]
+    pub attribution: SpeakerAttribution,
 }
 
-/// Groups turns by speaker and writes the attribution onto the transcript.
+/// Groups turns by speaker, and says which line belongs to whom.
 ///
 /// `prints` carries a fingerprint for every line long enough to have one. A
-/// line with no fingerprint keeps `speaker_id: None`: attributing it would
-/// mean guessing from the audio's length rather than its content, and an
-/// unattributed line reads as unknown while a wrongly attributed one reads as
-/// known and wrong.
+/// line with no fingerprint gets no attribution: guessing from the audio's
+/// length rather than its content would mean an unattributed line — which
+/// reads as unknown — became a wrongly attributed one, which reads as known
+/// and wrong.
 ///
 /// The two capture channels are clustered **separately**. The local microphone
 /// is one person by construction, and letting a quiet remote voice merge into
 /// it would claim the user said something they did not.
+///
+/// **Takes the segments by shared reference.** Attribution is an
+/// interpretation of evidence, not evidence, and it used to be written back
+/// onto the raw transcript — so re-running detection rewrote the file holding
+/// what the decoder said. It now comes back as its own record.
 pub fn assign_speakers(
-    segments: &mut [TranscriptSegment],
+    segments: &[TranscriptSegment],
     prints: &[TurnPrint],
     settings: &DetectionSettings,
     previous: &[Speaker],
 ) -> SpeakerReport {
-    for segment in segments.iter_mut() {
-        segment.speaker_id = None;
-    }
-
     let mut groups: Vec<(SegmentChannel, Vec<u64>)> = Vec::new();
 
     for channel in [
@@ -148,19 +177,23 @@ pub fn assign_speakers(
 
     let speakers = carry_over_names(speakers, previous);
 
+    let mut attribution = SpeakerAttribution::default();
     for (speaker, (_, members)) in speakers.iter().zip(&groups) {
-        for segment in segments.iter_mut() {
+        for segment in segments.iter() {
             if members.contains(&segment.sequence) {
-                segment.speaker_id = Some(speaker.id.clone());
+                attribution
+                    .by_sequence
+                    .insert(segment.sequence, speaker.id.clone());
             }
         }
     }
 
-    let attributed = segments.iter().filter(|s| s.speaker_id.is_some()).count();
+    let attributed = attribution.by_sequence.len();
     SpeakerReport {
         speakers,
         attributed,
-        unattributed: segments.len() - attributed,
+        unattributed: segments.len().saturating_sub(attributed),
+        attribution,
     }
 }
 
@@ -222,10 +255,13 @@ fn carry_over_names(mut speakers: Vec<Speaker>, previous: &[Speaker]) -> Vec<Spe
 }
 
 /// The name to show against a transcript line.
-pub fn label_for(segment: &TranscriptSegment, speakers: &[Speaker]) -> String {
-    segment
-        .speaker_id
-        .as_deref()
+pub fn label_for(
+    segment: &TranscriptSegment,
+    attribution: &SpeakerAttribution,
+    speakers: &[Speaker],
+) -> String {
+    attribution
+        .speaker_for(segment.sequence)
         .and_then(|id| speakers.iter().find(|s| s.id == id))
         .map(|speaker| speaker.label.clone())
         // No attribution falls back to the channel, which is measured and
@@ -247,10 +283,11 @@ mod tests {
             channel,
             no_speech_prob: 0.01,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            cut_at_ceiling: false,
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
             telemetry: None,
         }
     }
@@ -265,7 +302,7 @@ mod tests {
 
     #[test]
     fn two_remote_voices_become_two_speakers() {
-        let mut segments = vec![
+        let segments = vec![
             segment(0, SegmentChannel::System, 0.0, 3.0),
             segment(1, SegmentChannel::System, 3.0, 6.0),
             segment(2, SegmentChannel::System, 6.0, 9.0),
@@ -275,28 +312,28 @@ mod tests {
             print(1, &[0.0, 1.0, 0.0]),
             print(2, &[0.98, 0.02, 0.0]),
         ];
-        let report = assign_speakers(&mut segments, &prints, &DetectionSettings::default(), &[]);
+        let report = assign_speakers(&segments, &prints, &DetectionSettings::default(), &[]);
 
         assert_eq!(report.speakers.len(), 2);
         assert_eq!(report.attributed, 3);
-        assert_eq!(segments[0].speaker_id, segments[2].speaker_id);
-        assert_ne!(segments[0].speaker_id, segments[1].speaker_id);
+        assert_eq!(report.attribution.speaker_for(0), report.attribution.speaker_for(2));
+        assert_ne!(report.attribution.speaker_for(0), report.attribution.speaker_for(1));
     }
 
     #[test]
     fn the_local_microphone_is_never_split_into_several_people() {
         // One microphone carries one person. Clustering it can only ever
         // invent a second speaker for the same voice.
-        let mut segments = vec![
+        let segments = vec![
             segment(0, SegmentChannel::Microphone, 0.0, 3.0),
             segment(1, SegmentChannel::Microphone, 3.0, 6.0),
         ];
         let prints = vec![print(0, &[1.0, 0.0, 0.0]), print(1, &[0.0, 1.0, 0.0])];
-        let report = assign_speakers(&mut segments, &prints, &DetectionSettings::default(), &[]);
+        let report = assign_speakers(&segments, &prints, &DetectionSettings::default(), &[]);
 
         assert_eq!(report.speakers.len(), 1);
         assert_eq!(report.speakers[0].label, "You");
-        assert_eq!(segments[0].speaker_id, segments[1].speaker_id);
+        assert_eq!(report.attribution.speaker_for(0), report.attribution.speaker_for(1));
     }
 
     #[test]
@@ -304,27 +341,27 @@ mod tests {
         // The failure this prevents: a quiet remote voice clustering with the
         // local one, so the transcript says the user said something they did
         // not.
-        let mut segments = vec![
+        let segments = vec![
             segment(0, SegmentChannel::Microphone, 0.0, 3.0),
             segment(1, SegmentChannel::System, 3.0, 6.0),
         ];
         // Identical fingerprints, which is the worst case for this.
         let prints = vec![print(0, &[1.0, 0.0]), print(1, &[1.0, 0.0])];
-        let report = assign_speakers(&mut segments, &prints, &DetectionSettings::default(), &[]);
+        let report = assign_speakers(&segments, &prints, &DetectionSettings::default(), &[]);
 
         assert_eq!(report.speakers.len(), 2);
-        assert_ne!(segments[0].speaker_id, segments[1].speaker_id);
+        assert_ne!(report.attribution.speaker_for(0), report.attribution.speaker_for(1));
     }
 
     #[test]
     fn a_line_with_no_fingerprint_is_left_unattributed() {
-        let mut segments = vec![
+        let segments = vec![
             segment(0, SegmentChannel::System, 0.0, 3.0),
             segment(1, SegmentChannel::System, 3.0, 3.3),
         ];
         // Only the first line was long enough to fingerprint.
         let report = assign_speakers(
-            &mut segments,
+            &segments,
             &[print(0, &[1.0, 0.0])],
             &DetectionSettings::default(),
             &[],
@@ -332,19 +369,24 @@ mod tests {
 
         assert_eq!(report.attributed, 1);
         assert_eq!(report.unattributed, 1);
-        assert!(segments[1].speaker_id.is_none());
+        assert!(report.attribution.speaker_for(1).is_none());
     }
 
     #[test]
     fn an_unattributed_line_still_reads_as_the_channel_it_came_from() {
         let segment = segment(0, SegmentChannel::System, 0.0, 1.0);
-        assert_eq!(label_for(&segment, &[]), "Others");
+        assert_eq!(
+            label_for(&segment, &SpeakerAttribution::default(), &[]),
+            "Others"
+        );
     }
 
     #[test]
     fn an_attributed_line_reads_as_the_name_the_user_gave() {
-        let mut segment = segment(0, SegmentChannel::System, 0.0, 1.0);
-        segment.speaker_id = Some("speaker-1".into());
+        let segment = segment(0, SegmentChannel::System, 0.0, 1.0);
+        let attribution = SpeakerAttribution {
+            by_sequence: [(0u64, "speaker-1".to_string())].into_iter().collect(),
+        };
         let speakers = vec![Speaker {
             id: "speaker-1".into(),
             label: "Payal".into(),
@@ -355,7 +397,7 @@ mod tests {
             segment_count: 1,
             speaking_seconds: 1.0,
         }];
-        assert_eq!(label_for(&segment, &speakers), "Payal");
+        assert_eq!(label_for(&segment, &attribution, &speakers), "Payal");
     }
 
     #[test]
@@ -397,12 +439,12 @@ mod tests {
                 speaking_seconds: 3.0,
             },
         ];
-        let mut segments = vec![
+        let segments = vec![
             segment(0, SegmentChannel::System, 0.0, 3.0),
             segment(1, SegmentChannel::System, 3.0, 6.0),
         ];
         let prints = vec![print(0, &[1.0, 0.0]), print(1, &[0.0, 1.0])];
-        let report = assign_speakers(&mut segments, &prints, &DetectionSettings::default(), &previous);
+        let report = assign_speakers(&segments, &prints, &DetectionSettings::default(), &previous);
 
         assert_eq!(report.speakers[0].label, "Payal", "a typed name survives");
         assert!(report.speakers[0].named_by_user);
@@ -415,34 +457,74 @@ mod tests {
 
     #[test]
     fn detection_with_no_fingerprints_at_all_finds_nobody_and_breaks_nothing() {
-        let mut segments = vec![segment(0, SegmentChannel::System, 0.0, 1.0)];
-        let report = assign_speakers(&mut segments, &[], &DetectionSettings::default(), &[]);
+        let segments = vec![segment(0, SegmentChannel::System, 0.0, 1.0)];
+        let report = assign_speakers(&segments, &[], &DetectionSettings::default(), &[]);
         assert!(report.speakers.is_empty());
         assert_eq!(report.attributed, 0);
         assert_eq!(report.unattributed, 1);
     }
 
     #[test]
-    fn a_second_run_clears_attributions_it_no_longer_believes() {
-        let mut segments = vec![segment(0, SegmentChannel::System, 0.0, 3.0)];
-        segments[0].speaker_id = Some("speaker-9".into());
-        let report = assign_speakers(&mut segments, &[], &DetectionSettings::default(), &[]);
+    fn detection_never_modifies_the_transcript_it_read() {
+        // The rule this stage exists for. Attribution is an interpretation of
+        // evidence; it used to be written back onto the file holding what the
+        // decoder said, so re-running detection modified the record of the
+        // decode.
+        let segments = vec![
+            segment(0, SegmentChannel::System, 0.0, 3.0),
+            segment(1, SegmentChannel::System, 3.0, 6.0),
+        ];
+        let before = segments.clone();
+        let report = assign_speakers(
+            &segments,
+            &[print(0, &[1.0, 0.0]), print(1, &[0.0, 1.0])],
+            &DetectionSettings::default(),
+            &[],
+        );
+        assert_eq!(segments, before, "the raw transcript must be untouched");
+        assert!(!report.attribution.is_empty(), "and the work still happened");
+    }
+
+    #[test]
+    fn attribution_is_keyed_by_sequence_so_a_retranscription_cannot_shift_it() {
+        // A re-transcription renumbers from zero and produces a different
+        // number of lines. An index would then point at a different sentence;
+        // a sequence points at nothing, which is correct.
+        let segments = vec![segment(7, SegmentChannel::System, 0.0, 3.0)];
+        let report = assign_speakers(
+            &segments,
+            &[print(7, &[1.0, 0.0])],
+            &DetectionSettings::default(),
+            &[],
+        );
+        assert!(report.attribution.speaker_for(7).is_some());
+        assert!(report.attribution.speaker_for(0).is_none());
+    }
+
+    #[test]
+    fn a_second_run_returns_only_what_it_currently_believes() {
+        // Attribution is the run's output, not something accumulated on the
+        // transcript, so a run that finds nothing says so rather than leaving
+        // the previous run's guesses in place.
+        let segments = vec![segment(0, SegmentChannel::System, 0.0, 3.0)];
+        let report = assign_speakers(&segments, &[], &DetectionSettings::default(), &[]);
         assert!(
-            segments[0].speaker_id.is_none(),
+            report.attribution.speaker_for(0).is_none(),
             "a stale attribution must not outlive the run that made it"
         );
+        assert!(report.attribution.is_empty());
         assert_eq!(report.attributed, 0);
     }
 
     #[test]
     fn speakers_are_numbered_by_who_spoke_first() {
-        let mut segments = vec![
+        let segments = vec![
             segment(0, SegmentChannel::System, 0.0, 3.0),
             segment(1, SegmentChannel::System, 3.0, 6.0),
         ];
         let prints = vec![print(0, &[0.0, 1.0]), print(1, &[1.0, 0.0])];
-        let report = assign_speakers(&mut segments, &prints, &DetectionSettings::default(), &[]);
-        assert_eq!(segments[0].speaker_id.as_deref(), Some("speaker-1"));
+        let report = assign_speakers(&segments, &prints, &DetectionSettings::default(), &[]);
+        assert_eq!(report.attribution.speaker_for(0), Some("speaker-1"));
         assert_eq!(report.speakers[0].id, "speaker-1");
         assert_eq!(report.speakers[0].sample_start_seconds, 0.0);
     }

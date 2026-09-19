@@ -72,6 +72,173 @@ Whisper model. `DualCapture::start`, the decode inside the transcription
 worker, and a full record-to-report round trip are exercised by hand on
 Windows, not in CI.
 
+## 1b. The speech benchmark (`meetings::benchmark`)
+
+Tests tell you the pipeline still behaves. They cannot tell you whether it
+*hears* well, and no assertion can: transcription quality is a measurement
+against recordings, not a boolean. That measurement lives in
+`native/src-tauri/src/meetings/benchmark/`.
+
+It is not the same thing as `capture::evaluation`, and the difference matters.
+`capture::evaluation` scores the **dictation** path — one clip, the
+whole-buffer VAD, one decode. The benchmark scores the **meeting** path, by
+driving the production `Segmenter`, `speech_health`, `text_normalize` and a
+bounded queue of the same depth as the live one. Segmentation errors, backlog,
+dropped speech and repetition across a forced split only exist in that
+machinery, so only that machinery can measure them.
+
+### The corpus
+
+Twelve conditions, each with a minimum duration. A case shorter than its
+category's floor runs and is reported as `UnderLength` rather than scored:
+short clips produce word error rates dominated by noise, and cannot express
+drift, backlog or repetition at all (`docs/speech-decision-log.md` D-015).
+
+| Category | Floor |
+|---|---|
+| `long_meeting` | 30 min |
+| `long_form_speech` | 5 min |
+| everything else — clean/Indian English, Hinglish, technical vocabulary, proper nouns, numbers and dates, two speaker, overlapping speech, noisy, system-audio call | 3 min |
+
+**No audio ships with Vox.** Recordings of real meetings are the user's, and a
+synthetic corpus would measure a text-to-speech engine rather than a room. The
+manifest names what to supply:
+
+```jsonc
+{
+  "version": 1,
+  "cases": [{
+    "id": "standup-hinglish",
+    "audio": "audio/standup.wav",          // relative to the manifest, may not escape it
+    "category": "hinglish",
+    "reference_file": "reference/standup.txt",
+    "expect": {
+      "proper_nouns": ["Payal", "Bengaluru"],
+      "numbers": ["fourteen", "2026-03-04"],
+      "technical_terms": ["Tauri", "Supabase"]
+    }
+  }]
+}
+```
+
+`speech_benchmark_template` returns a starter manifest covering all twelve.
+
+### Running it
+
+Through the IPC surface, because the engines it compares need the app's
+resolved model paths and settings:
+
+| Command | Does |
+|---|---|
+| `speech_benchmark_template` | starter manifest, one case per category |
+| `inspect_speech_benchmark` | validates a manifest and says which categories have no case |
+| `run_speech_benchmark` | runs a corpus against one engine and writes the report |
+| `cancel_speech_benchmark` | stops part-way; finished cases are still reported |
+
+`run_speech_benchmark` takes an `engine` (`whisper` with a model path, or
+`parakeet` with a model directory — a `RecognizerChoice`, which deliberately
+has no variant that can hold a credential) and a `pacing`:
+
+- **`batch`** — as fast as the decoder manages. Measures accuracy and real-time
+  factor. Queue depth and drops are meaningless here, because nothing is racing.
+- **`realtime`** — paced to wall clock, the way a recording actually arrives.
+  The only mode in which backlog, dropped speech and time-to-first-transcript
+  mean anything, and it takes as long as the audio does.
+
+### What comes out
+
+One `benchmark_run.json` per case per engine, plus `report.json` and a
+`report.md` summary, written to `results/<timestamp>/` beside the manifest.
+One file per run because a run is the unit that gets compared — diffing two
+engines is diffing two directories.
+
+Each run carries accuracy (WER, CER, and substitution/deletion/insertion as
+rates against the reference length), repetition rate, hallucination rate broken
+down by the reason `speech_health` gave, recall of the proper nouns, numbers
+and technical terms the case expected, coverage, and the latency breakdown:
+decode RTF, pipeline RTF, time to first transcript, p50/p95/max finalization,
+and drain.
+
+Three honesty constraints are built in rather than left to the reader:
+
+- **No invented confidence.** An engine that reports no per-decode no-speech
+  probability records `None`, and is not screened on a number it never
+  produced. Parakeet is such an engine, and its declared capabilities travel
+  into the report with it, so a comparison states what one side could not do
+  rather than leaving a reader to infer it from a column of zeroes. See
+  `docs/speech-providers.md`.
+- **`pipeline_rtf` is the number that matters**, not `decode_rtf`. Audio
+  arrives at wall-clock rate, so above 1.0 the backlog grows by
+  `L × (rtf − 1)` over a meeting of length `L` and takes that long to clear
+  after stop. Below 1.0 the decoder keeps up and nothing accumulates.
+- **Repetition rate counts repetition, not error.** A speaker who says "no,
+  no, no" raises it. It is comparable between two runs over the same audio and
+  is not a defect count.
+
+The report names the categories the corpus has no case for, so an average over
+four easy conditions cannot be mistaken for coverage.
+
+### What the benchmark's own tests cover
+
+25 tests, run by `cargo test benchmark`, against a scripted decoder and
+synthetic audio — so every metric is checked against a known answer rather
+than against whatever a model said that day. They cover segmentation into
+spans, screening a looping decode as a hallucination, a failed decode, the
+two coverage measures, repetition, term recall, error rates, manifest
+validation including path traversal and schema version, report rendering and
+JSON round-trip. One test asserts the harness's queue depth equals
+`transcription::MAX_QUEUED_SEGMENTS`, so the benchmark cannot drift into
+measuring a pipeline that does not ship.
+
+## 1c. Long-meeting endurance (`meetings::endurance`)
+
+Every reliability property the meeting pipeline claims is a property over
+*time*: the queue stays bounded, the transcript stays ordered, memory does not
+grow, audio survives, nothing is lost quietly. None of them can fail in a
+five-minute demo and all of them can fail in an hour, so a fixture drives the
+production `Segmenter`, `CheckpointWriter` and `MeetingStore::append_segments`
+over a synthetic recording of arbitrary length. The audio is generated, so two
+hours costs seconds of CPU and no fixture file.
+
+It leaves out the decoder on purpose. A real decode needs a model this
+repository does not ship, and its speed is what `meetings::benchmark` already
+measures properly. What remains is everything *around* the decode, which is
+where the long-duration failures live.
+
+```bash
+cd native/src-tauri
+cargo test endurance                 # the fast ones, in CI
+cargo test -- --ignored endurance    # the two-hour run, before a release
+```
+
+What it asserts: a 15-minute meeting keeps every promise (audio merged,
+checkpointed as it went, every span queued, nothing dropped, transcript
+ordered); a decoder that cannot keep up sheds visibly and never exceeds the
+queue bound while the recording stays complete; an hour holds no more memory
+than five minutes; checkpoint memory is bounded by the interval rather than by
+the meeting; and pause/resume neither reorders nor loses transcript.
+
+### The one thing it found
+
+Persisting a transcript line costs more as the transcript grows.
+`append_segments` rewrites the whole file, so each append pays for everything
+already written. Over a synthetic two-hour meeting (1,439 lines) the first
+hundred lines cost **40 ms** to persist and the last hundred cost **2,056 ms**.
+
+Attributed: a **persistence** bottleneck, not capture, segmentation, queue,
+model or UI.
+
+Caching the parsed transcript in the store took the last hundred to
+**1,458 ms** — a 29% win, and the shape of that win says the remaining cost is
+serializing and writing rather than parsing.
+
+It was not taken further, and that is a decision rather than an omission. At
+1,439 lines this is roughly 15 ms per segment on the decode thread, against a
+decode measured in hundreds of milliseconds — a few percent. Removing the rest
+means not rewriting the file per line, which is a vault format change, and
+`docs/meetings.md` records the ceiling at which it becomes worth making. A
+test pins the growth's shape so a change that makes it worse is visible.
+
 ## 2. Native frontend (`native/src/`)
 
 370 tests, Vitest + React Testing Library, jsdom.
@@ -157,6 +324,10 @@ cd native && Vox_UPDATE_CAPTURE_FIXTURES=1 npm test
   highest-value of these, since it owns the capture state machine.
 - No end-to-end test drives a real recording through capture, STT, and
   processing. The eval fixtures cover the processing half of that.
+- **The speech benchmark has no corpus in this repository.** The harness is
+  tested; what it measures depends entirely on recordings the user supplies,
+  and until they do, every accuracy claim about Vox's transcription is an
+  impression rather than a number.
 - **No browser-level test drives web capture in a real browser.** The
   extraction layer is covered by jsdom fixtures and the wire format by the
   contract tests above, but a fixture cannot tell you that ChatGPT changed its

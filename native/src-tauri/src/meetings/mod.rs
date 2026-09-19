@@ -43,15 +43,23 @@
 //! - **A deleted meeting is deleted.** Meetily removes the database rows and
 //!   leaves the audio on disk.
 
+pub mod benchmark;
+pub mod canonical;
 pub mod capture;
 pub mod checkpoint;
 pub mod commands;
 pub mod engine;
+/// A synthetic long meeting, for the properties that can only fail over time.
+#[cfg(test)]
+pub mod endurance;
 pub mod import;
 pub mod model;
+pub mod provenance;
 pub mod segmenter;
+pub mod speech_state;
 pub mod series;
 pub mod store;
+pub mod telemetry;
 pub mod summary;
 pub mod transcription;
 pub mod speakers;

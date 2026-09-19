@@ -24,6 +24,7 @@
 //! Every write that matters goes to a temporary file and is renamed into
 //! place. A half-written `transcript.json` is worse than a stale one.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -36,18 +37,37 @@ use super::series::MeetingSeries;
 use super::model::{
     Meeting, MeetingListItem, MeetingState, MeetingSummary, SummaryStatus, TranscriptSegment,
 };
+use super::telemetry::{MeetingDiagnostics, SegmentDiagnostics};
 
 /// Directory under the vault root that holds every meeting.
 pub const MEETINGS_DIR: &str = "meetings";
 
 const MEETING_FILE: &str = "meeting.json";
 const TRANSCRIPT_FILE: &str = "transcript.json";
+/// The live transcript, kept when a final pass replaces it.
+const LIVE_TRANSCRIPT_FILE: &str = "transcript.live.json";
 const SUMMARY_FILE: &str = "summary.json";
 const NOTES_FILE: &str = "notes.md";
 const SPEAKERS_FILE: &str = "speakers.json";
+/// Which transcript line belongs to whom. Separate from the transcript
+/// because attribution is an interpretation of evidence, not evidence.
+const ATTRIBUTION_FILE: &str = "attribution.json";
+/// Per-segment decode telemetry, one JSON object per line.
+const SEGMENT_DIAGNOSTICS_FILE: &str = "diagnostics.jsonl";
+/// The meeting's diagnostics rollup, written once on stop.
+const DIAGNOSTICS_FILE: &str = "diagnostics.json";
 const AUDIO_DIR: &str = "audio";
 /// Where the recurring-meeting records live, beside the meetings themselves.
 const SERIES_FILE: &str = "series.json";
+
+/// Transcripts held in the parse cache at once.
+///
+/// Small on purpose. The cache exists so the meeting being recorded does not
+/// re-parse its own file on every append — one transcript, plus a little room
+/// for a detail view open beside it. Anything larger is a vault browsed, not a
+/// meeting recorded, and holding every transcript opened since launch is a
+/// leak wearing a cache's clothes.
+const MAX_CACHED_TRANSCRIPTS: usize = 4;
 
 /// Characters in the preview shown on a meeting list row.
 const PREVIEW_CHARS: usize = 200;
@@ -80,12 +100,34 @@ impl From<serde_json::Error> for MeetingStoreError {
 /// ever needed `&self`.
 pub struct MeetingStore {
     vault_dir: Mutex<PathBuf>,
+    /// The parsed transcript of whichever meetings have been touched, and the
+    /// modification time the parse was of.
+    ///
+    /// `append_segments` rewrites the whole file — the right trade for a
+    /// document that has to stay atomically replaceable — and it used to
+    /// re-read and re-parse it first, every time, on the decode thread.
+    /// Measured over a synthetic two-hour meeting: the first hundred lines
+    /// cost 40 ms to persist and the last hundred cost 2056 ms, fifty-one
+    /// times more, because each append paid for everything already written.
+    /// See `meetings::endurance`.
+    ///
+    /// Keyed by meeting id and validated against the file's modification
+    /// time, so a transcript edited outside Vox — which the vault is
+    /// explicitly meant to allow — is re-read rather than served stale.
+    transcripts: Mutex<HashMap<String, CachedTranscript>>,
+}
+
+/// A parsed transcript, and the file state it was parsed from.
+struct CachedTranscript {
+    modified: Option<std::time::SystemTime>,
+    segments: Vec<TranscriptSegment>,
 }
 
 impl MeetingStore {
     pub fn new(vault_dir: impl Into<PathBuf>) -> Self {
         Self {
             vault_dir: Mutex::new(vault_dir.into()),
+            transcripts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -93,6 +135,9 @@ impl MeetingStore {
     /// stay where they are, matching how the rest of the vault behaves.
     pub fn set_vault_dir(&self, new_dir: impl Into<PathBuf>) {
         *self.vault_dir.lock_or_recover() = new_dir.into();
+        // Meeting ids are unique, but a new vault is a different set of
+        // meetings and nothing cached under the old root describes it.
+        self.transcripts.lock_or_recover().clear();
     }
 
     /// The `meetings/` directory under the current vault root.
@@ -217,10 +262,30 @@ impl MeetingStore {
     ) -> Result<(), MeetingStoreError> {
         let dir = self.meeting_dir(id)?;
         fs::create_dir_all(&dir)?;
-        write_atomic(
-            &dir.join(TRANSCRIPT_FILE),
-            &serde_json::to_vec_pretty(segments)?,
-        )
+        let path = dir.join(TRANSCRIPT_FILE);
+        write_atomic(&path, &serde_json::to_vec_pretty(segments)?)?;
+        self.remember_transcript(id, modified_time(&path), segments.to_vec());
+        Ok(())
+    }
+
+    /// Puts a parsed transcript in the cache, within its bound.
+    ///
+    /// One place, because there are two ways in — a write and a read — and a
+    /// bound applied to only one of them is not a bound. Past the cap the
+    /// cheapest correct thing is to start again: tracking recency would mean
+    /// an ordering the rest of the store has no use for, to choose between
+    /// entries that are all cheap to rebuild.
+    fn remember_transcript(
+        &self,
+        id: &str,
+        modified: Option<std::time::SystemTime>,
+        segments: Vec<TranscriptSegment>,
+    ) {
+        let mut cache = self.transcripts.lock_or_recover();
+        if cache.len() >= MAX_CACHED_TRANSCRIPTS && !cache.contains_key(id) {
+            cache.clear();
+        }
+        cache.insert(id.to_string(), CachedTranscript { modified, segments });
     }
 
     /// A meeting's transcript, ordered by sequence.
@@ -230,11 +295,26 @@ impl MeetingStore {
     pub fn load_transcript(&self, id: &str) -> Result<Vec<TranscriptSegment>, MeetingStoreError> {
         let path = self.meeting_dir(id)?.join(TRANSCRIPT_FILE);
         if !path.exists() {
+            self.transcripts.lock_or_recover().remove(id);
             return Ok(Vec::new());
         }
+        let modified = modified_time(&path);
+        if modified.is_some() {
+            let cache = self.transcripts.lock_or_recover();
+            if let Some(cached) = cache.get(id) {
+                // An unchanged file is the common case by a wide margin, and
+                // parsing it again is most of what made a long meeting's
+                // thousandth line expensive to write.
+                if cached.modified == modified {
+                    return Ok(cached.segments.clone());
+                }
+            }
+        }
+
         let mut segments: Vec<TranscriptSegment> = serde_json::from_slice(&fs::read(&path)?)?;
         segments.sort_by_key(|segment| segment.sequence);
         segments.dedup_by_key(|segment| segment.sequence);
+        self.remember_transcript(id, modified, segments.clone());
         Ok(segments)
     }
 
@@ -259,6 +339,158 @@ impl MeetingStore {
         let total = segments.len();
         self.save_transcript(id, &segments)?;
         Ok(total)
+    }
+
+    /// Appends one segment's telemetry to the meeting's diagnostics log.
+    ///
+    /// Appended a line at a time rather than rewritten, unlike every other
+    /// document here. Two reasons, and they both point the same way: this is a
+    /// log rather than a document, so recording the thousandth segment must
+    /// cost what the first did; and a crash should keep every line written
+    /// before it rather than losing the file. A torn final line is tolerable
+    /// because [`Self::load_segment_diagnostics`] skips what it cannot parse —
+    /// for a transcript that would be unacceptable, and for telemetry about a
+    /// run that has already crashed it is exactly right.
+    pub fn append_segment_diagnostics(
+        &self,
+        id: &str,
+        record: &SegmentDiagnostics,
+    ) -> Result<(), MeetingStoreError> {
+        use std::io::Write;
+
+        let dir = self.meeting_dir(id)?;
+        fs::create_dir_all(&dir)?;
+        let mut line = serde_json::to_vec(record)?;
+        line.push(b'\n');
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(SEGMENT_DIAGNOSTICS_FILE))?;
+        file.write_all(&line)?;
+        Ok(())
+    }
+
+    /// Every segment record for a meeting, in sequence order.
+    ///
+    /// A line that will not parse is skipped rather than failing the read: the
+    /// common reason for one is the crash whose diagnostics are being read.
+    pub fn load_segment_diagnostics(
+        &self,
+        id: &str,
+    ) -> Result<Vec<SegmentDiagnostics>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(SEGMENT_DIAGNOSTICS_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = fs::read_to_string(&path)?;
+        let mut records: Vec<SegmentDiagnostics> = raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        records.sort_by_key(|record| record.sequence);
+        Ok(records)
+    }
+
+    pub fn save_diagnostics(
+        &self,
+        diagnostics: &MeetingDiagnostics,
+    ) -> Result<(), MeetingStoreError> {
+        let dir = self.meeting_dir(&diagnostics.meeting_id)?;
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(DIAGNOSTICS_FILE),
+            &serde_json::to_vec_pretty(diagnostics)?,
+        )
+    }
+
+    pub fn load_diagnostics(
+        &self,
+        id: &str,
+    ) -> Result<Option<MeetingDiagnostics>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(DIAGNOSTICS_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(serde_json::from_slice(&fs::read(&path)?).ok())
+    }
+
+    /// Copies the live transcript aside before a final pass replaces it.
+    ///
+    /// Written once and never overwritten: the point is to keep what the
+    /// *live* pass produced, and a second final pass would otherwise archive
+    /// the first final pass over it and lose the thing worth comparing
+    /// against.
+    ///
+    /// Two jobs at once. A crash part-way through a re-transcription used to
+    /// leave a truncated `transcript.json` and nothing to restore from, since
+    /// the only copy was in the caller's memory. And "the new transcript is
+    /// worse than the old one" was unanswerable without one to compare.
+    ///
+    /// Returns whether an archive was made.
+    pub fn archive_live_transcript(&self, id: &str) -> Result<bool, MeetingStoreError> {
+        let dir = self.meeting_dir(id)?;
+        let archive = dir.join(LIVE_TRANSCRIPT_FILE);
+        if archive.exists() {
+            return Ok(false);
+        }
+        // An *empty* transcript must not be archived. `create` writes one, so
+        // a meeting that produced no text at all would otherwise fill the
+        // once-only archive slot with nothing and hide the real live
+        // transcript from every later pass.
+        let current = self.load_transcript(id)?;
+        if current.is_empty() {
+            return Ok(false);
+        }
+        write_atomic(&archive, &serde_json::to_vec_pretty(&current)?)?;
+        Ok(true)
+    }
+
+    /// The live transcript, where a final pass has since replaced it.
+    ///
+    /// `None` means no final pass has run, so `transcript.json` *is* the live
+    /// one — not that the live transcript was lost.
+    pub fn load_live_transcript(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TranscriptSegment>>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(LIVE_TRANSCRIPT_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut segments: Vec<TranscriptSegment> = serde_json::from_slice(&fs::read(&path)?)?;
+        segments.sort_by_key(|segment| segment.sequence);
+        Ok(Some(segments))
+    }
+
+    pub fn save_attribution(
+        &self,
+        id: &str,
+        attribution: &super::speakers::SpeakerAttribution,
+    ) -> Result<(), MeetingStoreError> {
+        let dir = self.meeting_dir(id)?;
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(ATTRIBUTION_FILE),
+            &serde_json::to_vec_pretty(attribution)?,
+        )
+    }
+
+    /// Who said what, as far as detection has got.
+    ///
+    /// An empty attribution for a meeting where detection has not run, which
+    /// is not an error: a transcript labelled "You" and "Others" from the
+    /// capture channel is still a transcript, and the channel is measured
+    /// rather than inferred.
+    pub fn load_attribution(
+        &self,
+        id: &str,
+    ) -> Result<super::speakers::SpeakerAttribution, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(ATTRIBUTION_FILE);
+        if !path.exists() {
+            return Ok(super::speakers::SpeakerAttribution::default());
+        }
+        Ok(serde_json::from_slice(&fs::read(&path)?).unwrap_or_default())
     }
 
     pub fn save_summary(&self, summary: &MeetingSummary) -> Result<(), MeetingStoreError> {
@@ -408,6 +640,7 @@ impl MeetingStore {
     /// recording. Here the directory is the meeting; removing it removes all
     /// of it.
     pub fn delete_meeting(&self, id: &str) -> Result<(), MeetingStoreError> {
+        self.transcripts.lock_or_recover().remove(id);
         let dir = self.meeting_dir(id)?;
         if !dir.exists() {
             return Err(MeetingStoreError::NotFound(id.to_string()));
@@ -534,6 +767,15 @@ fn is_safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// A file's modification time, or `None` where the platform will not say.
+///
+/// `None` disables the transcript cache for that file rather than assuming it
+/// is unchanged: a cache that cannot tell whether it is stale must not claim
+/// it is fresh.
+fn modified_time(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
+}
+
 /// Writes bytes to `path` through a temporary file in the same directory.
 ///
 /// Same-directory, because a rename across filesystems is a copy and stops
@@ -651,10 +893,11 @@ mod tests {
             channel: SegmentChannel::Mixed,
             no_speech_prob: 0.01,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            cut_at_ceiling: false,
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
             telemetry: None,
         }
     }
@@ -670,6 +913,35 @@ mod tests {
         assert_eq!(loaded.title, "Weekly");
         assert_eq!(loaded.state, MeetingState::Recording);
         assert!(store.audio_dir("meeting-a").unwrap().exists());
+    }
+
+    #[test]
+    fn the_transcript_cache_does_not_grow_with_the_vault() {
+        // The cache is for the meeting being recorded, which re-reads its own
+        // file on every append. Browsing a vault must not turn it into a
+        // resident copy of every transcript opened since launch.
+        let vault = temp_vault("cache-bound");
+        let store = MeetingStore::new(&vault);
+        for index in 0..(MAX_CACHED_TRANSCRIPTS * 3) {
+            let id = format!("meeting-{index}");
+            let meeting = Meeting::new(id.clone(), "Sync".into(), MeetingSource::Recorded);
+            store.create(&meeting).expect("create");
+            store
+                .append_segments(&id, &[segment(1, "something was said")])
+                .expect("append");
+            store.load_transcript(&id).expect("load");
+        }
+
+        assert!(
+            store.transcripts.lock_or_recover().len() <= MAX_CACHED_TRANSCRIPTS,
+            "the cache held {} transcripts",
+            store.transcripts.lock_or_recover().len()
+        );
+
+        // Still a cache, not a disabled one: the meeting just read is served
+        // from memory rather than parsed again.
+        let last = format!("meeting-{}", MAX_CACHED_TRANSCRIPTS * 3 - 1);
+        assert!(store.transcripts.lock_or_recover().contains_key(&last));
     }
 
     #[test]
@@ -877,5 +1149,249 @@ mod tests {
         assert_eq!(store.load_notes("meeting-k").unwrap(), "");
         store.save_notes("meeting-k", "- follow up with ops").unwrap();
         assert_eq!(store.load_notes("meeting-k").unwrap(), "- follow up with ops");
+    }
+
+    fn diagnostic(sequence: u64) -> SegmentDiagnostics {
+        use crate::meetings::telemetry::{SegmentStatus, DIAGNOSTICS_VERSION};
+        SegmentDiagnostics {
+            version: DIAGNOSTICS_VERSION,
+            sequence,
+            start_seconds: sequence as f64,
+            end_seconds: sequence as f64 + 1.0,
+            channel: SegmentChannel::Microphone,
+            forced_split: false,
+            end_reason: crate::meetings::speech_state::TurnEnd::Silence,
+            hangover_ms: 400,
+            voiced_seconds: 0.9,
+            total_seconds: 1.0,
+            no_speech_prob: Some(0.05),
+            queue_wait_ms: 1,
+            lock_wait_ms: 0,
+            model_load_ms: 0,
+            model_reloaded: false,
+            decode_ms: 100,
+            post_ms: 1,
+            persist_ms: 1,
+            model: "ggml-small.bin".into(),
+            language: Some("en".into()),
+            expensive_script_profile: false,
+            audio_ctx: None,
+            status: SegmentStatus::Kept,
+            rejection: None,
+            error: None,
+            text_chars: 12,
+            queue_depth_after: 0,
+        }
+    }
+
+    #[test]
+    fn the_live_transcript_is_kept_when_a_final_pass_replaces_it() {
+        let store = MeetingStore::new(temp_vault("live-archive"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Passes".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .save_transcript("meeting-p", &[segment(0, "live text")])
+            .unwrap();
+
+        assert!(store.archive_live_transcript("meeting-p").unwrap());
+        store
+            .save_transcript("meeting-p", &[segment(0, "final text")])
+            .unwrap();
+
+        assert_eq!(store.load_transcript("meeting-p").unwrap()[0].text, "final text");
+        let live = store
+            .load_live_transcript("meeting-p")
+            .unwrap()
+            .expect("the live transcript must survive the pass that replaced it");
+        assert_eq!(live[0].text, "live text");
+    }
+
+    #[test]
+    fn a_second_final_pass_does_not_archive_over_the_live_transcript() {
+        // Archiving again would replace the live transcript with the first
+        // final one, which is the only thing worth comparing against.
+        let store = MeetingStore::new(temp_vault("live-archive-twice"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Twice".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .save_transcript("meeting-p", &[segment(0, "live text")])
+            .unwrap();
+
+        assert!(store.archive_live_transcript("meeting-p").unwrap());
+        store
+            .save_transcript("meeting-p", &[segment(0, "first final")])
+            .unwrap();
+        assert!(
+            !store.archive_live_transcript("meeting-p").unwrap(),
+            "a second pass must not archive again"
+        );
+
+        let live = store.load_live_transcript("meeting-p").unwrap().unwrap();
+        assert_eq!(live[0].text, "live text");
+    }
+
+    #[test]
+    fn a_meeting_with_no_final_pass_has_no_archive_and_that_is_not_a_loss() {
+        // `None` means transcript.json *is* the live one, not that it is gone.
+        let store = MeetingStore::new(temp_vault("live-none"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Live".into(), MeetingSource::Recorded))
+            .unwrap();
+        store.save_transcript("meeting-p", &[segment(0, "only")]).unwrap();
+        assert!(store.load_live_transcript("meeting-p").unwrap().is_none());
+    }
+
+    #[test]
+    fn an_empty_transcript_is_not_archived_over_the_real_one() {
+        // `create` writes an empty transcript.json, so archiving
+        // unconditionally would fill the once-only slot with nothing and hide
+        // the live transcript from every later pass.
+        let store = MeetingStore::new(temp_vault("live-empty"));
+        store
+            .create(&Meeting::new("meeting-p".into(), "Empty".into(), MeetingSource::Recorded))
+            .unwrap();
+        assert!(!store.archive_live_transcript("meeting-p").unwrap());
+        assert!(store.load_live_transcript("meeting-p").unwrap().is_none());
+
+        // Once there is something to keep, the slot is still free.
+        store.save_transcript("meeting-p", &[segment(0, "live")]).unwrap();
+        assert!(store.archive_live_transcript("meeting-p").unwrap());
+        assert_eq!(
+            store.load_live_transcript("meeting-p").unwrap().unwrap()[0].text,
+            "live"
+        );
+    }
+
+    #[test]
+    fn a_meeting_records_what_produced_its_transcript_without_naming_a_machine() {
+        use crate::meetings::model::{TranscriptProvenance, TranscriptionPass};
+        let store = MeetingStore::new(temp_vault("provenance"));
+        let mut meeting =
+            Meeting::new("meeting-p".into(), "Prov".into(), MeetingSource::Recorded);
+        meeting.transcript = Some(TranscriptProvenance {
+            pass: TranscriptionPass::Final,
+            engine: "whisper".into(),
+            model: "ggml-large-v3-turbo.bin".into(),
+            language: Some("hi".into()),
+            profile: "BeamSearch { beam_size: 5, patience: 1.0 }".into(),
+            completed_at: "2026-09-19T10:00:00Z".into(),
+        });
+        store.create(&meeting).unwrap();
+
+        let loaded = store.load_meeting("meeting-p").unwrap();
+        let provenance = loaded.transcript.expect("provenance survives a round trip");
+        assert_eq!(provenance.pass, TranscriptionPass::Final);
+        assert_eq!(provenance.model, "ggml-large-v3-turbo.bin");
+        assert!(!provenance.model.contains('/'), "a filename, never a path");
+    }
+
+    #[test]
+    fn segment_diagnostics_append_rather_than_rewriting_the_file() {
+        let store = MeetingStore::new(temp_vault("diag-append"));
+        store
+            .create(&Meeting::new("meeting-d".into(), "Diag".into(), MeetingSource::Recorded))
+            .unwrap();
+
+        for sequence in 0..5 {
+            store
+                .append_segment_diagnostics("meeting-d", &diagnostic(sequence))
+                .unwrap();
+        }
+        let loaded = store.load_segment_diagnostics("meeting-d").unwrap();
+        assert_eq!(loaded.len(), 5);
+        assert_eq!(loaded[4].sequence, 4);
+
+        // One line per record, which is what makes the thousandth append cost
+        // what the first did.
+        let path = store
+            .meeting_dir("meeting-d")
+            .unwrap()
+            .join(SEGMENT_DIAGNOSTICS_FILE);
+        let raw = fs::read_to_string(path).unwrap();
+        assert_eq!(raw.lines().filter(|l| !l.trim().is_empty()).count(), 5);
+    }
+
+    #[test]
+    fn a_torn_final_line_costs_that_record_and_not_the_log() {
+        // The usual reason a diagnostics file is truncated is the crash whose
+        // diagnostics somebody is trying to read.
+        use std::io::Write;
+        let store = MeetingStore::new(temp_vault("diag-torn"));
+        store
+            .create(&Meeting::new("meeting-t".into(), "Torn".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .append_segment_diagnostics("meeting-t", &diagnostic(0))
+            .unwrap();
+
+        let path = store
+            .meeting_dir("meeting-t")
+            .unwrap()
+            .join(SEGMENT_DIAGNOSTICS_FILE);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"version\":1,\"sequence\":1,\"sta").unwrap();
+        drop(file);
+
+        let loaded = store.load_segment_diagnostics("meeting-t").unwrap();
+        assert_eq!(loaded.len(), 1, "the complete record must survive");
+        assert_eq!(loaded[0].sequence, 0);
+    }
+
+    #[test]
+    fn diagnostics_for_a_meeting_that_has_none_read_as_absent_not_as_an_error() {
+        let store = MeetingStore::new(temp_vault("diag-missing"));
+        store
+            .create(&Meeting::new("meeting-n".into(), "None".into(), MeetingSource::Recorded))
+            .unwrap();
+        assert!(store.load_diagnostics("meeting-n").unwrap().is_none());
+        assert!(store.load_segment_diagnostics("meeting-n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_rollup_round_trips_through_the_store() {
+        use crate::meetings::telemetry::{CaptureHealth, MeetingDiagnostics, StopFacts};
+        let store = MeetingStore::new(temp_vault("diag-rollup"));
+        store
+            .create(&Meeting::new("meeting-r".into(), "Roll".into(), MeetingSource::Recorded))
+            .unwrap();
+
+        let rollup = MeetingDiagnostics::summarize(
+            "meeting-r",
+            &[diagnostic(0), diagnostic(1)],
+            CaptureHealth {
+                recording_seconds: 120.0,
+                microphone_opened: true,
+                microphone_heard: true,
+                ..CaptureHealth::default()
+            },
+            StopFacts {
+                model: "ggml-small.bin".into(),
+                drain_seconds: 3.0,
+                drain_completed: true,
+                ..StopFacts::default()
+            },
+        );
+        store.save_diagnostics(&rollup).unwrap();
+        assert_eq!(store.load_diagnostics("meeting-r").unwrap(), Some(rollup));
+    }
+
+    #[test]
+    fn deleting_a_meeting_takes_its_diagnostics_with_it() {
+        // A diagnostics file names models, timings and segment boundaries of a
+        // conversation. Deleting the meeting has to delete it too.
+        let store = MeetingStore::new(temp_vault("diag-delete"));
+        store
+            .create(&Meeting::new("meeting-x".into(), "Gone".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .append_segment_diagnostics("meeting-x", &diagnostic(0))
+            .unwrap();
+        let dir = store.meeting_dir("meeting-x").unwrap();
+        assert!(dir.join(SEGMENT_DIAGNOSTICS_FILE).exists());
+
+        store.delete_meeting("meeting-x").unwrap();
+        assert!(!dir.exists());
     }
 }

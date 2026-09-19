@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::commands::{AppState, CommandError};
 use crate::sync::MutexExt;
 
+use super::benchmark;
 use super::engine::{MeetingEngineError, MeetingRecordingStatus};
 use super::import::{self, BatchConfig, ImportError};
 use super::model::{Meeting, MeetingListItem, MeetingSummary, TranscriptSegment};
@@ -38,6 +39,16 @@ pub struct MeetingDetail {
     /// transcript.
     #[serde(default)]
     pub speakers: Vec<crate::meetings::model::Speaker>,
+    /// How the recording and the transcription went. `None` for a meeting
+    /// recorded before diagnostics existed, or one that never finished — both
+    /// of which are ordinary, so the surface renders nothing rather than
+    /// claiming zeroes.
+    #[serde(default)]
+    pub diagnostics: Option<crate::meetings::telemetry::MeetingDiagnostics>,
+    /// The transcript as everything downstream reads it: ordered, sentences
+    /// the decoder's window cut back together, speakers attached, gaps
+    /// stated. `segments` above is the raw evidence underneath it.
+    pub canonical: crate::meetings::canonical::CanonicalTranscript,
 }
 
 /// In-flight import and re-transcription runs, so they can be cancelled.
@@ -101,6 +112,23 @@ impl From<MeetingStoreError> for CommandError {
             MeetingStoreError::NotFound(_) => "MEETING_NOT_FOUND",
             MeetingStoreError::InvalidId(_) => "MEETING_INVALID_ID",
             _ => "MEETING_STORAGE_FAILED",
+        };
+        CommandError::new(code, &err.to_string())
+    }
+}
+
+/// Benchmark failures map by cause, because the three the user can act on are
+/// different actions: fix the manifest, supply the audio, install the model.
+impl From<benchmark::BenchmarkError> for CommandError {
+    fn from(err: benchmark::BenchmarkError) -> Self {
+        let code = match err {
+            benchmark::BenchmarkError::Io(_) => "BENCHMARK_IO_FAILED",
+            benchmark::BenchmarkError::Json(_) | benchmark::BenchmarkError::Version { .. } => {
+                "BENCHMARK_BAD_MANIFEST"
+            }
+            benchmark::BenchmarkError::Invalid(_) => "BENCHMARK_INVALID",
+            benchmark::BenchmarkError::UnknownCase(_) => "BENCHMARK_UNKNOWN_CASE",
+            benchmark::BenchmarkError::Audio(_) => "BENCHMARK_AUDIO_FAILED",
         };
         CommandError::new(code, &err.to_string())
     }
@@ -307,12 +335,25 @@ pub fn get_meeting(
     // writes is a surprise, and the projection is cheap enough to redo. The
     // explicit `romanize_meeting_transcript` is what persists it.
     crate::meetings::variants::ensure_romanized(&mut segments);
+    let speakers = store.load_speakers(&meeting_id)?;
+    let attribution = store.load_attribution(&meeting_id)?;
+    let meeting = store.load_meeting(&meeting_id)?;
+    let canonical = crate::meetings::canonical::assemble(
+        &meeting_id,
+        &segments,
+        &attribution,
+        &speakers,
+        meeting.transcript.clone(),
+        &crate::meetings::canonical::AssemblyOptions::default(),
+    );
     Ok(MeetingDetail {
-        meeting: store.load_meeting(&meeting_id)?,
+        meeting,
         segments,
         summary,
         notes: store.load_notes(&meeting_id)?,
-        speakers: store.load_speakers(&meeting_id)?,
+        speakers: speakers.clone(),
+        diagnostics: store.load_diagnostics(&meeting_id)?,
+        canonical,
     })
 }
 
@@ -816,12 +857,25 @@ pub fn promote_meeting_to_scribble(
     let store = &state.meeting_store;
     let meeting = store.load_meeting(&meeting_id)?;
     let summary = store.load_summary(&meeting_id)?;
+    // The canonical transcript, not the raw segments: the knowledge layer is
+    // downstream of the transcript everything else reads, and handing it a
+    // different rendering would mean a graph built on text no report was
+    // written from.
     let body = summary
         .as_ref()
         .and_then(|s| s.markdown.clone())
         .filter(|markdown| !markdown.trim().is_empty())
         .unwrap_or_else(|| {
-            super::transcription::render_transcript(&store.load_transcript(&meeting_id).unwrap_or_default())
+            let segments = store.load_transcript(&meeting_id).unwrap_or_default();
+            let canonical = crate::meetings::canonical::assemble(
+                &meeting_id,
+                &segments,
+                &store.load_attribution(&meeting_id).unwrap_or_default(),
+                &store.load_speakers(&meeting_id).unwrap_or_default(),
+                meeting.transcript.clone(),
+                &crate::meetings::canonical::AssemblyOptions::default(),
+            );
+            crate::meetings::canonical::render_transcript(&canonical)
         });
     if body.trim().is_empty() {
         return Err(CommandError::new(
@@ -989,7 +1043,7 @@ pub async fn detect_meeting_speakers(
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
         let store = &state.meeting_store;
-        let mut segments = store.load_transcript(&meeting_id)?;
+        let segments = store.load_transcript(&meeting_id)?;
         if segments.is_empty() {
             return Err(CommandError::new(
                 "MEETING_EMPTY_TRANSCRIPT",
@@ -1007,13 +1061,16 @@ pub async fn detect_meeting_speakers(
         // not, because a re-run is entitled to renumber its own guesses.
         let previous = store.load_speakers(&meeting_id)?;
         let report = speakers::assign_speakers(
-            &mut segments,
+            &segments,
             &prints,
             &speakers::DetectionSettings::default(),
             &previous,
         );
 
-        store.save_transcript(&meeting_id, &segments)?;
+        // The transcript is not rewritten. Detection is an interpretation of
+        // evidence and used to be written back onto the file holding what the
+        // decoder said, so re-running it modified the record of the decode.
+        store.save_attribution(&meeting_id, &report.attribution)?;
         store.save_speakers(&meeting_id, &report.speakers)?;
         Ok(report)
     })
@@ -1220,4 +1277,164 @@ mod tests {
         assert!(offered.contains(&"wav".to_string()));
         assert!(offered.contains(&"m4a".to_string()));
     }
+}
+
+// --- diagnostics --------------------------------------------------------
+
+/// Every per-segment record for a meeting, in sequence order.
+///
+/// Separate from the rollup because it is large and is only wanted when the
+/// rollup has already said something is wrong: the rollup says the p95 was
+/// twelve seconds, and this says which segments they were.
+#[tauri::command]
+pub fn get_meeting_segment_diagnostics(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Vec<crate::meetings::telemetry::SegmentDiagnostics>, CommandError> {
+    state
+        .meeting_store
+        .load_segment_diagnostics(&meeting_id)
+        .map_err(CommandError::from)
+}
+
+// --- speech benchmark ---------------------------------------------------
+
+/// Key the benchmark's cancellation registers under. One run at a time: a
+/// benchmark that competed with itself for the single loaded model would
+/// measure the contention rather than the engine.
+const BENCHMARK_RUN_KEY: &str = "speech-benchmark";
+
+/// A starter corpus manifest — one entry per condition, with the recordings
+/// the user has to supply named rather than invented.
+#[tauri::command]
+pub fn speech_benchmark_template() -> benchmark::BenchmarkManifest {
+    benchmark::BenchmarkManifest::template()
+}
+
+/// Reads a corpus manifest and reports what it covers, without running it.
+///
+/// Separate from running because a corpus is assembled over weeks: "which
+/// conditions do I still have no recording for" is a question worth answering
+/// in a second rather than after an hour of decoding.
+#[tauri::command]
+pub fn inspect_speech_benchmark(
+    manifest_path: String,
+) -> Result<benchmark::BenchmarkManifest, CommandError> {
+    benchmark::BenchmarkManifest::load(std::path::Path::new(&manifest_path))
+        .map_err(CommandError::from)
+}
+
+/// What one benchmark run needs that the manifest does not say.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BenchmarkRequest {
+    /// Path to the corpus manifest. Its directory is the corpus root, and
+    /// every path inside it is resolved relative to that and may not escape.
+    pub manifest_path: String,
+    pub engine: crate::capture::recognizers::RecognizerChoice,
+    #[serde(default)]
+    pub pacing: Option<String>,
+    /// Where to write the report, **relative to the corpus root**. Defaults to
+    /// a timestamped directory under it. A path that leaves the corpus is
+    /// refused: this arrives from the webview, and a benchmark's results
+    /// belong beside the recordings they score.
+    #[serde(default)]
+    pub out_dir: Option<String>,
+    /// Decode overrides, so two profiles can be compared over one corpus.
+    #[serde(default)]
+    pub overrides: Option<BatchOverrides>,
+}
+
+/// Runs a corpus against one engine and writes the report.
+///
+/// Long-running by design — the long categories are half the point — so it
+/// reports progress and honours cancellation through the same registry
+/// imports use.
+#[tauri::command]
+pub async fn run_speech_benchmark(
+    app: AppHandle,
+    request: BenchmarkRequest,
+) -> Result<benchmark::BenchmarkReport, CommandError> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let manifest_path = std::path::PathBuf::from(&request.manifest_path);
+        let corpus_root = manifest_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| {
+                CommandError::new(
+                    "BENCHMARK_BAD_MANIFEST",
+                    "The manifest path has no directory to resolve the corpus against.",
+                )
+            })?;
+        let manifest = benchmark::BenchmarkManifest::load(&manifest_path)?;
+
+        let pacing = match request.pacing.as_deref() {
+            Some("realtime") => benchmark::Pacing::Realtime,
+            _ => benchmark::Pacing::Batch,
+        };
+        let overrides = request.overrides.unwrap_or_default();
+        let batch = batch_config(&state, &overrides)?;
+        let glossary = state.settings.lock_or_recover().dictionary.clone();
+
+        let cancel = state.meeting_imports.register(BENCHMARK_RUN_KEY);
+        let stt = state.stt.clone();
+        let choice = request.engine.clone();
+        let decoding = batch.decoding.clone();
+        let run = benchmark::RunProfile {
+            pacing,
+            language: batch.language.whisper_language.clone(),
+            translate: batch.language.translate,
+            profile: format!("{:?}", batch.decoding.strategy),
+        };
+
+        let emitter = handle.clone();
+        let result = benchmark::run_manifest(
+            &corpus_root,
+            &manifest,
+            || {
+                choice
+                    .build(stt.clone(), decoding.clone())
+                    .map(std::sync::Arc::from)
+                    .map_err(|err| benchmark::BenchmarkError::Invalid(err.to_string()))
+            },
+            run,
+            &glossary,
+            &cancel,
+            |case_id, index, total| {
+                let _ = emitter.emit(
+                    BENCHMARK_PROGRESS_EVENT,
+                    BenchmarkProgress {
+                        case_id: case_id.to_string(),
+                        index,
+                        total,
+                    },
+                );
+            },
+        );
+        state.meeting_imports.finish(BENCHMARK_RUN_KEY);
+        let report = result?;
+
+        let out_dir = benchmark::resolve_output_dir(&corpus_root, request.out_dir.as_deref())?;
+        report.write_to(&out_dir)?;
+        Ok(report)
+    })
+    .await
+    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
+}
+
+/// Stops a benchmark part-way. The cases already finished are still reported.
+#[tauri::command]
+pub fn cancel_speech_benchmark(state: State<'_, AppState>) -> bool {
+    state.meeting_imports.cancel(BENCHMARK_RUN_KEY)
+}
+
+/// How far through a corpus a run is.
+pub const BENCHMARK_PROGRESS_EVENT: &str = "speech-benchmark-progress";
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BenchmarkProgress {
+    pub case_id: String,
+    pub index: usize,
+    pub total: usize,
 }

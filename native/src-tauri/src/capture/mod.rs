@@ -1,3 +1,6 @@
+pub mod glossary;
+pub mod recognizer;
+pub mod recognizers;
 pub mod decode_history;
 pub mod device;
 pub mod evaluation;

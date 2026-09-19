@@ -46,6 +46,7 @@ use crate::capture::stt::{
 use super::model::{SegmentTelemetry, TranscriptSegment};
 use super::segmenter::{SpeechSegment, SEGMENT_SAMPLE_RATE};
 use super::store::MeetingStore;
+use super::telemetry;
 
 /// A transcript line, as it reaches the UI.
 pub const TRANSCRIPT_SEGMENT_EVENT: &str = "meeting-transcript-segment";
@@ -213,6 +214,15 @@ impl TranscriptionQueue {
 #[derive(Debug, Default, Clone, Copy)]
 struct SegmentTiming {
     audio_seconds: f64,
+    /// Seconds of the span that cleared the voiced threshold, and the span's
+    /// own length. Kept because they are the evidence `speech_health` judged
+    /// the decode against — without them a rejection is unexplainable after
+    /// the fact, and a kept segment cannot be checked either.
+    voiced_seconds: f64,
+    total_seconds: f64,
+    /// Whisper's own no-speech probability. `None` before a decode has
+    /// produced one, and never a stand-in.
+    no_speech_prob: Option<f32>,
     queue_wait_ms: u128,
     lock_wait_ms: u128,
     model_load_ms: u128,
@@ -446,6 +456,11 @@ fn run_worker(
         }
         counters.completed.fetch_add(1, Ordering::SeqCst);
 
+        let mut status = telemetry::SegmentStatus::Discarded;
+        let mut rejection: Option<String> = None;
+        let mut error: Option<String> = None;
+        let mut text_chars = 0usize;
+
         let outcome_label = match outcome {
             DecodeOutcome::Kept(segment) => {
                 let t_persist = Instant::now();
@@ -473,11 +488,17 @@ fn run_worker(
                     let _ = app.emit(TRANSCRIPT_SEGMENT_EVENT, &segment);
                 }
                 stats.kept += 1;
-                format!("kept ({} chars)", segment.text.chars().count())
+                status = telemetry::SegmentStatus::Kept;
+                text_chars = segment.text.chars().count();
+                format!("kept ({text_chars} chars)")
             }
-            DecodeOutcome::Discarded => {
+            DecodeOutcome::Discarded(reason) => {
                 stats.discarded += 1;
-                "discarded (empty or screened as hallucination)".to_string()
+                rejection = reason.map(str::to_string);
+                match reason {
+                    Some(reason) => format!("discarded ({reason})"),
+                    None => "discarded (empty decode)".to_string(),
+                }
             }
             DecodeOutcome::Failed(message) => {
                 tracing::warn!(
@@ -494,6 +515,8 @@ fn run_worker(
                      transcript. The audio recording still contains it.",
                 );
                 stats.failed += 1;
+                status = telemetry::SegmentStatus::Failed;
+                error = Some(message.clone());
                 format!("FAILED — {message}")
             }
         };
@@ -509,6 +532,29 @@ fn run_worker(
         }
         print_segment_trace(&config.meeting_id, sequence, &timing, &outcome_label, in_queue);
 
+        // The trace above is for a person watching a run. This is for every
+        // question that can only be answered afterwards — which is most of
+        // them. A diagnostics write that fails must not cost the transcript,
+        // so it is logged and the meeting carries on.
+        let record = build_diagnostics(
+            &config,
+            &job,
+            &timing,
+            status,
+            rejection,
+            error,
+            text_chars,
+            in_queue,
+        );
+        if let Err(err) = store.append_segment_diagnostics(&config.meeting_id, &record) {
+            tracing::warn!(
+                "meeting {}: could not record diagnostics for segment {}: {}",
+                config.meeting_id,
+                sequence,
+                err
+            );
+        }
+
         emit_progress(&app, &config.meeting_id, &counters);
     }
     emit_progress(&app, &config.meeting_id, &counters);
@@ -522,6 +568,63 @@ fn run_worker(
         counts_of(&counters)
     );
     stats
+}
+
+/// Turns one decode's measurements into the record that outlives the run.
+///
+/// Every field comes from something already measured; nothing here computes a
+/// new number and nothing invents one. In particular there is no confidence:
+/// what Whisper reports is `no_speech_prob` and that is what is stored.
+#[allow(clippy::too_many_arguments)] // One segment's facts, with no natural grouping.
+fn build_diagnostics(
+    config: &WorkerConfig,
+    job: &DecodeJob,
+    timing: &SegmentTiming,
+    status: telemetry::SegmentStatus,
+    rejection: Option<String>,
+    error: Option<String>,
+    text_chars: usize,
+    queue_depth_after: u64,
+) -> telemetry::SegmentDiagnostics {
+    telemetry::SegmentDiagnostics {
+        version: telemetry::DIAGNOSTICS_VERSION,
+        sequence: job.sequence,
+        start_seconds: job.segment.start_seconds,
+        end_seconds: job.segment.end_seconds,
+        channel: job.segment.channel,
+        forced_split: job.segment.forced_split(),
+        end_reason: job.segment.end_reason,
+        hangover_ms: job.segment.hangover_ms,
+        voiced_seconds: timing.voiced_seconds,
+        total_seconds: timing.total_seconds,
+        no_speech_prob: timing.no_speech_prob,
+        queue_wait_ms: timing.queue_wait_ms,
+        lock_wait_ms: timing.lock_wait_ms,
+        model_load_ms: timing.model_load_ms,
+        model_reloaded: timing.model_reloaded,
+        decode_ms: timing.decode_ms,
+        post_ms: timing.post_ms,
+        persist_ms: timing.persist_ms,
+        // The filename, never the path: a diagnostics file gets shared and a
+        // path names a machine and usually a person.
+        model: model_name(&config.model_path),
+        language: config.language.whisper_language.clone(),
+        expensive_script_profile: timing.expensive_script,
+        audio_ctx: timing.audio_ctx,
+        status,
+        rejection,
+        error,
+        text_chars,
+        queue_depth_after,
+    }
+}
+
+/// The model's filename, for a record that will be read on another machine.
+pub fn model_name(model_path: &str) -> String {
+    std::path::Path::new(model_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| model_path.to_string())
 }
 
 fn accumulate(stats: &mut TranscriptionStats, timing: &SegmentTiming) {
@@ -729,9 +832,13 @@ pub fn print_meeting_summary(
 }
 
 enum DecodeOutcome {
+    /// Boxed because a kept segment now carries its own decode telemetry,
+    /// which makes it far larger than the other two variants.
     Kept(Box<TranscriptSegment>),
-    /// Decoded, but screened out as a hallucination or as empty.
-    Discarded,
+    /// Decoded, but screened out as a hallucination or as empty. Carries the
+    /// `speech_health` reason key where there was one — an empty decode has
+    /// none, and "empty" and "looped" need different fixes.
+    Discarded(Option<&'static str>),
     Failed(String),
 }
 
@@ -752,7 +859,7 @@ fn decode_segment(
 
     let mut decoding = base_decoding.clone();
     // Build context-aware prompt using domain vocabulary and preceding segment context
-    if let Some(prompt) = config.vocabulary.build_prompt(prev_context, job.segment.forced_split, 220) {
+    if let Some(prompt) = config.vocabulary.build_prompt(prev_context, job.segment.forced_split(), 220) {
         decoding.initial_prompt = Some(prompt);
     }
 
@@ -764,6 +871,8 @@ fn decode_segment(
     };
 
     let profile = speech_health::profile_speech(samples, SEGMENT_SAMPLE_RATE);
+    timing.voiced_seconds = profile.voiced_seconds;
+    timing.total_seconds = profile.total_seconds;
 
     // The segmenter already decided this was speech; this second measurement
     // is about *how much* of the span is voice, which is what the
@@ -794,7 +903,7 @@ fn decode_segment(
     let text = join_utterance_text(&utterances);
     if text.trim().is_empty() {
         timing.post_ms = t_post.elapsed().as_millis();
-        return (DecodeOutcome::Discarded, timing);
+        return (DecodeOutcome::Discarded(None), timing);
     }
 
     let mean_no_speech_prob = if utterances.is_empty() {
@@ -803,6 +912,7 @@ fn decode_segment(
         utterances.iter().map(|u| u.no_speech_prob).sum::<f32>() / utterances.len() as f32
     };
 
+    timing.no_speech_prob = Some(mean_no_speech_prob);
     let evidence = DecodeEvidence {
         voiced_seconds: profile.voiced_seconds,
         total_seconds: profile.total_seconds,
@@ -864,7 +974,13 @@ fn decode_segment(
                     (text, mean_no_speech_prob, compression_ratio, "suspicious".to_string(), 1)
                 } else {
                     timing.post_ms = t_post.elapsed().as_millis();
-                    return (DecodeOutcome::Discarded, timing);
+                    // The recovery decode was no better and the first was
+                    // rejected: the reason the screen gave is the one that
+                    // belongs in the diagnostics.
+                    return (
+                        DecodeOutcome::Discarded(quality_verdict.rejection_key()),
+                        timing,
+                    );
                 }
             } else {
                 (text, mean_no_speech_prob, compression_ratio, "suspicious".to_string(), 1)
@@ -878,16 +994,29 @@ fn decode_segment(
                 reason.describe()
             );
             timing.post_ms = t_post.elapsed().as_millis();
-            return (DecodeOutcome::Discarded, timing);
+            return (DecodeOutcome::Discarded(Some(reason.key())), timing);
         }
     };
 
     if final_text.trim().is_empty() {
         timing.post_ms = t_post.elapsed().as_millis();
-        return (DecodeOutcome::Discarded, timing);
+        // Nothing came back. There is no screening reason for that — "empty"
+        // and "looped" are different failures with different fixes.
+        return (DecodeOutcome::Discarded(None), timing);
     }
 
-    let normalized = crate::capture::text_normalize::normalize_segment_text(&final_text, &config.glossary);
+    // Normalization first, then the glossary — and the glossary's changes are
+    // kept. It used to run inside the normalizer, rewriting words in place
+    // before the segment was ever written, with nothing recording what had
+    // been changed or from what. A correction that cannot name its own
+    // evidence is indistinguishable from a transcription.
+    let normalized = crate::capture::text_normalize::normalize_segment_text(&final_text, &[]);
+    let glossary = crate::capture::glossary::Glossary::from_settings(&config.glossary);
+    let (normalized_text, corrections) = glossary.apply(&normalized.text);
+    let normalized = crate::capture::text_normalize::SegmentOutcome {
+        text: normalized_text,
+        applied_rules: normalized.applied_rules,
+    };
     let (text, original_text, romanized_text) = if crate::capture::romanize::contains_devanagari(&normalized.text) {
         let romanized = crate::capture::romanize::to_latin(&normalized.text);
         (normalized.text.clone(), Some(normalized.text), Some(romanized))
@@ -914,7 +1043,7 @@ fn decode_segment(
         compression_ratio: final_compression,
         quality_status,
         retry_count,
-        forced_split: job.segment.forced_split,
+        forced_split: job.segment.forced_split(),
         rms: job.segment.audio_stats.rms,
         peak_amplitude: job.segment.audio_stats.peak_amplitude,
         near_clipping_percent: job.segment.audio_stats.near_clipping_percent,
@@ -929,10 +1058,11 @@ fn decode_segment(
             channel: job.segment.channel,
             no_speech_prob: final_no_speech_prob,
             recorded_at: chrono::Utc::now().to_rfc3339(),
+            cut_at_ceiling: job.segment.forced_split(),
             original_text,
             romanized_text,
             translated_text: None,
-            speaker_id: None,
+            corrections,
             telemetry: Some(telemetry),
         })),
         timing,
@@ -973,14 +1103,14 @@ fn emit_warning(app: &Option<AppHandle>, meeting_id: &str, kind: &str, message: 
 /// model has to guess who proposed something and who agreed to it, and it
 /// guesses wrong.
 pub fn render_transcript(segments: &[TranscriptSegment]) -> String {
-    render_transcript_internal(segments, false, &[])
+    render_transcript_internal(segments, false, &Default::default(), &[])
 }
 
 /// Renders a transcript preferring translated or romanized text over raw non-Latin text.
 ///
 /// Useful when feeding the transcript into a summarizer generating an English report.
 pub fn render_transcript_prefer_translated(segments: &[TranscriptSegment]) -> String {
-    render_transcript_internal(segments, true, &[])
+    render_transcript_internal(segments, true, &Default::default(), &[])
 }
 
 /// As [`render_transcript_prefer_translated`], naming speakers where detection
@@ -993,14 +1123,16 @@ pub fn render_transcript_prefer_translated(segments: &[TranscriptSegment]) -> St
 /// report that somebody said something.
 pub fn render_transcript_with_speakers(
     segments: &[TranscriptSegment],
+    attribution: &crate::meetings::speakers::SpeakerAttribution,
     speakers: &[crate::meetings::model::Speaker],
 ) -> String {
-    render_transcript_internal(segments, true, speakers)
+    render_transcript_internal(segments, true, attribution, speakers)
 }
 
 fn render_transcript_internal(
     segments: &[TranscriptSegment],
     prefer_translated: bool,
+    attribution: &crate::meetings::speakers::SpeakerAttribution,
     speakers: &[crate::meetings::model::Speaker],
 ) -> String {
     let mut out = String::new();
@@ -1024,7 +1156,7 @@ fn render_transcript_internal(
         }
         // Repeat the speaker label only when it changes, the way a transcript
         // reads rather than the way a log does.
-        let label = crate::meetings::speakers::label_for(segment, speakers);
+        let label = crate::meetings::speakers::label_for(segment, attribution, speakers);
         if last_label.as_deref() != Some(label.as_str()) {
             out.push_str(&format!(
                 "[{}] {}: {}",
@@ -1140,10 +1272,11 @@ mod tests {
             channel,
             no_speech_prob: 0.02,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            cut_at_ceiling: false,
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
             telemetry: None,
         }
     }
