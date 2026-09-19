@@ -1,5 +1,6 @@
 [package]
 name = "vox-native-backend"
+default-run = "vox-native-backend"
 version = "0.1.0"
 description = "Vox AI Voice and Memory Assistant Rust Backend"
 authors = ["Vox Team"]

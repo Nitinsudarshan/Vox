@@ -26,7 +26,10 @@
 //! nothing and records what was discarded and why, so the failure is visible
 //! in the artifact rather than mistaken for something a person said.
 
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 /// Frame length for the voiced/unvoiced decision. Short enough that a single
 /// word registers, long enough that one loud sample cannot.
@@ -266,6 +269,11 @@ pub enum HallucinationReason {
         voiced_seconds: f64,
         words_per_second: f64,
     },
+    /// Repeated loop causing excessive zlib compression ratio.
+    HighCompressionRatio {
+        ratio: f32,
+        words: usize,
+    },
 }
 
 impl HallucinationReason {
@@ -293,6 +301,9 @@ impl HallucinationReason {
             } => format!(
                 "{words} words over {voiced_seconds:.1}s of voice ({words_per_second:.1} words/s)"
             ),
+            Self::HighCompressionRatio { ratio, words } => {
+                format!("excessive repetition compression ratio ({ratio:.2}x across {words} words)")
+            }
         }
     }
 
@@ -303,6 +314,56 @@ impl HallucinationReason {
             Self::FillerOverSilence { .. } => "filler_over_silence",
             Self::NoSpeech { .. } => "no_speech",
             Self::ImplausibleRate { .. } => "implausible_rate",
+            Self::HighCompressionRatio { .. } => "high_compression_ratio",
+        }
+    }
+}
+
+/// Calculates the zlib compression ratio of UTF-8 text.
+/// Repeated loops and hallucinated babble compress heavily (ratio > 2.4).
+pub fn calculate_compression_ratio(text: &str) -> f32 {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() {
+        return 1.0;
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    if encoder.write_all(bytes).is_ok() {
+        if let Ok(compressed) = encoder.finish() {
+            if !compressed.is_empty() {
+                return (bytes.len() as f32 / compressed.len() as f32).max(1.0);
+            }
+        }
+    }
+    1.0
+}
+
+/// Multi-stage quality evaluation verdict for a decoded transcript segment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", content = "detail", rename_all = "snake_case")]
+pub enum SegmentQualityStatus {
+    Good,
+    Suspicious(String),
+    Rejected(HallucinationReason),
+}
+
+impl SegmentQualityStatus {
+    pub fn is_good(&self) -> bool {
+        matches!(self, Self::Good)
+    }
+
+    pub fn is_suspicious(&self) -> bool {
+        matches!(self, Self::Suspicious(_))
+    }
+
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, Self::Rejected(_))
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Good => "good",
+            Self::Suspicious(_) => "suspicious",
+            Self::Rejected(_) => "rejected",
         }
     }
 }
@@ -394,7 +455,78 @@ pub fn assess(text: &str, evidence: DecodeEvidence) -> Option<HallucinationReaso
         }
     }
 
+    let compression_ratio = calculate_compression_ratio(text);
+    if words >= 12 && compression_ratio > 2.45 {
+        return Some(HallucinationReason::HighCompressionRatio {
+            ratio: compression_ratio,
+            words,
+        });
+    }
+
     None
+}
+
+/// Multi-stage quality evaluation classifying the output as Good, Suspicious (for retry), or Rejected.
+pub fn evaluate_segment_quality(
+    text: &str,
+    evidence: DecodeEvidence,
+) -> (SegmentQualityStatus, f32) {
+    let compression_ratio = calculate_compression_ratio(text);
+    let words = word_count(text);
+
+    // 1. Direct rejection checks
+    if let Some(reason) = assess(text, evidence) {
+        return (SegmentQualityStatus::Rejected(reason), compression_ratio);
+    }
+    if words >= 12 && compression_ratio > 2.45 {
+        return (
+            SegmentQualityStatus::Rejected(HallucinationReason::HighCompressionRatio {
+                ratio: compression_ratio,
+                words,
+            }),
+            compression_ratio,
+        );
+    }
+
+    // 2. Suspicious checks: trigger deterministic recovery attempt
+    if text.contains('\u{FFFD}') {
+        return (
+            SegmentQualityStatus::Suspicious("Contains Unicode replacement character".to_string()),
+            compression_ratio,
+        );
+    }
+    if evidence.mean_no_speech_prob >= 0.50 {
+        return (
+            SegmentQualityStatus::Suspicious(format!(
+                "Elevated no-speech probability ({:.2})",
+                evidence.mean_no_speech_prob
+            )),
+            compression_ratio,
+        );
+    }
+    if words >= 8 && compression_ratio >= 1.85 {
+        return (
+            SegmentQualityStatus::Suspicious(format!(
+                "Elevated compression ratio ({:.2}x)",
+                compression_ratio
+            )),
+            compression_ratio,
+        );
+    }
+    if evidence.voiced_seconds > 0.0 {
+        let rate = words as f64 / evidence.voiced_seconds;
+        if rate > 5.5 {
+            return (
+                SegmentQualityStatus::Suspicious(format!(
+                    "High word rate ({:.1} words/sec)",
+                    rate
+                )),
+                compression_ratio,
+            );
+        }
+    }
+
+    (SegmentQualityStatus::Good, compression_ratio)
 }
 
 /// Builds the record kept in place of rejected text.
