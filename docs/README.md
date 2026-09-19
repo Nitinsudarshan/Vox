@@ -31,6 +31,7 @@ that was reversed gets a new entry saying so.
 |---|---|
 | [decisions.md](decisions.md) | The master decision log, numbered. |
 | [decisions-push-to-talk-pill.md](decisions-push-to-talk-pill.md) | The pill redesign's own numbered decisions (PTT-00N). |
+| [speech-decision-log.md](speech-decision-log.md) | The speech stack's own numbered decisions (D-0NN) — capture, segmentation, STT, transcript, speakers, TTS. |
 
 ## Honest gaps
 
@@ -49,6 +50,7 @@ version it was traced from; read them as history, not as instructions.
 |---|---|
 | [capture/RESEARCH.md](capture/RESEARCH.md) | The research pass behind Capture v2's progressive traversal: how browsers hide content, what was verified in a real browser and what was not, the traversal and expansion designs, and the architectures rejected. |
 | [capture/BENCHMARKS.md](capture/BENCHMARKS.md) | What the reveal pass costs, measured — and, explicitly, what has not been measured. |
+| [speech-architecture-audit.md](speech-architecture-audit.md) | The speech stack traced end to end at v0.1.0: the real data flow from microphone sample to report, where audio can be lost, where latency and accuracy actually go, what must not be rewritten, and what has to be measured before it is. |
 
 ## Archive
 

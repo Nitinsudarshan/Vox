@@ -1,0 +1,289 @@
+# Vox — Speech Architecture Decision Log
+
+Append-only, and scoped to the speech stack: capture, segmentation, turn
+state, STT, the transcript layer, speakers, TTS, and anything downstream that
+consumes speech. Same rules as [decisions.md](decisions.md) — an entry is
+never edited to match later reality; a reversal gets a new entry saying so.
+
+Ids are `D-0NN` and are **not** related to `decisions.md`'s numbering. Where a
+decision here restates one already recorded there, the entry says so rather
+than claiming it as new.
+
+A decision earns a place here only once the repository can justify it — either
+because the code already works that way and the reasoning should be written
+down, or because a measurement in the repo supports it. Everything else lives
+in [speech-architecture-audit.md](speech-architecture-audit.md) §13 as a
+proposal, and in §"Reserved, not yet decided" below as a reserved id.
+
+---
+
+### D-001 — Raw audio is the ultimate source of truth
+
+- **Context**: A meeting produces audio, a transcript, a speaker map and a
+  report. Three of those four are derived, and only one cannot be regenerated.
+- **Decision**: The durable recording is authoritative. Every other meeting
+  artifact is a derivation that may be rebuilt from it, and no derivation may
+  be allowed to cost audio.
+- **Already true in the code**: `meetings::checkpoint` writes a 30 s WAV chunk
+  throughout the recording; `store::recover_interrupted` re-derives a crashed
+  meeting's duration from the chunks that reached disk rather than from the
+  clock the dead process was keeping; `import::retranscribe` regenerates a
+  whole transcript from `audio.wav`; `import::fingerprint_segments` re-derives
+  speaker evidence from it too.
+- **Consequence**: Every later stage may treat re-decoding as cheap and
+  re-recording as impossible.
+- **Restates**: Nothing in `decisions.md`; this was implicit in Decision 67's
+  durable-checkpoint design and is now explicit.
+
+---
+
+### D-002 — Speech recognition is a derived artifact, and a failing decoder may not stop a recording
+
+- **Context**: A decoder slower than real time, a missing model, a panicking
+  worker — none of these are reasons to stop capturing audio.
+- **Decision**: The transcription path is downstream of, and subordinate to,
+  the recording path. It may drop work; it may not apply back-pressure to the
+  recorder.
+- **Already true in the code**: `TranscriptionQueue::submit`
+  (`meetings/transcription.rs`) uses `try_send` on a `sync_channel`, so a full
+  queue refuses a segment rather than blocking the caller — and its caller is
+  `run_pump`, the same thread that writes checkpoints. A blocking send there
+  would make audio durability a function of decode speed.
+- **Consequence**: Independent failure domains. The counterpart obligation is
+  D-004.
+- **Known gap on this commit**: the reverse direction is not yet safe. The
+  mixer→pump channel (`meetings/capture.rs:171`) is an *unbounded*
+  `std_mpsc::channel`, so a stalled pump grows memory without limit. See the
+  audit's §7.2.
+
+---
+
+### D-003 — A meeting that could not install a speech model is refused before anything is recorded
+
+- **Context**: Recording audio that can never become a transcript is a failure
+  the user only discovers when the meeting is over.
+- **Decision**: `MeetingEngine::start` resolves the model path first and
+  returns `NoSpeechModel` before opening a device, deleting the half-created
+  meeting directory on the way out.
+- **Already true in the code**: `meetings/engine.rs:start`, with the test
+  `starting_without_a_speech_model_is_refused_before_anything_is_recorded`.
+- **Tension worth recording**: this is in direct tension with D-001 — it is the
+  one place where an STT prerequisite is allowed to stop a recording. It is
+  accepted because it fails *before* any audio exists, so nothing is lost.
+
+---
+
+### D-004 — Nothing is dropped silently
+
+- **Context**: A bounded queue must shed load. A bounded queue that sheds load
+  invisibly is worse than an unbounded one, because the user reads a complete
+  transcript that is missing sentences.
+- **Decision**: Every loss is counted, surfaced at the time, and persisted on
+  the meeting record.
+- **Already true in the code**: `MAX_QUEUED_SEGMENTS = 64`; a refused segment
+  increments `dropped`, logs, and emits `meeting-transcription-warning`; a
+  failed decode does the same with a `decode` kind; `Meeting::dropped_segments`
+  is written on stop and rendered in `MeetingView.tsx:199`. Sequence numbers
+  are assigned at submit so a drop leaves a *visible gap* in the transcript's
+  numbering rather than a renumbering that hides it.
+- **Known gaps on this commit**, both recorded in the audit §4 rather than
+  fixed here: checkpoint failure (`engine.rs:527`, `:545`) logs and does not
+  warn, and a microphone that fails while system audio opens produces no
+  warning at all. Both are audio-side losses, which makes them the *more*
+  serious half of this decision, not the less.
+
+---
+
+### D-005 — Transcript order is structural, not sorted
+
+- **Context**: Whisper decode time varies by an order of magnitude with
+  segment length, so any parallel decoder reorders the transcript relative to
+  the conversation.
+- **Decision**: One serial decoder thread, with the sequence number assigned
+  at submit rather than at completion. Ordering is a property of the pipeline;
+  the sort on read is a backstop, not the mechanism.
+- **Already true in the code**: `transcription::run_worker` is a single
+  thread over `Receiver<DecodeJob>`; `store::load_transcript` sorts and dedups
+  by sequence on read so even a torn write reads back ordered.
+- **Consequence**: Throughput is explicitly not the optimization target on the
+  live path. A faster pipeline comes from a faster model or a second pass, not
+  from parallel decoding.
+
+---
+
+### D-006 — Confidence is measured or absent, never invented
+
+- **Context**: The obvious cheap "confidence" — a function of transcript
+  length — is a number that looks like evidence and is not. Meetily ships
+  exactly that (`(text.len() / 100.0).min(0.9) + 0.1`) and filters on it.
+- **Decision**: `TranscriptSegment` carries Whisper's own `no_speech_prob` and
+  nothing else. Where a model exposes no true confidence for a field, the
+  field is named for what it actually is — evidence, voiced ratio, no-speech
+  probability — rather than dressed up as confidence.
+- **Already true in the code**: `meetings/model.rs:TranscriptSegment`;
+  `speech_health::DecodeEvidence` carries `voiced_seconds`, `total_seconds`
+  and `mean_no_speech_prob`, all measured.
+- **Consequence**: Any future provider abstraction must be able to say "this
+  provider reports no confidence" rather than synthesizing one.
+
+---
+
+### D-007 — Channel attribution is measured and precedes any diarization
+
+- **Context**: The microphone and the system loopback are two separate
+  streams. Which side of a call a line came from is therefore known for free,
+  at capture time, exactly.
+- **Decision**: Keep per-channel energy alongside the mixed window and derive
+  `SegmentChannel` from it. Never ask an acoustic clustering step to
+  rediscover information the capture layer already had.
+- **Already true in the code**: `MixedAudio` carries `mic` and `sys` beside
+  `mixed`; `segmenter::classify_channel` applies a 3× dominance ratio;
+  `speakers::assign_speakers` clusters the two channels **separately** and
+  never clusters the microphone channel at all.
+- **Restates**: `decisions.md` Decision 68, from the speech stack's side.
+
+---
+
+### D-008 — Speaker identity is a proposal until the user confirms it
+
+- **Context**: The grouping technique is 26 MFCC statistics per turn clustered
+  by average linkage — honest, and not identity-grade.
+- **Decision**: Vox proposes groups, plays a sample of each, and the user
+  names them. A name the user typed survives reprocessing; Vox's own
+  `Speaker N` placeholders do not. A turn shorter than 1.2 s gets no
+  fingerprint and stays unattributed rather than being guessed.
+- **Already true in the code**: `voiceprint.rs`, `speakers.rs`,
+  `Speaker::named_by_user`, `MIN_VOICEPRINT_SECONDS = 1.2`.
+- **Restates**: `decisions.md` Decision 68 and `maybe_later.md` §11.
+
+---
+
+### D-009 — A model is never asked to do what a deterministic projection can do
+
+- **Context**: One model call was once asked for a translation and a
+  romanization in the same object, and a local model answered both with the
+  same string — so the Romanized view showed English.
+- **Decision**: Romanization is a Devanagari→Latin state machine, computed
+  offline. English comes from a second Whisper pass over the *audio* in
+  translate mode; an LLM fills only what that pass left empty, in validated
+  batches, and a "translation" that is merely the romanization handed back is
+  refused.
+- **Already true in the code**: `capture::romanize`,
+  `import::generate_english_track`, `variants::accept_translation`,
+  `variants::align_english_spans` (aligned by time, not by sequence).
+- **Consequence**: The same principle bounds any future glossary work — see
+  the audit §13.17. A glossary that rewrites text a model did not say is the
+  same failure in a different costume, and today's glossary is applied exactly
+  that way, as a post-decode edit in `text_normalize::normalize_segment_text`.
+
+---
+
+### D-010 — Capture health and transcription health are separate questions
+
+- **Context**: "Is this recording working?" and "is the transcript keeping
+  up?" fail for different reasons, are fixed by different actions, and were
+  historically reported as one status.
+- **Decision**: Report them separately. The recorder reports which devices
+  opened, which are still delivering callbacks, and whether each has *heard*
+  anything above the silence floor. The transcription path reports queue
+  depth, completions and drops.
+- **Already true in the code**: `MeetingRecordingStatus` carries
+  `microphone_active` / `system_audio_active` (stream alive) and
+  `microphone_heard` / `system_audio_heard` (anything above
+  `AUDIBLE_RMS_THRESHOLD`) *and*, separately, `segments_queued` /
+  `segments_completed` / `segments_dropped` plus `devices: OpenedDevices`.
+- **Consequence**: "The microphone bar never moved" becomes actionable without
+  leaving the app.
+
+---
+
+### D-011 — Pipeline stages are timed separately, because a single total cannot name a cause
+
+- **Context**: End-to-end latency hides its own cause. A long queue wait, a
+  contended model lock, a model reload and a slow decode produce the same
+  total and need four different fixes.
+- **Decision**: Measure each phase of a segment's journey as its own number:
+  `queue_wait_ms`, `lock_wait_ms`, `model_load_ms` (plus whether a reload
+  happened), `decode_ms`, `post_ms`, `persist_ms` — and at meeting level
+  `decode_rtf` (against speech) alongside `pipeline_rtf` (against wall clock),
+  because only the latter decides whether a backlog grows.
+- **Already true in the code**: `transcription::SegmentTiming`,
+  `TranscriptionStats`, `print_segment_trace`, `print_meeting_summary`,
+  `projected_drain`.
+- **Known gap on this commit**: all of it is `println!` to a terminal. Nothing
+  is persisted, so no question about behaviour over time can be answered — the
+  same gap `capture/decode_history.rs` was built to close for dictation and
+  which the meeting path has no feed into.
+
+---
+
+### D-012 — Cloud STT is optional acceleration, never a dependency
+
+- **Context**: Vox is local-first by constitution, not by preference.
+- **Decision**: Every core speech capability must work with no network. A
+  cloud provider may be added as an alternative path; it may never become the
+  path a meeting requires.
+- **Already true in the repo**: `decisions.md` Decision 4 ("every
+  cloud-optional feature must function fully at $0 recurring cost using local
+  STT"), NFR-1 and NFR-3 in `requirements.md`, and `docs/meetings.md`'s
+  statement that Vox takes no cloud STT from Meetily — "transcription is
+  always local".
+- **Restates**: Decision 4, scoped to speech.
+
+---
+
+### D-013 — Whisper's output over silence is screened, and a rejection records its reason
+
+- **Context**: Whisper has no way to say "nothing was said". Handed room tone
+  it emits subtitle boilerplate, and its own output then conditions the rest
+  of the window into a loop.
+- **Decision**: Two separate defences. Before the decode, measure how much of
+  the span is actually voiced, at 20 ms resolution against the span's own
+  noise floor. After the decode, reject text no plausible speech could have
+  produced. A rejection replaces the text with nothing and records what was
+  discarded and why — it never rewrites it.
+- **Already true in the code**: `capture/speech_health.rs`
+  (`profile_speech`, `assess`, `screen_decode`, `TranscriptRejection`), applied
+  to every meeting segment in `transcription::decode_segment`.
+- **Known gap on this commit**: the rejection reason reaches `tracing::debug!`
+  and a `discarded` counter that is printed and not stored, so hallucination
+  *rate* is not measurable after the fact.
+
+---
+
+### D-014 — A meeting transcript is data handed to a model, never instructions
+
+- **Context**: Anyone on a call can say "ignore your previous instructions",
+  and a transcript is full of imperative sentences.
+- **Decision**: The transcript reaches a model framed as data inside an
+  unguessable delimiter rather than filtered for dangerous phrases.
+- **Already true in the code**: `pipeline::source_boundary`, used by
+  `summary::service`.
+- **Restates**: `rules/untrusted-input.md` and `decisions.md` Decision 65
+  ("A Tier 2 Rewrite May Never Touch a Meeting Transcript"), scoped to speech.
+- **Consequence**: This holds unchanged under any canonical-transcript
+  refactor — the boundary wraps whatever rendering is handed over.
+
+---
+
+## Reserved, not yet decided
+
+These ids are reserved so that the staged plan's numbering and this log's do
+not diverge. Each is a **proposal** in
+[speech-architecture-audit.md](speech-architecture-audit.md) §13, not a
+decision, and each becomes an entry above only when the stage that implements
+it lands — with the measurement that justified it.
+
+| Id | Proposal | Blocked on |
+|---|---|---|
+| D-015 | Long-form recordings, not short clips, are the primary accuracy benchmark | Stage 1 — the existing corpus (`capture/evaluation.rs:get_curated_corpus`) is 35 dictation-length clips whose audio is not in the repo, and it is scored through `VadConfig::process` rather than through the meeting segmenter |
+| D-016 | Turn detection is a subsystem independent of ASR, with observable states | Stage 4 — needs §14.9's finalization-latency distribution first |
+| D-017 | Acoustic/prosodic turn detection is the baseline; no LLM for basic end-of-turn | Stage 4 |
+| D-018 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
+| D-019 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
+| D-020 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
+| D-021 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-020 |
+| D-022 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-023 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-024 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-016 and D-023 |
+| D-025 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-018 exists to express it |
