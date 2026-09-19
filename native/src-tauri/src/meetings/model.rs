@@ -109,14 +109,15 @@ pub struct TranscriptSegment {
     pub romanized_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translated_text: Option<String>,
-    /// Which [`Speaker`] this line was attributed to, if any.
+    /// What the glossary changed in this line, and why.
     ///
-    /// Absent means "not attributed", which is a real and common answer: a
-    /// line too short to fingerprint gets no vote on who was speaking, and
-    /// saying so is better than guessing. [`SegmentChannel`] still applies
-    /// either way — it is measured rather than inferred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speaker_id: Option<String>,
+    /// Empty for almost every line. Where it is not, applying these backwards
+    /// reconstructs exactly what the decoder said — which is how the raw ASR
+    /// text is preserved without keeping a second copy of every line, and how
+    /// a wrong correction stays visible instead of reading as a correct
+    /// transcription.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<crate::capture::glossary::TermCorrection>,
 }
 
 /// Which pass produced a transcript.
@@ -423,7 +424,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
         };
         assert_eq!(segment.duration_seconds(), 0.0);
     }

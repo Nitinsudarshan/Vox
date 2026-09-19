@@ -649,6 +649,75 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-030 — A glossary correction is evidence, and names are exempt from guessing
+
+- **Context**: The glossary was a find-and-replace. Any token within one edit
+  of a term was rewritten in place, inside the text normalizer, before the
+  segment reached disk, with nothing recording what changed or from what.
+- **Decision**: `capture::glossary`. A correction records what the decoder
+  said, what it became, which term did it and why, and those travel with the
+  segment. Terms carry a category, and **a near miss is never corrected to a
+  person's name**.
+- **Reason for recording**: if the decoder heard "supabse" and the glossary
+  says "Supabase", something went right. If it heard a real word one edit from
+  a term, something went badly wrong — and under blind replacement the
+  transcript asserts the glossary's word with nothing to indicate otherwise. A
+  correction that cannot name its own evidence is indistinguishable from a
+  transcription.
+- **Reason names are exempt**: they are short, numerous, and collide with
+  ordinary words — "Marc" and "mark", "Bill" and "bill", "Rose" and "rose".
+  Getting one wrong changes who a meeting says made a commitment, which is the
+  most consequential thing a meeting transcript asserts. Casing is still
+  fixed, because casing changes no words.
+- **Not a spell-checker, deliberately**: the rule is one edit, so "banglore" —
+  four edits from "Bengaluru", obvious to a human — is left as the decoder
+  said it. A rule loose enough to catch it is loose enough to rewrite words
+  nobody meant, and that failure is silent. The narrower rule leaves more
+  errors in and puts none in.
+- **Consequence**: this satisfies "preserve the raw ASR text" as a property of
+  the data rather than a second copy of every line. `uncorrect` applies the
+  corrections backwards and reconstructs the decode exactly.
+
+---
+
+### D-031 — Speaker attribution is not part of the transcript
+
+- **Context**: `speakers::assign_speakers` took `&mut [TranscriptSegment]` and
+  wrote `speaker_id` onto each one, so `detect_meeting_speakers` rewrote
+  `transcript.json`. Re-running an interpretation modified the record of the
+  decode.
+- **Decision**: attribution is its own record — `attribution.json`, a map from
+  raw sequence to speaker id — and the assembler joins it. `assign_speakers`
+  now takes the segments by shared reference, and a test asserts the
+  transcript is byte-identical afterwards.
+- **Keyed by sequence, not by index**: a re-transcription renumbers from zero
+  and produces a different number of lines. An index would then point at a
+  different sentence; a sequence points at nothing, which is correct.
+- **Why it matters beyond tidiness**: it makes "a speaker rename must never
+  mutate the raw transcript" structural rather than a rule someone has to
+  remember, and it means a detection run that finds nothing returns nothing
+  instead of leaving the previous run's guesses in place.
+
+---
+
+### D-032 — The speaker encoder gets a seam and no second implementation
+
+- **Context**: MFCC statistics are the weak link in the speaker pipeline and
+  the docs have always said so. A trained encoder (x-vector, ECAPA) is
+  markedly better and needs an ONNX runtime and a model file, which
+  `docs/spikes/onnx-windows.md` has not established can be bundled into a
+  Windows build.
+- **Decision**: `voiceprint::SpeakerEncoder`, with one implementation
+  (`MfccEncoder`, id `mfcc-26`). No second one, no ONNX dependency, no
+  abstraction over a thing that does not exist.
+- **Reason**: the seam costs a trait and makes the eventual swap a slot-in
+  rather than a rewrite of `assign_speakers`. Building the second
+  implementation before the spike runs would mean an engine that works for
+  whoever built it and crashes on an installed app — which is the same trade
+  the Parakeet feature flag already records.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -659,7 +728,6 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-030 | Downstream intelligence consumes the canonical transcript only | Stage 10 — the report path already does (D-028); actions, entities and the knowledge graph do not |
-| D-031 | A glossary is contextual evidence, never blind replacement, and speaker attribution moves off the raw record | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-032 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-033 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-032 |
+| D-033 | Downstream intelligence consumes the canonical transcript only | Stage 10 — the report path and Meeting Detail already do (D-028); actions, entities and the knowledge graph do not |
+| D-034 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-035 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-034 |

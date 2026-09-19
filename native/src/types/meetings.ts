@@ -23,6 +23,68 @@ export type MeetingState =
  */
 export type SegmentChannel = 'microphone' | 'system' | 'mixed';
 
+/** What kind of thing a glossary term is. The categories carry different risk. */
+export type TermCategory =
+  | 'person'
+  | 'organization'
+  | 'product'
+  | 'technical'
+  | 'acronym'
+  | 'custom';
+
+/** One word the glossary changed, and the evidence for it. */
+export interface TermCorrection {
+  /** What the decoder actually said. */
+  from: string;
+  /** What it was changed to. */
+  to: string;
+  /** The glossary term responsible. */
+  term: string;
+  category: TermCategory;
+  reason: { kind: 'casing' | 'near_miss' };
+}
+
+/**
+ * One line of the transcript as everything downstream reads it: raw evidence
+ * ordered, sentences the decoder's window cut back together, repeats at the
+ * joins stripped, speakers attached.
+ */
+export interface CanonicalSegment {
+  /** Position in this transcript, not a raw sequence — see `sources`. */
+  id: number;
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+  channel: SegmentChannel;
+  speaker_id?: string | null;
+  /** A user-given name, else the channel's own label. */
+  speaker_label: string;
+  language?: string | null;
+  /** The raw sequence numbers this line was built from. */
+  sources: number[];
+  /** Whether more than one raw segment was joined into this line. */
+  merged: boolean;
+}
+
+/** Speech that was recorded and never transcribed. */
+export interface TranscriptGap {
+  missing_sequences: number[];
+  after_segment?: number | null;
+  start_seconds?: number | null;
+  end_seconds?: number | null;
+}
+
+/** A meeting's transcript, assembled. */
+export interface CanonicalTranscript {
+  meeting_id: string;
+  built_at: string;
+  source?: TranscriptProvenance | null;
+  segments: CanonicalSegment[];
+  /** Holes in the raw sequence — speech the recording has and this does not. */
+  gaps: TranscriptGap[];
+  raw_segment_count: number;
+}
+
 /**
  * Which pass produced a transcript.
  *
@@ -65,7 +127,12 @@ export interface TranscriptSegment {
   romanized_text?: string | null;
   translated_text?: string | null;
   /** Which `Speaker` this line was attributed to, if any. */
-  speaker_id?: string | null;
+  /**
+   * What the glossary changed in this line, and why. Empty for almost every
+   * line; where it is not, applying these backwards reconstructs exactly what
+   * the decoder said.
+   */
+  corrections?: TermCorrection[];
 }
 
 /**
@@ -191,6 +258,11 @@ export interface MeetingDetail {
    * optional rather than merely empty.
    */
   speakers?: Speaker[];
+  /**
+   * The transcript as everything downstream reads it. `segments` is the raw
+   * evidence underneath it.
+   */
+  canonical?: CanonicalTranscript;
   /**
    * How the recording and the transcription went. Absent for a meeting
    * recorded before diagnostics existed, or one that never finished — both

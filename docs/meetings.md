@@ -42,6 +42,7 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 ├── meeting.json      metadata — the record the list reads
 ├── transcript.json   segments, ordered by sequence
 ├── speakers.json     the voices detection proposed, and the names you gave them
+├── attribution.json  which transcript line belongs to which of them
 ├── summary.json      the report, its cache fingerprint, and the English original
 ├── notes.md          whatever the user typed
 ├── transcript.live.json  what the live pass produced, kept once a final pass replaces it
@@ -84,6 +85,12 @@ group the same speaker together far more often than chance and are beaten by a
 shared microphone, by two similar voices, and by a turn short enough that one
 vowel dominates it.
 
+`voiceprint::SpeakerEncoder` is the seam a better one slots into: one trait,
+one implementation (`MfccEncoder`, `mfcc-26`), and `speakers::assign_speakers`
+unchanged when a second arrives. It is empty on purpose — the encoder is the
+weak link and everybody knows it, and the spike that would unblock a stronger
+one (`docs/spikes/onnx-windows.md`) has not been run.
+
 So the product shape follows what the technique can honestly claim: Vox
 proposes groups, plays four seconds of each, and the user names them. A wrong
 proposal costs one rename. Two rules keep that bearable:
@@ -99,6 +106,43 @@ proposal costs one rename. Two rules keep that bearable:
 Names the user types survive a re-run; Vox's own `Speaker 3` placeholders do
 not. Reports are rendered with whatever names exist, which is what lets a
 report say "Payal committed to sending the deck" rather than "Others did".
+
+## The glossary
+
+Words the user has told Vox about — and what happens when one of them is
+probably what the decoder was reaching for.
+
+The old behaviour was a find-and-replace: any token within one edit of a
+glossary term was rewritten in place, inside the text normalizer, before the
+segment was ever written to disk, with nothing recording what had been changed
+or from what. If the decoder heard "supabse" and the glossary says "Supabase",
+something went right. If it heard a real word the glossary happened to be one
+edit from, something went badly wrong — and the transcript said the glossary's
+word with nothing to indicate otherwise.
+
+Now a correction is **evidence**. Each one records what the decoder said, what
+it was changed to, which term did it and why (`casing` or `near_miss`), and
+those travel with the segment. Applying them backwards reconstructs exactly
+what came out of the model, which is how the raw ASR text is preserved without
+keeping a second copy of every line.
+
+Terms carry a category — person, organization, product, technical, acronym,
+custom — because the risks differ. Normalizing an acronym's casing changes no
+words. **A near miss is never corrected to a person's name**: names are short,
+numerous, and collide with ordinary words ("Marc" and "mark", "Bill" and
+"bill"), and getting one wrong changes who a meeting says made a commitment,
+which is the most consequential thing a meeting transcript asserts. A name
+whose casing is wrong is still fixed, because casing changes no words.
+
+It is **not a spell-checker**. The near-miss rule is one edit, so "banglore" —
+four edits from "Bengaluru", and obvious to a human — is left exactly as the
+decoder said it. A rule loose enough to catch that is loose enough to rewrite
+words nobody meant, and that failure would be silent. The narrower rule leaves
+more errors in place and puts none in.
+
+Terms from the existing settings list arrive as `custom`, because that is the
+truth: the setting records no category, and inventing one would apply the
+riskiest rule to words nobody said were names.
 
 ## Script and language
 
@@ -242,18 +286,20 @@ model cannot summarize a conversation that did not happen.
 numbers behind it. Two lines joined into one name both. "Why does the report
 say that" always walks back to a span of audio.
 
-### What still writes to the raw transcript
+### What writes to the raw transcript, and what does not
 
-Speaker detection writes `speaker_id` into `transcript.json`, and the English
-and romanization passes write `translated_text` and `romanized_text`.
+Speaker detection **does not**. Attribution lives in `attribution.json`, keyed
+by raw sequence, and the assembler joins the two. Re-running detection used to
+rewrite the file holding what the decoder said, which meant an interpretation
+could modify the record of the decode. Keyed by sequence rather than by index
+because a re-transcription renumbers from zero, and an index would then point
+at a different sentence.
 
-The last two are defensible: a second Whisper pass over the same samples is
-another *decode*, and romanization is a deterministic projection of the words
-already there. Both are evidence about the audio.
-
-Speaker attribution is not — it is interpretation, and it does not belong on
-the raw record. Moving it out is Stage 8's business, where the speaker
-pipeline is the subject rather than a dependency.
+The English and romanization passes still write `translated_text` and
+`romanized_text` onto the raw record, deliberately. A second Whisper pass over
+the same samples is another *decode*, and romanization is a deterministic
+projection of words already present. Both are evidence about the audio; an
+attribution is not.
 
 ## Turn detection
 

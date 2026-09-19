@@ -506,7 +506,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
         }
     }
 

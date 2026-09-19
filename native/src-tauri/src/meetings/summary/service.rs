@@ -266,6 +266,7 @@ impl SummaryService {
         self.ensure_english(&app, meeting_id, &mut segments, &provider, cancel)
             .await;
         let speakers = self.store.load_speakers(meeting_id).unwrap_or_default();
+        let attribution = self.store.load_attribution(meeting_id).unwrap_or_default();
         // Through the assembler, not straight off the raw segments. That is
         // what puts a sentence the decoder's window cut in half back together
         // before a model reads it as two turns, strips the phrase Whisper
@@ -275,6 +276,7 @@ impl SummaryService {
         let canonical = canonical::assemble(
             meeting_id,
             &segments,
+            &attribution,
             &speakers,
             meeting.transcript.clone(),
             &canonical::AssemblyOptions {

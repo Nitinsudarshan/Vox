@@ -728,7 +728,13 @@ fn decode_one(
         return None;
     }
 
-    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &config.glossary);
+    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &[]);
+    let glossary = crate::capture::glossary::Glossary::from_settings(&config.glossary);
+    let (normalized_text, corrections) = glossary.apply(&normalized.text);
+    let normalized = crate::capture::text_normalize::SegmentOutcome {
+        text: normalized_text,
+        applied_rules: normalized.applied_rules,
+    };
     let (text, original_text, romanized_text) = if crate::capture::romanize::contains_devanagari(&normalized.text) {
         let romanized = crate::capture::romanize::to_latin(&normalized.text);
         (normalized.text.clone(), Some(normalized.text), Some(romanized))
@@ -753,7 +759,7 @@ fn decode_one(
         translated_text: english
             .map(|text| text.trim().to_string())
             .filter(|text| !text.is_empty()),
-        speaker_id: None,
+        corrections,
     })
 }
 

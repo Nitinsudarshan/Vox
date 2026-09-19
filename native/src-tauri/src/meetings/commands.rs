@@ -45,6 +45,10 @@ pub struct MeetingDetail {
     /// claiming zeroes.
     #[serde(default)]
     pub diagnostics: Option<crate::meetings::telemetry::MeetingDiagnostics>,
+    /// The transcript as everything downstream reads it: ordered, sentences
+    /// the decoder's window cut back together, speakers attached, gaps
+    /// stated. `segments` above is the raw evidence underneath it.
+    pub canonical: crate::meetings::canonical::CanonicalTranscript,
 }
 
 /// In-flight import and re-transcription runs, so they can be cancelled.
@@ -331,13 +335,25 @@ pub fn get_meeting(
     // writes is a surprise, and the projection is cheap enough to redo. The
     // explicit `romanize_meeting_transcript` is what persists it.
     crate::meetings::variants::ensure_romanized(&mut segments);
+    let speakers = store.load_speakers(&meeting_id)?;
+    let attribution = store.load_attribution(&meeting_id)?;
+    let meeting = store.load_meeting(&meeting_id)?;
+    let canonical = crate::meetings::canonical::assemble(
+        &meeting_id,
+        &segments,
+        &attribution,
+        &speakers,
+        meeting.transcript.clone(),
+        &crate::meetings::canonical::AssemblyOptions::default(),
+    );
     Ok(MeetingDetail {
-        meeting: store.load_meeting(&meeting_id)?,
+        meeting,
         segments,
         summary,
         notes: store.load_notes(&meeting_id)?,
-        speakers: store.load_speakers(&meeting_id)?,
+        speakers: speakers.clone(),
         diagnostics: store.load_diagnostics(&meeting_id)?,
+        canonical,
     })
 }
 
@@ -1014,7 +1030,7 @@ pub async fn detect_meeting_speakers(
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
         let store = &state.meeting_store;
-        let mut segments = store.load_transcript(&meeting_id)?;
+        let segments = store.load_transcript(&meeting_id)?;
         if segments.is_empty() {
             return Err(CommandError::new(
                 "MEETING_EMPTY_TRANSCRIPT",
@@ -1032,13 +1048,16 @@ pub async fn detect_meeting_speakers(
         // not, because a re-run is entitled to renumber its own guesses.
         let previous = store.load_speakers(&meeting_id)?;
         let report = speakers::assign_speakers(
-            &mut segments,
+            &segments,
             &prints,
             &speakers::DetectionSettings::default(),
             &previous,
         );
 
-        store.save_transcript(&meeting_id, &segments)?;
+        // The transcript is not rewritten. Detection is an interpretation of
+        // evidence and used to be written back onto the file holding what the
+        // decoder said, so re-running it modified the record of the decode.
+        store.save_attribution(&meeting_id, &report.attribution)?;
         store.save_speakers(&meeting_id, &report.speakers)?;
         Ok(report)
     })

@@ -387,6 +387,51 @@ fn average_linkage(turns: &[TurnPrint], a: &[usize], b: &[usize]) -> f32 {
     }
 }
 
+/// Turning a turn's audio into a vector that can be compared with another's.
+///
+/// A trait with one implementation, for one reason: the implementation is the
+/// weak link and everybody knows it. [`MfccEncoder`] computes 26 MFCC
+/// statistics, which group the same speaker together far more often than
+/// chance and are beaten by a shared microphone, by two similar voices, and
+/// by a turn short enough that one vowel dominates it. A trained speaker
+/// encoder — x-vector, ECAPA — is markedly better and needs an ONNX runtime
+/// and a model file, which `docs/spikes/onnx-windows.md` has not yet
+/// established can be bundled into a Windows build.
+///
+/// So the seam is here and empty. When that spike runs, a second
+/// implementation slots in beside this one and `speakers::assign_speakers`
+/// does not change — and until it does, nothing pretends the current
+/// technique is something it is not.
+pub trait SpeakerEncoder: Send + Sync {
+    /// A short name for the technique, recorded with whatever it produces so
+    /// two runs are only compared when they used the same one.
+    fn id(&self) -> &'static str;
+
+    /// Shortest turn this encoder will accept, in seconds.
+    fn min_seconds(&self) -> f32;
+
+    /// A comparable vector, or `None` for audio it will not judge.
+    fn encode(&self, samples: &[f32]) -> Option<Voiceprint>;
+}
+
+/// MFCC statistics — what Vox has today.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MfccEncoder;
+
+impl SpeakerEncoder for MfccEncoder {
+    fn id(&self) -> &'static str {
+        "mfcc-26"
+    }
+
+    fn min_seconds(&self) -> f32 {
+        MIN_VOICEPRINT_SECONDS
+    }
+
+    fn encode(&self, samples: &[f32]) -> Option<Voiceprint> {
+        voiceprint(samples)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

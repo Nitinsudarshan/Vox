@@ -48,6 +48,9 @@ const LIVE_TRANSCRIPT_FILE: &str = "transcript.live.json";
 const SUMMARY_FILE: &str = "summary.json";
 const NOTES_FILE: &str = "notes.md";
 const SPEAKERS_FILE: &str = "speakers.json";
+/// Which transcript line belongs to whom. Separate from the transcript
+/// because attribution is an interpretation of evidence, not evidence.
+const ATTRIBUTION_FILE: &str = "attribution.json";
 /// Per-segment decode telemetry, one JSON object per line.
 const SEGMENT_DIAGNOSTICS_FILE: &str = "diagnostics.jsonl";
 /// The meeting's diagnostics rollup, written once on stop.
@@ -388,6 +391,36 @@ impl MeetingStore {
         let mut segments: Vec<TranscriptSegment> = serde_json::from_slice(&fs::read(&path)?)?;
         segments.sort_by_key(|segment| segment.sequence);
         Ok(Some(segments))
+    }
+
+    pub fn save_attribution(
+        &self,
+        id: &str,
+        attribution: &super::speakers::SpeakerAttribution,
+    ) -> Result<(), MeetingStoreError> {
+        let dir = self.meeting_dir(id)?;
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(ATTRIBUTION_FILE),
+            &serde_json::to_vec_pretty(attribution)?,
+        )
+    }
+
+    /// Who said what, as far as detection has got.
+    ///
+    /// An empty attribution for a meeting where detection has not run, which
+    /// is not an error: a transcript labelled "You" and "Others" from the
+    /// capture channel is still a transcript, and the channel is measured
+    /// rather than inferred.
+    pub fn load_attribution(
+        &self,
+        id: &str,
+    ) -> Result<super::speakers::SpeakerAttribution, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(ATTRIBUTION_FILE);
+        if !path.exists() {
+            return Ok(super::speakers::SpeakerAttribution::default());
+        }
+        Ok(serde_json::from_slice(&fs::read(&path)?).unwrap_or_default())
     }
 
     pub fn save_summary(&self, summary: &MeetingSummary) -> Result<(), MeetingStoreError> {
@@ -784,7 +817,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
         }
     }
 

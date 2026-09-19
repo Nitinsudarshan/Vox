@@ -909,7 +909,18 @@ fn decode_segment(
         return (DecodeOutcome::Discarded(Some(reason.key())), timing);
     }
 
-    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &config.glossary);
+    // Normalization first, then the glossary — and the glossary's changes are
+    // kept. It used to run inside the normalizer, rewriting words in place
+    // before the segment was ever written, with nothing recording what had
+    // been changed or from what. A correction that cannot name its own
+    // evidence is indistinguishable from a transcription.
+    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &[]);
+    let glossary = crate::capture::glossary::Glossary::from_settings(&config.glossary);
+    let (normalized_text, corrections) = glossary.apply(&normalized.text);
+    let normalized = crate::capture::text_normalize::SegmentOutcome {
+        text: normalized_text,
+        applied_rules: normalized.applied_rules,
+    };
     let (text, original_text, romanized_text) = if crate::capture::romanize::contains_devanagari(&normalized.text) {
         let romanized = crate::capture::romanize::to_latin(&normalized.text);
         (normalized.text.clone(), Some(normalized.text), Some(romanized))
@@ -931,7 +942,7 @@ fn decode_segment(
             original_text,
             romanized_text,
             translated_text: None,
-            speaker_id: None,
+            corrections,
         }),
         timing,
     )
@@ -971,14 +982,14 @@ fn emit_warning(app: &Option<AppHandle>, meeting_id: &str, kind: &str, message: 
 /// model has to guess who proposed something and who agreed to it, and it
 /// guesses wrong.
 pub fn render_transcript(segments: &[TranscriptSegment]) -> String {
-    render_transcript_internal(segments, false, &[])
+    render_transcript_internal(segments, false, &Default::default(), &[])
 }
 
 /// Renders a transcript preferring translated or romanized text over raw non-Latin text.
 ///
 /// Useful when feeding the transcript into a summarizer generating an English report.
 pub fn render_transcript_prefer_translated(segments: &[TranscriptSegment]) -> String {
-    render_transcript_internal(segments, true, &[])
+    render_transcript_internal(segments, true, &Default::default(), &[])
 }
 
 /// As [`render_transcript_prefer_translated`], naming speakers where detection
@@ -991,14 +1002,16 @@ pub fn render_transcript_prefer_translated(segments: &[TranscriptSegment]) -> St
 /// report that somebody said something.
 pub fn render_transcript_with_speakers(
     segments: &[TranscriptSegment],
+    attribution: &crate::meetings::speakers::SpeakerAttribution,
     speakers: &[crate::meetings::model::Speaker],
 ) -> String {
-    render_transcript_internal(segments, true, speakers)
+    render_transcript_internal(segments, true, attribution, speakers)
 }
 
 fn render_transcript_internal(
     segments: &[TranscriptSegment],
     prefer_translated: bool,
+    attribution: &crate::meetings::speakers::SpeakerAttribution,
     speakers: &[crate::meetings::model::Speaker],
 ) -> String {
     let mut out = String::new();
@@ -1022,7 +1035,7 @@ fn render_transcript_internal(
         }
         // Repeat the speaker label only when it changes, the way a transcript
         // reads rather than the way a log does.
-        let label = crate::meetings::speakers::label_for(segment, speakers);
+        let label = crate::meetings::speakers::label_for(segment, attribution, speakers);
         if last_label.as_deref() != Some(label.as_str()) {
             out.push_str(&format!(
                 "[{}] {}: {}",
@@ -1142,7 +1155,7 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
         }
     }
 

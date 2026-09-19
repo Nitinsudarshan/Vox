@@ -21,6 +21,7 @@ import type {
   Speaker,
   SpeakerReport,
   TranscriptSegment,
+  SegmentChannel,
 } from '@/types/meetings';
 import type { AudioDeviceInfo } from '@/types';
 
@@ -274,7 +275,7 @@ export function formatDuration(seconds: number): string {
  * which is measured rather than inferred and so is always available.
  */
 export function speakerLabel(
-  segment: TranscriptSegment,
+  segment: { channel: SegmentChannel; speaker_id?: string | null },
   speakers: Speaker[] = [],
 ): string {
   const speaker = segment.speaker_id

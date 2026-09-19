@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use super::model::{
     SegmentChannel, Speaker, TranscriptProvenance, TranscriptSegment,
 };
+use super::speakers::SpeakerAttribution;
 
 /// Longest repeated phrase, in words, the join de-duplicator looks for.
 ///
@@ -193,6 +194,7 @@ impl Default for AssemblyOptions {
 pub fn assemble(
     meeting_id: &str,
     raw: &[TranscriptSegment],
+    attribution: &SpeakerAttribution,
     speakers: &[Speaker],
     source: Option<TranscriptProvenance>,
     options: &AssemblyOptions,
@@ -210,14 +212,17 @@ pub fn assemble(
         if text.trim().is_empty() {
             continue;
         }
+        let speaker_id = attribution
+            .speaker_for(segment.sequence)
+            .map(str::to_string);
         let candidate = CanonicalSegment {
             id: segments.len() as u64,
             text,
             start_seconds: segment.start_seconds,
             end_seconds: segment.end_seconds,
             channel: segment.channel,
-            speaker_id: segment.speaker_id.clone(),
-            speaker_label: label_for(segment, speakers),
+            speaker_label: label_for(segment, speaker_id.as_deref(), speakers),
+            speaker_id,
             language: language_of(segment, options.rendering),
             sources: vec![segment.sequence],
             merged: false,
@@ -414,11 +419,13 @@ fn language_of(segment: &TranscriptSegment, rendering: Rendering) -> Option<Stri
 /// A user-given name wins. Otherwise the channel's own label, which is
 /// measured rather than inferred and is never wrong about which side of the
 /// call someone was on.
-fn label_for(segment: &TranscriptSegment, speakers: &[Speaker]) -> String {
-    segment
-        .speaker_id
-        .as_ref()
-        .and_then(|id| speakers.iter().find(|speaker| &speaker.id == id))
+fn label_for(
+    segment: &TranscriptSegment,
+    speaker_id: Option<&str>,
+    speakers: &[Speaker],
+) -> String {
+    speaker_id
+        .and_then(|id| speakers.iter().find(|speaker| speaker.id == id))
         .map(|speaker| speaker.label.clone())
         .unwrap_or_else(|| segment.channel.label().to_string())
 }
@@ -481,12 +488,29 @@ mod tests {
             original_text: None,
             romanized_text: None,
             translated_text: None,
-            speaker_id: None,
+            corrections: Vec::new(),
         }
     }
 
     fn build(raw_segments: &[TranscriptSegment]) -> CanonicalTranscript {
-        assemble("m", raw_segments, &[], None, &AssemblyOptions::default())
+        assemble(
+            "m",
+            raw_segments,
+            &SpeakerAttribution::default(),
+            &[],
+            None,
+            &AssemblyOptions::default(),
+        )
+    }
+
+    /// Attribution for a set of (raw sequence, speaker id) pairs.
+    fn attributed(pairs: &[(u64, &str)]) -> SpeakerAttribution {
+        SpeakerAttribution {
+            by_sequence: pairs
+                .iter()
+                .map(|(sequence, id)| (*sequence, (*id).to_string()))
+                .collect(),
+        }
     }
 
     #[test]
@@ -599,11 +623,16 @@ mod tests {
     fn two_different_speakers_are_not_merged_even_on_one_channel() {
         let mut first = raw(0, "we should ship", 0.0, 25.0);
         first.cut_at_ceiling = true;
-        first.speaker_id = Some("speaker-1".into());
-        let mut second = raw(1, "I disagree", 25.0, 27.0);
-        second.speaker_id = Some("speaker-2".into());
-
-        assert_eq!(build(&[first, second]).segments.len(), 2);
+        let second = raw(1, "I disagree", 25.0, 27.0);
+        let transcript = assemble(
+            "m",
+            &[first, second],
+            &attributed(&[(0, "speaker-1"), (1, "speaker-2")]),
+            &[],
+            None,
+            &AssemblyOptions::default(),
+        );
+        assert_eq!(transcript.segments.len(), 2);
     }
 
     #[test]
@@ -643,8 +672,7 @@ mod tests {
 
     #[test]
     fn a_user_given_name_replaces_the_channel_label() {
-        let mut segment = raw(0, "hello", 0.0, 1.0);
-        segment.speaker_id = Some("speaker-1".into());
+        let segment = raw(0, "hello", 0.0, 1.0);
         let speakers = vec![Speaker {
             id: "speaker-1".into(),
             label: "Payal".into(),
@@ -655,8 +683,16 @@ mod tests {
             segment_count: 1,
             speaking_seconds: 1.0,
         }];
-        let transcript = assemble("m", &[segment], &speakers, None, &AssemblyOptions::default());
+        let transcript = assemble(
+            "m",
+            &[segment],
+            &attributed(&[(0, "speaker-1")]),
+            &speakers,
+            None,
+            &AssemblyOptions::default(),
+        );
         assert_eq!(transcript.segments[0].speaker_label, "Payal");
+        assert_eq!(transcript.segments[0].speaker_id.as_deref(), Some("speaker-1"));
     }
 
     #[test]
@@ -673,6 +709,7 @@ mod tests {
         let transcript = assemble(
             "m",
             &[segment],
+            &SpeakerAttribution::default(),
             &[],
             None,
             &AssemblyOptions {
@@ -689,6 +726,7 @@ mod tests {
         let transcript = assemble(
             "m",
             &[raw(0, "still something somebody said", 0.0, 2.0)],
+            &SpeakerAttribution::default(),
             &[],
             None,
             &AssemblyOptions {
@@ -721,6 +759,7 @@ mod tests {
         let transcript = assemble(
             "m",
             &[raw(0, "hello", 0.0, 1.0)],
+            &SpeakerAttribution::default(),
             &[],
             Some(source.clone()),
             &AssemblyOptions::default(),
@@ -734,6 +773,27 @@ mod tests {
         assert!(transcript.segments.is_empty());
         assert!(transcript.is_complete());
         assert_eq!(transcript.raw_segment_count, 0);
+    }
+
+    #[test]
+    fn a_corrected_line_can_still_be_read_as_the_decoder_said_it() {
+        // "Preserve the raw ASR text" as a property of the data. The
+        // corrections are the difference, so applying them backwards gives
+        // back exactly what came out of the model.
+        use crate::capture::glossary::{uncorrect, CorrectionReason, TermCategory, TermCorrection};
+
+        let mut segment = raw(0, "we use Supabase", 0.0, 2.0);
+        segment.corrections = vec![TermCorrection {
+            from: "supabse".into(),
+            to: "Supabase".into(),
+            term: "Supabase".into(),
+            category: TermCategory::Product,
+            reason: CorrectionReason::NearMiss,
+        }];
+        assert_eq!(
+            uncorrect(&segment.text, &segment.corrections),
+            "we use supabse"
+        );
     }
 
     #[test]

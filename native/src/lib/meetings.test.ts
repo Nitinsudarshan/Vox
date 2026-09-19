@@ -194,7 +194,10 @@ describe('speakerLabel', () => {
   };
 
   test('an attributed line carries the name the user gave', () => {
-    expect(speakerLabel(line({ speaker_id: 'speaker-1' }), [payal])).toBe('Payal');
+    // Attribution reaches the UI on the canonical segment, not the raw one:
+    // who Vox believes was speaking is an interpretation of the evidence, and
+    // the raw transcript holds the evidence.
+    expect(speakerLabel({ ...line(), speaker_id: 'speaker-1' }, [payal])).toBe('Payal');
   });
 
   test('an unattributed line falls back to the capture channel', () => {
@@ -206,7 +209,7 @@ describe('speakerLabel', () => {
 
   test('a line pointing at a speaker that no longer exists falls back too', () => {
     // Detection re-run with fewer groups must not leave lines blank.
-    expect(speakerLabel(line({ speaker_id: 'speaker-9' }), [payal])).toBe('Others');
+    expect(speakerLabel({ ...line(), speaker_id: 'speaker-9' }, [payal])).toBe('Others');
   });
 
   test('no speakers at all is the ordinary case before detection has run', () => {
