@@ -28,6 +28,7 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 | Transcription | `transcription.rs` | One serial decoder over a bounded queue. Screens every decode through `capture::speech_health` before it reaches the transcript. |
 | Durability | `checkpoint.rs` | A WAV checkpoint every 30 s, merged into `audio.wav` on stop. |
 | Storage | `store.rs` | One directory per meeting, atomic writes, crash recovery. |
+| Canonical transcript | `canonical.rs` | Raw ASR evidence turned into the transcript everything downstream reads: ordered, sentences the decoder's window cut back together, repeats at the joins stripped, speakers attached, gaps stated. |
 | Reports | `summary/` | Six JSON templates, chunking against the configured context window, English-first generation with a translation pass. |
 | Lifecycle | `engine.rs` | Start, pause, resume, stop, recover. |
 | Import | `import.rs` | Decoding an existing recording, re-transcribing one Vox already has, and decoding a second English pass over either. |
@@ -198,6 +199,61 @@ can be detected as the wrong one partway through — and a chunk decoded under
 the wrong language does not fail. It comes back as fluent nonsense in the
 wrong language's phonology, which is worse than an error because nothing about
 it looks broken.
+
+## Raw evidence and canonical transcript
+
+Two layers, and the difference is the same one that runs through the rest of
+the subsystem.
+
+A **raw ASR segment** (`transcript.json`) is evidence: what a decoder said
+about one span of audio, when, on which channel, with what no-speech
+probability. Re-running the same model over the same audio should reproduce
+it.
+
+A **canonical segment** (`canonical.rs`) is derived: raw evidence ordered,
+joined where a sentence was split, de-duplicated at the joins, labelled with
+whoever was speaking, rendered in whichever language the reader asked for.
+Every one of those is a decision that could be made differently tomorrow.
+
+Collapsing them is how a transcript becomes unauditable, and `transcript.json`
+has five writers.
+
+The assembler is a pure function — raw segments in, canonical transcript out,
+and **the raw segments are borrowed and never modified**. A test pins exactly
+that, because it is the rule the layer exists for.
+
+What it does, and why each one matters:
+
+| | |
+|---|---|
+| **Order and de-duplicate** by raw sequence | The store does this too; doing it here means the assembler is correct for a caller that built its list some other way. |
+| **Join a ceiling cut** | A sentence split across two lines because the decoder's 25-second window ran out is an artifact of decoding, not of the conversation. A summarizer reading it as two turns draws the wrong shape. Only joined when the previous span really was cut at the ceiling, the two are adjacent to within one frame, and it is the same channel and the same speaker — a turn change is never merged however the decoder windowed it. |
+| **Strip the repeat at a join** | Whisper conditions on its own output, so the span after a cut often re-decodes the tail of the one before it. Longest match wins, ignoring case and punctuation, because the second decode rarely punctuates the repeat the same way. |
+| **Attach the speaker** | A user-given name wins; otherwise the channel's own label, which is measured and never wrong about which side of the call someone was on. |
+| **State the gaps** | Sequence numbers are assigned before a decode, so a dropped or failed segment leaves a hole in the numbering. Those holes are reported rather than closed over. |
+
+That last one is the one worth dwelling on. A transcript that silently omits
+ninety seconds reads as a complete record of a meeting in which nobody spoke
+for ninety seconds — a different and worse claim than "this part is missing".
+`render_transcript` marks each gap in the text the summarizer reads, so a
+model cannot summarize a conversation that did not happen.
+
+**Provenance**: every canonical segment carries `sources`, the raw sequence
+numbers behind it. Two lines joined into one name both. "Why does the report
+say that" always walks back to a span of audio.
+
+### What still writes to the raw transcript
+
+Speaker detection writes `speaker_id` into `transcript.json`, and the English
+and romanization passes write `translated_text` and `romanized_text`.
+
+The last two are defensible: a second Whisper pass over the same samples is
+another *decode*, and romanization is a deterministic projection of the words
+already there. Both are evidence about the audio.
+
+Speaker attribution is not — it is interpretation, and it does not belong on
+the raw record. Moving it out is Stage 8's business, where the speaker
+pipeline is the subject rather than a dependency.
 
 ## Turn detection
 

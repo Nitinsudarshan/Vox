@@ -599,6 +599,56 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-028 — Raw ASR evidence and the canonical transcript are separate layers
+
+- **Context**: `transcript.json` is written by five producers — the live
+  worker, re-transcription, the English pass, romanization and speaker
+  detection — so "what did the model actually say" and "what does Vox believe
+  this means" were the same bytes.
+- **Decision**: `meetings::canonical`. A `TranscriptSegment` is evidence about
+  a span of audio; a `CanonicalSegment` is derived from it. The assembler is a
+  pure function that borrows the raw segments and never modifies them, and a
+  test pins that.
+- **Reason**: every step between the two — ordering, joining, de-duplicating,
+  labelling, choosing a rendering — is a decision that could be made
+  differently tomorrow. Baking them into the evidence means a later change to
+  any one of them cannot be distinguished from the model having said something
+  different.
+- **Provenance**: every canonical segment carries `sources`, the raw sequences
+  behind it, so a claim in a report walks back to a span of audio. Two lines
+  joined into one name both.
+- **Impact**: the report path now reads canonical rather than raw.
+  `TranscriptSegment` gained `cut_at_ceiling`, which the segmenter knew and
+  discarded — without it nothing downstream could tell a sentence split across
+  two lines from two sentences.
+- **Not done here**: speaker detection still writes `speaker_id` onto the raw
+  record. That is interpretation and does not belong there; moving it is Stage
+  8's business, where the speaker pipeline is the subject rather than a
+  dependency. The English and romanization passes stay, and that is
+  deliberate — a second Whisper pass over the same samples is another decode,
+  and romanization is a deterministic projection of words already present.
+  Both are evidence about the audio; an attribution is not.
+
+---
+
+### D-029 — A gap in the transcript is stated, not closed over
+
+- **Context**: Sequence numbers are assigned before a decode, so a dropped or
+  failed segment leaves a hole in the numbering. `Meeting::dropped_segments`
+  counted them and nothing recorded *where* they were — the audit's R1.
+- **Decision**: The assembler reports holes as `TranscriptGap`s, with the
+  lines either side and the seconds they span, and `render_transcript` marks
+  each one in the text a summarizer reads.
+- **Reason**: a transcript that silently omits ninety seconds reads as a
+  complete record of a meeting in which nobody spoke for ninety seconds. That
+  is a different and worse claim than "this part is missing", and a model
+  handed the first one will summarize a conversation that did not happen.
+- **Consequence**: `CanonicalTranscript::is_complete` is answerable, which is
+  what a downstream consumer needs before it asserts anything about what was
+  decided in a meeting.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -609,8 +659,7 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-028 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
-| D-029 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-028 |
-| D-030 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-031 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-032 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-031 |
+| D-030 | Downstream intelligence consumes the canonical transcript only | Stage 10 — the report path already does (D-028); actions, entities and the knowledge graph do not |
+| D-031 | A glossary is contextual evidence, never blind replacement, and speaker attribution moves off the raw record | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-032 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-033 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-032 |

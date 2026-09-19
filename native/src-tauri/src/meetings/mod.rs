@@ -44,6 +44,7 @@
 //!   leaves the audio on disk.
 
 pub mod benchmark;
+pub mod canonical;
 pub mod capture;
 pub mod checkpoint;
 pub mod commands;

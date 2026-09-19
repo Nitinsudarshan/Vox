@@ -95,6 +95,14 @@ pub struct TranscriptSegment {
     /// to users as if it were a confidence score.
     pub no_speech_prob: f32,
     pub recorded_at: String,
+    /// Whether the segmenter cut this span at its ceiling rather than at a
+    /// silence — so the *next* segment continues the same sentence.
+    ///
+    /// The segmenter knew this and threw it away, which meant nothing
+    /// downstream could tell a sentence split across two lines from two
+    /// sentences. It is what lets the assembler put them back together.
+    #[serde(default)]
+    pub cut_at_ceiling: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -411,6 +419,7 @@ mod tests {
             channel: SegmentChannel::Mixed,
             no_speech_prob: 0.0,
             recorded_at: "2026-01-01T00:00:00Z".into(),
+            cut_at_ceiling: false,
             original_text: None,
             romanized_text: None,
             translated_text: None,

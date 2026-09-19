@@ -42,7 +42,7 @@ use crate::sync::MutexExt;
 
 use super::super::model::{MeetingSummary, SummaryStatus};
 use super::super::store::{MeetingStore, MeetingStoreError};
-use super::super::transcription::render_transcript_with_speakers;
+use super::super::canonical;
 use super::processor::{self, LanguageAction, MeetingContext};
 use super::templates::{Template, TemplateLibrary, DEFAULT_TEMPLATE_ID};
 
@@ -266,7 +266,23 @@ impl SummaryService {
         self.ensure_english(&app, meeting_id, &mut segments, &provider, cancel)
             .await;
         let speakers = self.store.load_speakers(meeting_id).unwrap_or_default();
-        let transcript = render_transcript_with_speakers(&segments, &speakers);
+        // Through the assembler, not straight off the raw segments. That is
+        // what puts a sentence the decoder's window cut in half back together
+        // before a model reads it as two turns, strips the phrase Whisper
+        // repeated across the join, and marks the speech that never made it
+        // into the transcript rather than letting the model summarize a
+        // conversation in which nobody spoke for ninety seconds.
+        let canonical = canonical::assemble(
+            meeting_id,
+            &segments,
+            &speakers,
+            meeting.transcript.clone(),
+            &canonical::AssemblyOptions {
+                rendering: canonical::Rendering::PreferTranslated,
+                ..canonical::AssemblyOptions::default()
+            },
+        );
+        let transcript = canonical::render_transcript(&canonical);
         let template = templates.get_or_default(Some(&options.template_id));
 
         // Back up before touching anything: from here on, every exit path

@@ -743,6 +743,7 @@ fn decode_one(
         channel: segment.channel,
         no_speech_prob: mean_no_speech_prob,
         recorded_at: chrono::Utc::now().to_rfc3339(),
+        cut_at_ceiling: segment.forced_split(),
         original_text,
         romanized_text,
         // The English pass decoded the same samples, so it needs no
