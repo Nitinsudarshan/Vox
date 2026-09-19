@@ -26,6 +26,7 @@ import {
   type MeetingTemplate,
   type SeriesOccurrence,
   type SummaryProgress,
+  type ImportProgress,
   type TranscriptSegment,
   type TranscriptionWarning,
 } from '@/types/meetings';
@@ -92,6 +93,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
   const [seriesOccurrences, setSeriesOccurrences] = React.useState<SeriesOccurrence[]>([]);
   const [seriesLoading, setSeriesLoading] = React.useState(false);
   const [retranscribing, setRetranscribing] = React.useState(false);
+  const [retranscribeProgress, setRetranscribeProgress] = React.useState<ImportProgress | null>(null);
   /** Bumped to force the model gate to re-read what is installed. */
   const [modelGateNonce, setModelGateNonce] = React.useState(0);
   /** The saved microphone/output choice. Empty means "let Vox decide". */
@@ -279,6 +281,10 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
       listen<TranscriptionWarning>(MEETING_EVENTS.transcriptionWarning, (event) => {
         notify('error', event.payload.message);
       }),
+      listen<ImportProgress>(MEETING_EVENTS.importProgress, (event) => {
+        if (event.payload.meeting_id !== selectedIdRef.current) return;
+        setRetranscribeProgress(event.payload);
+      }),
     ];
     return () => {
       subscriptions.forEach((subscription) => {
@@ -338,6 +344,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
     run(async () => {
       if (!selectedId) return;
       setRetranscribing(true);
+      setRetranscribeProgress(null);
       try {
         // The English pass is its own command so it can be run without
         // replacing a transcript. Here the two are one action, in order: the
@@ -356,6 +363,7 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         setRetranscribeOpen(false);
       } finally {
         setRetranscribing(false);
+        setRetranscribeProgress(null);
       }
     });
 
@@ -684,10 +692,14 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
 
       <RetranscribeDialog
         open={retranscribeOpen}
-        onOpenChange={setRetranscribeOpen}
+        onOpenChange={(open) => {
+          setRetranscribeOpen(open);
+          if (!open) setRetranscribeProgress(null);
+        }}
         onRun={handleRetranscribe}
         running={retranscribing}
         suggestEnglishTrack={wantsEnglish}
+        progress={retranscribeProgress}
       />
     </div>
   );

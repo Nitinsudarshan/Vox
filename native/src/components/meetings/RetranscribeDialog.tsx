@@ -12,7 +12,8 @@ import {
 } from '@/components/ui/dialog';
 import { listSpeechModels } from '@/lib/speechModels';
 import type { SpeechModel } from '@/types/models';
-import type { RetranscribeOverrides } from '@/lib/meetings';
+import { formatTimestamp, type RetranscribeOverrides } from '@/lib/meetings';
+import type { ImportProgress } from '@/types/meetings';
 
 /**
  * Languages worth pinning a decode to.
@@ -62,6 +63,8 @@ interface RetranscribeDialogProps {
   running: boolean;
   /** Whether the meeting's transcript holds a script the user cannot read. */
   suggestEnglishTrack: boolean;
+  /** Progress reports emitted while re-transcription runs. */
+  progress?: ImportProgress | null;
 }
 
 /**
@@ -80,6 +83,7 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
   onRun,
   running,
   suggestEnglishTrack,
+  progress,
 }) => {
   const [language, setLanguage] = React.useState('');
   const [modelId, setModelId] = React.useState('');
@@ -97,6 +101,11 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
 
   const multilingualOnly = models.filter((model) => model.multilingual);
   const chosenPreset = PRESETS.find((option) => option.value === preset);
+  const percent =
+    progress?.fraction != null
+      ? Math.min(100, Math.max(0, Math.round(progress.fraction * 100)))
+      : null;
+  const stage = progress?.stage || 'Transcribing';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -117,8 +126,9 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
             <select
               value={language}
               onChange={(event) => setLanguage(event.target.value)}
+              disabled={running}
               aria-label="Transcription language"
-              className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground"
+              className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground disabled:opacity-50"
             >
               {LANGUAGES.map((option) => (
                 <option key={option.code || 'default'} value={option.code}>
@@ -135,8 +145,9 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
             <select
               value={modelId}
               onChange={(event) => setModelId(event.target.value)}
+              disabled={running}
               aria-label="Speech model"
-              className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground"
+              className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground disabled:opacity-50"
             >
               <option value="">Use my speech settings</option>
               {multilingualOnly.map((model) => (
@@ -154,8 +165,9 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
                   key={option.value}
                   type="button"
                   onClick={() => setPreset(option.value)}
+                  disabled={running}
                   aria-pressed={preset === option.value}
-                  className={`flex-1 h-7 rounded text-xs font-medium transition-colors cursor-pointer ${
+                  className={`flex-1 h-7 rounded text-xs font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
                     preset === option.value
                       ? 'bg-card text-foreground shadow-xs'
                       : 'text-muted-foreground hover:text-foreground'
@@ -167,10 +179,15 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
             </div>
           </Field>
 
-          <label className="flex items-start gap-2.5 cursor-pointer">
+          <label
+            className={`flex items-start gap-2.5 ${
+              running ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+            }`}
+          >
             <input
               type="checkbox"
               checked={englishTrack}
+              disabled={running}
               onChange={(event) => setEnglishTrack(event.target.checked)}
               className="mt-0.5 accent-primary"
             />
@@ -183,6 +200,42 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
               </span>
             </span>
           </label>
+
+          {running && (
+            <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-2 mt-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-foreground flex items-center gap-1.5">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                  {stage}…
+                </span>
+                <span className="font-semibold tabular-nums text-foreground">
+                  {percent != null ? `${percent}%` : 'Starting…'}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{
+                    width: percent != null ? `${percent}%` : '15%',
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>
+                  {progress?.processed_seconds != null && progress.total_seconds
+                    ? `${formatTimestamp(progress.processed_seconds)} / ${formatTimestamp(progress.total_seconds)}`
+                    : progress?.processed_seconds != null && progress.processed_seconds > 0
+                      ? `${formatTimestamp(progress.processed_seconds)} processed`
+                      : 'Reading audio…'}
+                </span>
+                {progress?.segments ? (
+                  <span>
+                    {progress.segments} segment{progress.segments === 1 ? '' : 's'}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter>
@@ -199,7 +252,11 @@ export const RetranscribeDialog: React.FC<RetranscribeDialogProps> = ({
             ) : (
               <RotateCcw className="w-3.5 h-3.5" />
             )}
-            {running ? 'Transcribing…' : 'Transcribe again'}
+            {running
+              ? percent != null
+                ? `${stage}… ${percent}%`
+                : `${stage}…`
+              : 'Transcribe again'}
           </Button>
         </DialogFooter>
       </DialogContent>
