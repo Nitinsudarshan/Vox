@@ -109,6 +109,34 @@ pub struct TranscriptSegment {
     /// either way — it is measured rather than inferred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<SegmentTelemetry>,
+}
+
+/// Detailed diagnostic and performance telemetry for a single decoded segment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SegmentTelemetry {
+    pub sequence: u64,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub duration_seconds: f64,
+    pub speech_seconds: f64,
+    pub channel: SegmentChannel,
+    pub detected_language: Option<String>,
+    pub decode_language: Option<String>,
+    pub model: String,
+    pub decode_profile: String,
+    pub decode_ms: u128,
+    pub rtf: f32,
+    pub queue_wait_ms: u128,
+    pub no_speech_probability: f32,
+    pub compression_ratio: f32,
+    pub quality_status: String,
+    pub retry_count: usize,
+    pub forced_split: bool,
+    pub rms: f32,
+    pub peak_amplitude: f32,
+    pub near_clipping_percent: f32,
 }
 
 /// One person Vox believes spoke during a meeting.
@@ -361,6 +389,7 @@ mod tests {
             romanized_text: None,
             translated_text: None,
             speaker_id: None,
+            telemetry: None,
         };
         assert_eq!(segment.duration_seconds(), 0.0);
     }

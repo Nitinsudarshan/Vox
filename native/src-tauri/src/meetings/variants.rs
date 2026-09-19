@@ -506,6 +506,7 @@ mod tests {
             romanized_text: None,
             translated_text: None,
             speaker_id: None,
+            telemetry: None,
         }
     }
 

@@ -301,6 +301,9 @@ impl MeetingEngine {
                 )
                 .for_expensive_script(),
                 glossary: settings.dictionary.clone(),
+                vocabulary: crate::capture::vocabulary::DomainVocabulary::new()
+                    .with_user_terms(&settings.dictionary)
+                    .with_meeting_terms(std::slice::from_ref(&title)),
             },
             stt,
             Arc::clone(&self.store),
@@ -722,6 +725,7 @@ mod tests {
                 decoding: WhisperDecodingConfig::default(),
             decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
+                vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
             },
             SttEngine::new(),
             Arc::new(MeetingStore::new(std::env::temp_dir().join("vox-engine-drain"))),

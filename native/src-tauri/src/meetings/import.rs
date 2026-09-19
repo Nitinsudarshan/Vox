@@ -295,10 +295,25 @@ pub fn generate_english_track(
     let audio_path = resolve_audio_path(store, meeting_id)?;
     let english_language = config.english_language();
 
+    let total_seconds = store
+        .load_meeting(meeting_id)
+        .ok()
+        .map(|m| m.duration_seconds)
+        .filter(|d| *d > 0.0);
+
     let mut segmenter = Segmenter::new();
     let mut spans: Vec<super::variants::EnglishSpan> = Vec::new();
     let mut decoded = 0usize;
     let mut last_emit = std::time::Instant::now();
+
+    emit(
+        &app,
+        meeting_id,
+        "Translating",
+        0.0,
+        total_seconds,
+        0,
+    );
 
     {
         let decode_span = |segment: &super::segmenter::SpeechSegment,
@@ -326,18 +341,30 @@ pub fn generate_english_track(
             if cancel.load(Ordering::SeqCst) {
                 return Err(ImportError::Cancelled);
             }
+            let total = declared_total.or(total_seconds);
             for segment in segmenter.push(chunk, &[], &[]) {
+                if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
+                    last_emit = std::time::Instant::now();
+                    emit(
+                        &app,
+                        meeting_id,
+                        "Translating",
+                        segmenter.position_seconds(),
+                        total,
+                        decoded,
+                    );
+                }
                 decode_span(&segment, &mut spans);
                 decoded += 1;
             }
-            if last_emit.elapsed() >= std::time::Duration::from_millis(500) {
+            if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
                 last_emit = std::time::Instant::now();
                 emit(
                     &app,
                     meeting_id,
                     "Translating",
                     segmenter.position_seconds(),
-                    declared_total,
+                    total,
                     decoded,
                 );
             }
@@ -551,21 +578,46 @@ fn run_batch(
     let mut segmenter = Segmenter::new();
     let mut sequence: u64 = 0;
     let mut kept = 0usize;
-    let mut total_seconds: Option<f64> = None;
+    let mut total_seconds: Option<f64> = store
+        .load_meeting(meeting_id)
+        .ok()
+        .map(|m| m.duration_seconds)
+        .filter(|d| *d > 0.0);
     let mut last_emit = std::time::Instant::now();
+
+    emit(
+        &app,
+        meeting_id,
+        "Transcribing",
+        0.0,
+        total_seconds,
+        0,
+    );
 
     {
         let mut sink = |chunk: &[f32], declared_total: Option<f64>| -> Result<(), ImportError> {
             if cancel.load(Ordering::SeqCst) {
                 return Err(ImportError::Cancelled);
             }
-            if total_seconds.is_none() {
-                total_seconds = declared_total;
+            if let Some(declared) = declared_total {
+                total_seconds = Some(declared);
             }
             if let Some(writer) = writer.as_mut() {
                 writer.push(chunk).map_err(|err| ImportError::Decode(err.to_string()))?;
             }
             for segment in segmenter.push(chunk, &[], &[]) {
+                if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
+                    last_emit = std::time::Instant::now();
+                    let processed = segmenter.position_seconds();
+                    emit(
+                        &app,
+                        meeting_id,
+                        "Transcribing",
+                        processed,
+                        total_seconds,
+                        kept,
+                    );
+                }
                 if let Some(transcript) = decode_one(engine, config, &segment, sequence) {
                     store.append_segments(meeting_id, std::slice::from_ref(&transcript))?;
                     kept += 1;
@@ -575,7 +627,7 @@ fn run_batch(
                     return Err(ImportError::Cancelled);
                 }
             }
-            if last_emit.elapsed() >= std::time::Duration::from_millis(500) {
+            if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
                 last_emit = std::time::Instant::now();
                 let processed = segmenter.position_seconds();
                 emit(
@@ -718,6 +770,7 @@ fn decode_one(
             .map(|text| text.trim().to_string())
             .filter(|text| !text.is_empty()),
         speaker_id: None,
+        telemetry: None,
     })
 }
 

@@ -100,6 +100,8 @@ pub struct SpeechSegment {
     /// rather than at a real silence. The next segment continues the same
     /// sentence, which is worth knowing when joining transcript text.
     pub forced_split: bool,
+    /// Audio measurements and signal health for this segment.
+    pub audio_stats: crate::capture::AudioStats,
 }
 
 impl SpeechSegment {
@@ -367,12 +369,15 @@ impl Segmenter {
             self.pre_roll.clear();
         }
 
+        let audio_stats = crate::capture::AudioStats::compute(&samples, SEGMENT_SAMPLE_RATE, 1);
+
         Some(SpeechSegment {
             samples,
             start_seconds: frame_to_seconds(start_frame),
             end_seconds: frame_to_seconds(end_frame),
             channel: classify_channel(mic_sum_sq, sys_sum_sq, sample_count),
             forced_split: forced,
+            audio_stats,
         })
     }
 
