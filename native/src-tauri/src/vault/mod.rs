@@ -499,6 +499,75 @@ impl VaultManager {
         Ok(merged_note)
     }
 
+    pub fn merge_multiple_notes(&self, note_ids: &[String]) -> Result<VaultNote, VaultError> {
+        self.init()?;
+        if note_ids.len() < 2 {
+            return Err(VaultError::FrontmatterError("At least two notes required to merge".to_string()));
+        }
+
+        let mut notes = Vec::new();
+        for id in note_ids {
+            let note = self.get_note(id)?;
+            notes.push(note);
+        }
+
+        // Sort chronologically: oldest note first, newest note last
+        notes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        let primary_id = notes[0].id.clone();
+        let mut current_note = notes[0].clone();
+
+        // Perform merges sequentially so snapshots and merged_from are preserved
+        for secondary in &notes[1..] {
+            let record = MergeRecord {
+                id: format!("merge_{}", uuid::Uuid::new_v4()),
+                merged_note_id: primary_id.clone(),
+                merged_at: chrono::Utc::now().to_rfc3339(),
+                primary_source: current_note.clone(),
+                secondary_source: secondary.clone(),
+            };
+
+            let merged_sources_dir = self.vault_dir().join("merged_sources");
+            fs::create_dir_all(&merged_sources_dir)?;
+            let stack_path = merged_sources_dir.join(format!("{}.json", primary_id));
+
+            let mut stack: Vec<MergeRecord> = if stack_path.exists() {
+                let data = fs::read_to_string(&stack_path)?;
+                serde_json::from_str(&data).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            stack.push(record);
+            fs::write(
+                &stack_path,
+                serde_json::to_string_pretty(&stack)
+                    .map_err(|e| VaultError::FrontmatterError(e.to_string()))?,
+            )?;
+
+            let mut merged_from_ids = Vec::new();
+            if let Some(ref ids) = current_note.merged_from {
+                merged_from_ids.extend(ids.clone());
+            } else {
+                merged_from_ids.push(current_note.id.clone());
+            }
+            if let Some(ref ids) = secondary.merged_from {
+                merged_from_ids.extend(ids.clone());
+            } else {
+                merged_from_ids.push(secondary.id.clone());
+            }
+
+            current_note.content = format!("{}\n\n{}", current_note.content.trim(), secondary.content.trim());
+            current_note.updated_at = chrono::Utc::now().to_rfc3339();
+            current_note.title = crate::pipeline::extract_deterministic_title(&current_note.content);
+            current_note.merged_from = Some(merged_from_ids);
+
+            self.delete_note(&secondary.id)?;
+        }
+
+        self.save_note(&current_note)?;
+        Ok(current_note)
+    }
+
     pub fn unmerge_notes(&self, merged_note_id: &str) -> Result<UnmergeResult, VaultError> {
         self.init()?;
         let merged_note = self.get_note(merged_note_id)?;

@@ -419,6 +419,7 @@ pub fn run() {
             commands::delete_voice_note,
             commands::delete_voice_notes,
             commands::merge_voice_notes,
+            commands::merge_multiple_voice_notes,
             commands::unmerge_voice_note,
             commands::get_vault_location,
             commands::choose_vault_folder,
