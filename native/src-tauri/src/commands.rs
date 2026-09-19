@@ -1092,6 +1092,32 @@ pub async fn merge_voice_notes(
     Ok(merged)
 }
 
+#[tauri::command]
+pub async fn merge_multiple_voice_notes(
+    app: AppHandle,
+    ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<VaultNote, CommandError> {
+    let merged = state
+        .vault
+        .merge_multiple_notes(&ids)
+        .map_err(|e| CommandError::new("VAULT_MERGE_FAILED", &e.to_string()))?;
+
+    // Synchronize and re-enrich any existing Scribbles derived from the merged Voice Notes
+    for id in &ids {
+        if let Ok(affected_scribble_ids) = state.vault.sync_scribbles_for_voice_note_merge(&merged.id, id) {
+            for scribble_id in affected_scribble_ids {
+                if let Ok(scribble) = state.vault.get_scribble(&scribble_id) {
+                    let _ = app.emit(SCRIBBLE_SAVED_EVENT, &scribble);
+                    spawn_scribble_enrichment(app.clone(), &state, scribble_id);
+                }
+            }
+        }
+    }
+
+    Ok(merged)
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct UnmergeVoiceNotesResponse {
     pub primary: VaultNote,

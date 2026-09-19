@@ -776,8 +776,6 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                   const isDictationActive = activeDictationModel === model.id;
                   const isMeetingActive = activeMeetingModel === model.id;
                   const isRecommendedDictation = model.id === 'base.en' || model.id === 'base';
-                  const isRecommendedMeeting =
-                    model.id === catalogue?.recommended_meeting_model;
                   const busy = sttBusyId === model.id;
 
                   return (
@@ -832,12 +830,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                                 Rec: Dictation
                               </Badge>
                             )}
-                            {isRecommendedMeeting && (
-                              <Badge variant="purple" className="text-[8.5px] px-1 py-0 h-4 leading-tight">
-                                Rec: Meetings
-                              </Badge>
-                            )}
-                            {model.installed && !isRecommendedDictation && !isRecommendedMeeting && (
+                            {model.installed && !isRecommendedDictation && (
                               <Badge variant="outline" className="text-[8.5px] px-1 py-0 h-4 leading-tight text-emerald-500 border-emerald-500/30">
                                 Installed
                               </Badge>

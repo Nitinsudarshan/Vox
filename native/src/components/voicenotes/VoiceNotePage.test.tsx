@@ -214,8 +214,8 @@ describe('VoiceNotePage - Reversible Merging', () => {
   });
 });
 
-describe('VoiceNotePage - Multi-Select and Bulk Delete', () => {
-  it('hides checkboxes until Select button is clicked and does not feature Select All', async () => {
+describe('VoiceNotePage - Card Selection, Top Actions, and Chronological Merge', () => {
+  it('allows clicking cards directly to select them, showing selection controls', async () => {
     const user = userEvent.setup();
     render(<VoiceNotePage />);
 
@@ -223,27 +223,23 @@ describe('VoiceNotePage - Multi-Select and Bulk Delete', () => {
       expect(screen.getByText('First transcript content.')).toBeInTheDocument();
     });
 
-    // Checkboxes should not be present initially
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Select All/i })).not.toBeInTheDocument();
-
-    const selectBtn = screen.getByRole('button', { name: /^Select$/i });
-    expect(selectBtn).toBeInTheDocument();
-
-    // Click Select button to enter select mode
-    await user.click(selectBtn);
-
+    // Checkboxes are available on each card
     const checkboxes = screen.getAllByRole('checkbox');
     expect(checkboxes).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Select All/i })).not.toBeInTheDocument();
 
-    // Select both notes individually
+    // Click first card checkbox to select
     await user.click(checkboxes[0]);
+
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete \(1\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select All' })).toBeInTheDocument();
+
+    // Click second card checkbox to select both
     await user.click(checkboxes[1]);
 
     expect(screen.getByText('2 selected')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete Selected (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Merge \(2\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete \(2\)/i })).toBeInTheDocument();
 
     // Clear selection
     await user.click(screen.getByRole('button', { name: 'Clear' }));
@@ -277,15 +273,12 @@ describe('VoiceNotePage - Multi-Select and Bulk Delete', () => {
       expect(screen.getByText('First transcript content.')).toBeInTheDocument();
     });
 
-    // Enter Select mode
-    await user.click(screen.getByRole('button', { name: /^Select$/i }));
-
     const checkboxes = screen.getAllByRole('checkbox');
     await user.click(checkboxes[0]);
     await user.click(checkboxes[1]);
 
-    // Click Delete Selected (2)
-    await user.click(screen.getByRole('button', { name: 'Delete Selected (2)' }));
+    // Click Delete (2) in top toolbar
+    await user.click(screen.getByRole('button', { name: /Delete \(2\)/i }));
 
     // Confirmation banner should be displayed
     expect(
@@ -299,6 +292,55 @@ describe('VoiceNotePage - Multi-Select and Bulk Delete', () => {
       expect(screen.queryByText('First transcript content.')).not.toBeInTheDocument();
       expect(screen.queryByText('Second transcript content.')).not.toBeInTheDocument();
       expect(screen.getByText('No Voice Notes yet')).toBeInTheDocument();
+    });
+  });
+
+  it('handles chronological batch merge with preview and oldest-to-newest ordering', async () => {
+    const user = userEvent.setup();
+    mockedInvoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === 'get_vault_location') {
+        return {
+          path: 'C:\\Vault',
+          default_path: 'C:\\Vault',
+          configured: true,
+          accessible: true,
+        };
+      }
+      if (cmd === 'get_voice_notes') {
+        // Returned in descending order (note_2 is newer, note_1 is older)
+        return [sampleNormalNote2, sampleNormalNote];
+      }
+      if (cmd === 'merge_multiple_voice_notes') {
+        // Must be passed in chronological order: note_1 (older) then note_2 (newer)
+        expect(args).toEqual({ ids: ['note_1', 'note_2'] });
+        return sampleMergedNote;
+      }
+      return undefined;
+    });
+
+    render(<VoiceNotePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('First transcript content.')).toBeInTheDocument();
+    });
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[0]);
+    await user.click(checkboxes[1]);
+
+    // Click Merge (2) button in top toolbar
+    await user.click(screen.getByRole('button', { name: /Merge \(2\)/i }));
+
+    // Verify chronological merge preview banner is displayed
+    expect(screen.getByText(/Merge 2 Voice Notes Chronologically/i)).toBeInTheDocument();
+    expect(screen.getByText('Oldest (Top)')).toBeInTheDocument();
+    expect(screen.getByText('Newest (Bottom)')).toBeInTheDocument();
+
+    // Confirm Merge
+    await user.click(screen.getByRole('button', { name: /Confirm Merge \(2\)/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Merged · 2 Voice Notes/i)).toBeInTheDocument();
     });
   });
 });
@@ -615,5 +657,45 @@ describe('VoiceNotePage - Phrase Correction', () => {
     // The pencil still opens the whole note — the two workflows coexist.
     await user.click(screen.getByLabelText('Edit transcript'));
     expect(screen.getByDisplayValue(correctableNote.content)).toBeInTheDocument();
+  });
+});
+
+describe('VoiceNotePage - Multiple Viewing Options', () => {
+  it('toggles seamlessly between Masonry Grid and Compact List views, with Timeline and Split views removed', async () => {
+    const user = userEvent.setup();
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_vault_location') {
+        return { path: 'C:\\Vault', default_path: 'C:\\Vault', configured: true, accessible: true };
+      }
+      if (cmd === 'get_voice_notes') {
+        return [sampleNormalNote2, sampleNormalNote];
+      }
+      return undefined;
+    });
+
+    render(<VoiceNotePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('First transcript content.')).toBeInTheDocument();
+    });
+
+    // Verify Grid and List view buttons exist
+    const gridBtn = screen.getByLabelText('Masonry Grid View');
+    const listBtn = screen.getByLabelText('Compact List View');
+
+    expect(gridBtn).toBeInTheDocument();
+    expect(listBtn).toBeInTheDocument();
+
+    // Verify Split Reader and Timeline views are removed
+    expect(screen.queryByLabelText('Timeline Feed View')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Split Reader View')).not.toBeInTheDocument();
+
+    // Switch to List View
+    await user.click(listBtn);
+    expect(screen.getByText('First transcript content.')).toBeInTheDocument();
+
+    // Switch back to Grid View
+    await user.click(gridBtn);
+    expect(screen.getByText('First transcript content.')).toBeInTheDocument();
   });
 });

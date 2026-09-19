@@ -39,9 +39,11 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 use crate::capture::speech_health::{self, DecodeEvidence};
-use crate::capture::stt::{join_utterance_text, SttEngine, SttLanguageConfig, WhisperDecodingConfig};
+use crate::capture::stt::{
+    join_utterance_text, SttEngine, SttLanguageConfig, SttSamplingStrategy, WhisperDecodingConfig,
+};
 
-use super::model::TranscriptSegment;
+use super::model::{SegmentTelemetry, TranscriptSegment};
 use super::segmenter::{SpeechSegment, SEGMENT_SAMPLE_RATE};
 use super::store::MeetingStore;
 use super::telemetry;
@@ -337,6 +339,8 @@ pub struct WorkerConfig {
     pub decoding_expensive_script: WhisperDecodingConfig,
     /// Words the user has told Vox about, applied to every decoded segment.
     pub glossary: Vec<String>,
+    /// Domain vocabulary engine with prioritized global, meeting, and user terms.
+    pub vocabulary: crate::capture::vocabulary::DomainVocabulary,
 }
 
 /// Starts the decoder.
@@ -409,6 +413,8 @@ fn run_worker(
     // segments in another script moves it, and a run back moves it back.
     let mut script = crate::capture::stt::ScriptTracker::new();
 
+    let mut prev_kept_text: Option<String> = None;
+
     for job in rx {
         if cancel.load(Ordering::SeqCst) {
             tracing::info!("meeting {}: transcription cancelled", config.meeting_id);
@@ -416,7 +422,13 @@ fn run_worker(
         }
 
         let sequence = job.sequence;
-        let (outcome, mut timing) = decode_segment(&engine, &config, &job, script.is_expensive());
+        let (outcome, mut timing) = decode_segment(
+            &engine,
+            &config,
+            &job,
+            script.is_expensive(),
+            prev_kept_text.as_deref(),
+        );
 
         // What the decoder has been writing decides how the *next* segment is
         // decoded. Read from the transcript rather than from a settings page:
@@ -427,6 +439,7 @@ fn run_worker(
         // Only a kept segment counts. One screened as a hallucination says
         // nothing about which language is being spoken.
         if let DecodeOutcome::Kept(segment) = &outcome {
+            prev_kept_text = Some(segment.text.clone());
             if script.observe(&segment.text) {
                 let now_expensive = script.is_expensive();
                 tracing::info!(
@@ -437,6 +450,9 @@ fn run_worker(
                 );
                 stats.switches.push((sequence + 1, now_expensive));
             }
+        } else {
+            // Discarded or failed: do not propagate context into subsequent segment
+            prev_kept_text = None;
         }
         counters.completed.fetch_add(1, Ordering::SeqCst);
 
@@ -816,7 +832,9 @@ pub fn print_meeting_summary(
 }
 
 enum DecodeOutcome {
-    Kept(TranscriptSegment),
+    /// Boxed because a kept segment now carries its own decode telemetry,
+    /// which makes it far larger than the other two variants.
+    Kept(Box<TranscriptSegment>),
     /// Decoded, but screened out as a hallucination or as empty. Carries the
     /// `speech_health` reason key where there was one — an empty decode has
     /// none, and "empty" and "looped" need different fixes.
@@ -829,14 +847,21 @@ fn decode_segment(
     config: &WorkerConfig,
     job: &DecodeJob,
     expensive_script: bool,
+    prev_context: Option<&str>,
 ) -> (DecodeOutcome, SegmentTiming) {
     let samples = &job.segment.samples;
 
-    let decoding = if expensive_script {
+    let base_decoding = if expensive_script {
         &config.decoding_expensive_script
     } else {
         &config.decoding
     };
+
+    let mut decoding = base_decoding.clone();
+    // Build context-aware prompt using domain vocabulary and preceding segment context
+    if let Some(prompt) = config.vocabulary.build_prompt(prev_context, job.segment.forced_split(), 220) {
+        decoding.initial_prompt = Some(prompt);
+    }
 
     let mut timing = SegmentTiming {
         audio_seconds: job.segment.duration_seconds(),
@@ -856,7 +881,7 @@ fn decode_segment(
         Some(&config.model_path),
         samples,
         &config.language,
-        decoding,
+        &decoding,
     );
 
     let utterances = match result {
@@ -893,20 +918,91 @@ fn decode_segment(
         total_seconds: profile.total_seconds,
         mean_no_speech_prob,
     };
-    if let Some(reason) = speech_health::screen_decode(
-        "meeting-segment",
-        config.language.whisper_language.as_deref(),
-        &text,
-        evidence,
-    ) {
-        tracing::debug!(
-            "meeting {}: discarded segment {} — {}",
-            config.meeting_id,
-            job.sequence,
-            reason.describe()
-        );
+
+    let (quality_verdict, compression_ratio) = speech_health::evaluate_segment_quality(&text, evidence);
+
+    // Phase 1J: Deterministic recovery if segment is Suspicious
+    let (final_text, final_no_speech_prob, final_compression, quality_status, retry_count) = match quality_verdict {
+        speech_health::SegmentQualityStatus::Good => {
+            (text, mean_no_speech_prob, compression_ratio, "good".to_string(), 0)
+        }
+        speech_health::SegmentQualityStatus::Suspicious(ref reason) => {
+            tracing::info!(
+                "meeting {}: segment {} suspicious ({}) — attempting deterministic recovery pass",
+                config.meeting_id,
+                job.sequence,
+                reason
+            );
+            // Alternate decode configuration: greedy decode, zero temperature increment, clear initial prompt
+            let mut recovery_decoding = base_decoding.clone();
+            recovery_decoding.initial_prompt = None;
+            recovery_decoding.strategy = SttSamplingStrategy::Greedy { best_of: 1 };
+            recovery_decoding.temperature = 0.0;
+            recovery_decoding.temperature_inc = 0.0;
+
+            let recovery_res = engine.transcribe_utterances_with_config(
+                Some(&config.model_path),
+                samples,
+                &config.language,
+                &recovery_decoding,
+            );
+
+            if let Ok((rec_utterances, rec_diag)) = recovery_res {
+                timing.decode_ms += rec_diag.transcription_latency_ms;
+                let rec_text = join_utterance_text(&rec_utterances);
+                let rec_no_speech = if rec_utterances.is_empty() {
+                    1.0
+                } else {
+                    rec_utterances.iter().map(|u| u.no_speech_prob).sum::<f32>() / rec_utterances.len() as f32
+                };
+                let rec_evidence = DecodeEvidence {
+                    voiced_seconds: profile.voiced_seconds,
+                    total_seconds: profile.total_seconds,
+                    mean_no_speech_prob: rec_no_speech,
+                };
+                let (rec_quality, rec_compression) = speech_health::evaluate_segment_quality(&rec_text, rec_evidence);
+
+                if rec_quality.is_good() || (!rec_quality.is_rejected() && rec_no_speech < mean_no_speech_prob) {
+                    tracing::info!(
+                        "meeting {}: segment {} successfully recovered via alternate decode",
+                        config.meeting_id,
+                        job.sequence
+                    );
+                    (rec_text, rec_no_speech, rec_compression, "recovered".to_string(), 1)
+                } else if !quality_verdict.is_rejected() {
+                    // Retain initial attempt but record suspicious status
+                    (text, mean_no_speech_prob, compression_ratio, "suspicious".to_string(), 1)
+                } else {
+                    timing.post_ms = t_post.elapsed().as_millis();
+                    // The recovery decode was no better and the first was
+                    // rejected: the reason the screen gave is the one that
+                    // belongs in the diagnostics.
+                    return (
+                        DecodeOutcome::Discarded(quality_verdict.rejection_key()),
+                        timing,
+                    );
+                }
+            } else {
+                (text, mean_no_speech_prob, compression_ratio, "suspicious".to_string(), 1)
+            }
+        }
+        speech_health::SegmentQualityStatus::Rejected(ref reason) => {
+            tracing::debug!(
+                "meeting {}: discarded segment {} — {}",
+                config.meeting_id,
+                job.sequence,
+                reason.describe()
+            );
+            timing.post_ms = t_post.elapsed().as_millis();
+            return (DecodeOutcome::Discarded(Some(reason.key())), timing);
+        }
+    };
+
+    if final_text.trim().is_empty() {
         timing.post_ms = t_post.elapsed().as_millis();
-        return (DecodeOutcome::Discarded(Some(reason.key())), timing);
+        // Nothing came back. There is no screening reason for that — "empty"
+        // and "looped" are different failures with different fixes.
+        return (DecodeOutcome::Discarded(None), timing);
     }
 
     // Normalization first, then the glossary — and the glossary's changes are
@@ -914,7 +1010,7 @@ fn decode_segment(
     // before the segment was ever written, with nothing recording what had
     // been changed or from what. A correction that cannot name its own
     // evidence is indistinguishable from a transcription.
-    let normalized = crate::capture::text_normalize::normalize_segment_text(&text, &[]);
+    let normalized = crate::capture::text_normalize::normalize_segment_text(&final_text, &[]);
     let glossary = crate::capture::glossary::Glossary::from_settings(&config.glossary);
     let (normalized_text, corrections) = glossary.apply(&normalized.text);
     let normalized = crate::capture::text_normalize::SegmentOutcome {
@@ -929,21 +1025,46 @@ fn decode_segment(
     };
     timing.post_ms = t_post.elapsed().as_millis();
 
+    let telemetry = SegmentTelemetry {
+        sequence: job.sequence,
+        start_seconds: job.segment.start_seconds,
+        end_seconds: job.segment.end_seconds,
+        duration_seconds: job.segment.duration_seconds(),
+        speech_seconds: profile.voiced_seconds,
+        channel: job.segment.channel,
+        detected_language: config.language.whisper_language.clone(),
+        decode_language: config.language.whisper_language.clone(),
+        model: config.model_path.clone(),
+        decode_profile: if expensive_script { "fast".to_string() } else { "careful".to_string() },
+        decode_ms: timing.decode_ms,
+        rtf: timing.decode_rtf() as f32,
+        queue_wait_ms: timing.queue_wait_ms,
+        no_speech_probability: final_no_speech_prob,
+        compression_ratio: final_compression,
+        quality_status,
+        retry_count,
+        forced_split: job.segment.forced_split(),
+        rms: job.segment.audio_stats.rms,
+        peak_amplitude: job.segment.audio_stats.peak_amplitude,
+        near_clipping_percent: job.segment.audio_stats.near_clipping_percent,
+    };
+
     (
-        DecodeOutcome::Kept(TranscriptSegment {
+        DecodeOutcome::Kept(Box::new(TranscriptSegment {
             sequence: job.sequence,
             text,
             start_seconds: job.segment.start_seconds,
             end_seconds: job.segment.end_seconds,
             channel: job.segment.channel,
-            no_speech_prob: mean_no_speech_prob,
+            no_speech_prob: final_no_speech_prob,
             recorded_at: chrono::Utc::now().to_rfc3339(),
             cut_at_ceiling: job.segment.forced_split(),
             original_text,
             romanized_text,
             translated_text: None,
             corrections,
-        }),
+            telemetry: Some(telemetry),
+        })),
         timing,
     )
 }
@@ -1156,6 +1277,7 @@ mod tests {
             romanized_text: None,
             translated_text: None,
             corrections: Vec::new(),
+            telemetry: None,
         }
     }
 
@@ -1217,6 +1339,7 @@ mod tests {
                 decoding: WhisperDecodingConfig::default(),
             decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
+                vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
             },
             SttEngine::new(),
             Arc::new(crate::meetings::MeetingStore::new(

@@ -83,6 +83,10 @@ pub struct SpeechSegment {
     /// Why the turn ended. A [`TurnEnd::Ceiling`] cut means the next segment
     /// continues the same sentence, which is worth knowing when joining
     /// transcript text.
+    ///
+    /// This replaced a `forced_split: bool`, which is one of the three things
+    /// this answers — [`SpeechSegment::forced_split`] still reports it, now
+    /// derived rather than stored, so the two cannot drift apart.
     pub end_reason: TurnEnd,
     /// Quiet the segmenter waited through before deciding the turn was over.
     ///
@@ -90,6 +94,8 @@ pub struct SpeechSegment {
     /// a transcript line appears that no decoder can remove, and separating it
     /// from decode time is the whole reason it is recorded.
     pub hangover_ms: u64,
+    /// Audio measurements and signal health for this segment.
+    pub audio_stats: crate::capture::AudioStats,
 }
 
 impl SpeechSegment {
@@ -352,6 +358,8 @@ impl Segmenter {
             self.pre_roll.clear();
         }
 
+        let audio_stats = crate::capture::AudioStats::compute(&samples, SEGMENT_SAMPLE_RATE, 1);
+
         Some(SpeechSegment {
             samples,
             start_seconds: frame_to_seconds(start_frame),
@@ -359,6 +367,7 @@ impl Segmenter {
             channel: classify_channel(mic_sum_sq, sys_sum_sq, sample_count),
             end_reason: reason,
             hangover_ms,
+            audio_stats,
         })
     }
 

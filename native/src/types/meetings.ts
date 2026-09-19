@@ -126,7 +126,6 @@ export interface TranscriptSegment {
   original_text?: string | null;
   romanized_text?: string | null;
   translated_text?: string | null;
-  /** Which `Speaker` this line was attributed to, if any. */
   /**
    * What the glossary changed in this line, and why. Empty for almost every
    * line; where it is not, applying these backwards reconstructs exactly what

@@ -529,6 +529,7 @@ mod tests {
             romanized_text: None,
             translated_text: None,
             corrections: Vec::new(),
+        telemetry: None,
         }
     }
 

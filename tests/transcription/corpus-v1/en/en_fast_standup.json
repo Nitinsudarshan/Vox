@@ -1,0 +1,20 @@
+{
+  "id": "en_fast_standup",
+  "corpus_version": "corpus-v1",
+  "language": "en",
+  "category": "C_fast",
+  "title": "Rapid Cross-Functional Operations Standup",
+  "description": "Fast speaking rate (+25%), conversational pace, quick updates on CI/CD pipelines, QA bottlenecks, and hiring.",
+  "voice": "en-IN-PrabhatNeural",
+  "rate": "+25%",
+  "word_count": 729,
+  "char_count": 4964,
+  "duration_seconds": 290.21,
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le",
+  "file_size_bytes": 9286700,
+  "tts_engine": "edge-tts-7.2.8",
+  "added_ambient_noise": false,
+  "generated_at": "2026-09-18T10:45:10.932373+00:00"
+}

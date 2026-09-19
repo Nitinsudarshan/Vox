@@ -1,0 +1,20 @@
+{
+  "id": "hinglish_clean_sync",
+  "corpus_version": "corpus-v1",
+  "language": "hinglish",
+  "category": "F_codeswitch_clean",
+  "title": "Hinglish Engineering Sprint Planning & Code-Switching",
+  "description": "Natural conversational code-switching (approx 45% Hindi, 55% English) covering sprint planning, API integrations, and staging deployments.",
+  "voice": "hi-IN-MadhurNeural",
+  "rate": "+0%",
+  "word_count": 806,
+  "char_count": 5161,
+  "duration_seconds": 391.94,
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le",
+  "file_size_bytes": 12542252,
+  "tts_engine": "edge-tts-7.2.8",
+  "added_ambient_noise": false,
+  "generated_at": "2026-09-18T10:47:24.289555+00:00"
+}

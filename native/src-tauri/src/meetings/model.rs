@@ -118,6 +118,45 @@ pub struct TranscriptSegment {
     /// transcription.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<crate::capture::glossary::TermCorrection>,
+    /// How the decode of this line went.
+    ///
+    /// Absent on every line that was not decoded live — an import, a
+    /// re-transcription, a meeting recorded before this existed — and omitted
+    /// from the file entirely when absent, so it costs a line nothing.
+    ///
+    /// **This overlaps with [`crate::meetings::telemetry::SegmentDiagnostics`]**,
+    /// which records the same decode to `diagnostics.jsonl` and rather more of
+    /// it. The two arrived independently and both are live; `docs/speech-decision-log.md`
+    /// D-017 is the argument for the log being the right home, and reconciling
+    /// them is a decision for whoever owns the format, not for a merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<SegmentTelemetry>,
+}
+
+/// Detailed diagnostic and performance telemetry for a single decoded segment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SegmentTelemetry {
+    pub sequence: u64,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub duration_seconds: f64,
+    pub speech_seconds: f64,
+    pub channel: SegmentChannel,
+    pub detected_language: Option<String>,
+    pub decode_language: Option<String>,
+    pub model: String,
+    pub decode_profile: String,
+    pub decode_ms: u128,
+    pub rtf: f32,
+    pub queue_wait_ms: u128,
+    pub no_speech_probability: f32,
+    pub compression_ratio: f32,
+    pub quality_status: String,
+    pub retry_count: usize,
+    pub forced_split: bool,
+    pub rms: f32,
+    pub peak_amplitude: f32,
+    pub near_clipping_percent: f32,
 }
 
 /// Which pass produced a transcript.
@@ -178,8 +217,11 @@ pub struct TranscriptProvenance {
 /// the honest shape for the technique underneath.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Speaker {
-    /// Stable within a meeting, and what [`TranscriptSegment::speaker_id`]
-    /// points at.
+    /// Stable within a meeting, and what
+    /// [`crate::meetings::speakers::SpeakerAttribution`] maps a sequence
+    /// number to. It used to be a field on the transcript line itself; see
+    /// `docs/speech-decision-log.md` D-031 for why attribution moved off the
+    /// record of what the decoder said.
     pub id: String,
     /// What to call this person. Starts as "Speaker 1"; the user renames it.
     pub label: String,
@@ -445,6 +487,7 @@ mod tests {
             romanized_text: None,
             translated_text: None,
             corrections: Vec::new(),
+            telemetry: None,
         };
         assert_eq!(segment.duration_seconds(), 0.0);
     }

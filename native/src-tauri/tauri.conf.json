@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Vox \u2014 AI Voice & Memory",
         "width": 1100,
         "height": 720,

@@ -903,6 +903,9 @@ pub struct WhisperDecodingConfig {
     /// opposite, so its cross-boundary context survives.
     #[serde(default)]
     pub no_context: bool,
+    /// Maximum allowable zlib compression ratio before hallucination screening rejects.
+    #[serde(default)]
+    pub compression_ratio_thold: Option<f32>,
 }
 
 impl Default for WhisperDecodingConfig {
@@ -934,6 +937,7 @@ impl WhisperDecodingConfig {
             trim_audio_context: false,
             single_segment: false,
             no_context: false,
+            compression_ratio_thold: Some(2.4),
         }
     }
 
@@ -1479,6 +1483,8 @@ impl SttEngine {
                 params.set_initial_prompt(prompt);
             }
             params.set_n_threads(decoding_config.n_threads.unwrap_or_else(num_cpus));
+            params.set_single_segment(decoding_config.single_segment);
+            params.set_no_context(decoding_config.no_context);
 
             // Whisper decodes a thirty-second window whatever it is given, so a
             // shorter segment pays for silence it does not contain. An explicit

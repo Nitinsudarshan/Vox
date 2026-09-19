@@ -11,6 +11,7 @@ pub mod romanize;
 pub mod speech_health;
 pub mod text_normalize;
 pub mod stt;
+pub mod vocabulary;
 pub mod web;
 
 use crate::sync::MutexExt;
@@ -31,6 +32,7 @@ pub use evaluation::{
     SttFailureCategory, SttFailureDiagnostic,
 };
 pub use stt::{SttEngine, SttError, SttLanguageConfig, SttWindow};
+pub use vocabulary::{DomainVocabulary, GLOBAL_DOMAIN_VOCABULARY};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 

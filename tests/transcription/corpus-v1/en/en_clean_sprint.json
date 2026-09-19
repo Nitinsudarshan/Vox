@@ -1,0 +1,20 @@
+{
+  "id": "en_clean_sprint",
+  "corpus_version": "corpus-v1",
+  "language": "en",
+  "category": "A_clean",
+  "title": "Core Engineering Sprint Review and Architecture Migration",
+  "description": "Clear pace, clean acoustic conditions, discussion of Tauri v2 migration, memory footprints, and cloud synchronization.",
+  "voice": "en-US-JennyNeural",
+  "rate": "+0%",
+  "word_count": 793,
+  "char_count": 5617,
+  "duration_seconds": 340.68,
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le",
+  "file_size_bytes": 10901804,
+  "tts_engine": "edge-tts-7.2.8",
+  "added_ambient_noise": false,
+  "generated_at": "2026-09-18T10:44:41.291650+00:00"
+}

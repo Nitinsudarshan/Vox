@@ -239,6 +239,7 @@ fn line_for(sequence: u64) -> TranscriptSegment {
         romanized_text: None,
         translated_text: None,
         corrections: Vec::new(),
+        telemetry: None,
     }
 }
 

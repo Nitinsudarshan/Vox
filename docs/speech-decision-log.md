@@ -993,10 +993,48 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-044 — What the merge with `main` kept, and the one thing it did not decide
+
+- **Context**: while this branch ran its stages, `main` landed overlapping
+  work — segment telemetry and deterministic decode recovery in the
+  transcription worker, domain vocabulary priming, per-segment audio
+  statistics, and a benchmark binary. Eight files conflicted. These are the
+  choices that were not mechanical, recorded because a merge is where
+  decisions get made silently.
+- **Kept from `main`, unchanged**: `capture::vocabulary` and its Whisper
+  prompt priming, the recovery decode that retries a suspicious segment at a
+  fixed temperature, `AudioStats` on every `SpeechSegment`, and
+  `src/bin/benchmark.rs`. None of it conflicts with anything here; it
+  measures and primes things this branch did not touch.
+- **Kept from this branch**: `TranscriptSegment` has no `speaker_id`. `main`
+  still carried the field and `speakers.rs` still wrote attribution onto the
+  transcript line; D-031 moved that to `attribution.json` because detection is
+  an interpretation of evidence and writing it back modifies the record of
+  what the decoder said. `main` did not revisit that design — it inherited the
+  old field — so the newer decision stands.
+- **Merged rather than chosen**: `SpeechSegment::forced_split` was a stored
+  `bool` on `main` and is one of three answers `end_reason` gives here. It is
+  now a method derived from `end_reason`, so the two cannot drift, and
+  `main`'s call sites call it. `audio_stats` sits alongside.
+- **Not decided, deliberately**: `TranscriptSegment::telemetry` (`main`, into
+  `transcript.json`) and `SegmentDiagnostics` (D-017, into
+  `diagnostics.jsonl`) now both record the same decode. Both are live and both
+  are tested; neither was deleted, because removing a feature that just landed
+  on `main` is a product decision and not a merge one. **The argument for
+  reconciling them is in D-017 and in the measurement behind D-034**: the
+  transcript file is rewritten whole on every append, and its write cost grows
+  with its size — 40 ms at the first line, 2056 ms at the 1439th. Twenty
+  numeric fields per segment push directly on the one cost in the meeting
+  pipeline that was already the bottleneck. Whoever owns the vault format
+  should pick one home; until then the duplication is marked at
+  `TranscriptSegment::telemetry` rather than left to be discovered.
+
+---
+
 ## Reserved, not yet decided
 
 Nothing. Every id the staged plan reserved has landed with the stage that
-implemented it, D-001 through D-043 above. New proposals belong in
+implemented it, D-001 through D-044 above. New proposals belong in
 [speech-architecture-audit.md](speech-architecture-audit.md) §13 until the
 work that justifies them exists — a decision recorded before its measurement
 is a preference.
