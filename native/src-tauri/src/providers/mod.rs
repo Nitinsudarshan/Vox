@@ -1129,7 +1129,14 @@ impl LLMClient {
     /// Streams a completion, calling `on_delta` with each fragment as it
     /// arrives.
     ///
-    /// This exists for Talkback, where waiting for a whole answer before
+    /// Feeds `tts::SpeechQueue`: a phrase pushed from inside this callback is
+    /// synthesized while the model is still writing the next one, which makes
+    /// time to first audio *first phrase plus one synthesis* rather than
+    /// *whole generation plus synthesis*. Talkback, which this was originally
+    /// written for, no longer exists (`docs/decisions.md` Decision 69); the
+    /// argument for streaming does, and `tts::phrases` is the splitter.
+    ///
+    /// It exists because waiting for a whole answer before
     /// speaking any of it is the difference between a conversation and a
     /// form submission. Everything else in Relay is batch work — a
     /// meeting summary has nobody waiting on its first sentence — and

@@ -22,6 +22,7 @@ pub mod startup;
 pub mod sync;
 pub mod theme_icon;
 pub mod triggers;
+pub mod tts;
 pub mod updates;
 pub mod vault;
 

@@ -815,6 +815,54 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-038 — TTS is an interface with no provider, and that is the honest shape
+
+- **Context**: The plan for this work assumed a local TTS path existed to
+  wrap. The audit found none: `talkback/` and `tts/` are not in the tree,
+  while Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 all describe them
+  in detail. `docs/decisions.md` Decision 69 records the removal, because that
+  log is append-only and the originals cannot be edited to match.
+- **Decision**: build `tts/` as the interface — `TextToSpeech`, declared
+  capabilities, a phrase splitter, a cancellable queue — with `NullTts` behind
+  it.
+- **Reason `NullTts` is not a placeholder**: "no voice is set up" is the state
+  of every fresh install and will remain the common one. It is the correct
+  answer, reported as a state rather than a fault, so every caller degrades to
+  text silently and nothing pretends.
+- **Reason the splitter and the queue come first**: they are what decide time
+  to first audio, they are provider-agnostic, and they are testable with no
+  provider, no audio device and no model. A provider added later inherits a
+  tested overlap and cancellation path instead of arriving with its own.
+- **What is deliberately absent**: voice cloning, conversation state,
+  barge-in, interruption policy. A system that sounds exactly like you and
+  takes four seconds to start is worse for every use Vox has, and the rest
+  needs a turn detector and an open microphone during playback — Stage 12's
+  subject, not this one's.
+- **Resolves** the audit's §13.27: `LLMClient::complete_streaming` is kept,
+  because `SpeechQueue` is what it was waiting for, and its doc-comment now
+  points there instead of at a module nobody can open.
+
+---
+
+### D-039 — Stopping speech means stopping now, not after this sentence
+
+- **Context**: The tempting design checks a stop flag between utterances.
+- **Decision**: a cancel token shared with the provider and the sink.
+  Everything queued is abandoned, and audio that arrives for a cancelled turn
+  is discarded rather than played late.
+- **Reason**: a between-items check makes the longest thing the system ever
+  says its worst case, and that is exactly the case that matters — somebody
+  cancels *because* the answer is long and wrong. A design that cannot stop
+  mid-sentence cannot be made interruptible later; it has to be built that
+  way, before anything depends on the other behaviour.
+- **Consequence**: barge-in, when there is a microphone open during playback,
+  needs no change here. It calls `cancel`.
+- **Bounded and counted, like every other queue in the speech stack**: a model
+  that runs away must not grow a backlog of audio nobody will hear, and a
+  refusal that is not counted is a silent loss.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -825,5 +873,4 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-038 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-039 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-038 |
+| D-040 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 (turn state) and D-038 (a cancellable voice) |
