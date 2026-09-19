@@ -372,6 +372,12 @@ export interface MeetingReminderPayload {
 export type SegmentStatus = 'kept' | 'discarded' | 'failed';
 
 /**
+ * Why a turn ended. `ceiling` means it was cut mid-speech and the next
+ * segment continues the same sentence.
+ */
+export type TurnEnd = 'silence' | 'ceiling' | 'flush';
+
+/**
  * One segment's journey from the segmenter to the transcript.
  *
  * Every duration is milliseconds and they are deliberately separate: a single
@@ -389,6 +395,13 @@ export interface SegmentDiagnostics {
   end_seconds: number;
   channel: SegmentChannel;
   forced_split: boolean;
+  /** Why the turn ended. */
+  end_reason: TurnEnd;
+  /**
+   * Quiet the segmenter waited through before judging the turn over. The part
+   * of a line's latency that no decoder can remove.
+   */
+  hangover_ms: number;
   voiced_seconds: number;
   total_seconds: number;
   no_speech_prob?: number | null;
@@ -457,6 +470,14 @@ export interface TranscriptionHealth {
   finalization_p50_ms: number;
   finalization_p95_ms: number;
   finalization_max_ms: number;
+  /**
+   * Median quiet waited through before a turn was judged over. Read beside the
+   * finalization percentiles: together they say how much of the wait is the
+   * decoder and how much is the hangover, and no model shrinks the second.
+   */
+  hangover_p50_ms: number;
+  /** Turns cut at the ceiling — each is a sentence split across two lines. */
+  segments_forced_split: number;
   lock_wait_ms_total: number;
   model_load_ms_total: number;
   model_reloads: number;

@@ -661,7 +661,7 @@ impl CaseRunner {
     fn submit(&mut self, segment: SpeechSegment) {
         self.counts.emitted += 1;
         self.counts.segmented_seconds += segment.duration_seconds();
-        if segment.forced_split {
+        if segment.forced_split() {
             self.counts.forced += 1;
         }
         let Some(tx) = self.tx.as_ref() else {
@@ -749,7 +749,7 @@ fn consume(
     for job in rx {
         let queue_wait_ms = job.submitted_at.elapsed().as_millis();
         let audio_seconds = job.segment.duration_seconds();
-        let forced_split = job.segment.forced_split;
+        let forced_split = job.segment.forced_split();
 
         // The same pre-decode voiced-time measurement the live worker takes.
         let profile = speech_health::profile_speech(&job.segment.samples, SEGMENT_SAMPLE_RATE);

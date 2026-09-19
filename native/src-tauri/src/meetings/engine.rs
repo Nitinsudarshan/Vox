@@ -893,7 +893,8 @@ mod tests {
             start_seconds: 0.0,
             end_seconds: 0.1,
             channel: super::super::model::SegmentChannel::Microphone,
-            forced_split: false,
+            end_reason: super::super::speech_state::TurnEnd::Silence,
+            hangover_ms: 0,
         }
     }
 

@@ -431,6 +431,54 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-021 — Turn detection is a subsystem, not a side effect of buffering audio
+
+- **Context**: `segmenter.rs` decided whether a turn had ended while it was
+  deciding which samples to hand a decoder. The algorithm was correct and the
+  entanglement cost three things: the state was not observable, the detector
+  was not reusable, and turn timing read as a property of transcription.
+- **Decision**: `meetings/speech_state.rs` owns the decision —
+  `Silence → PossibleSpeech → Speaking → ProbableEnd → Finalized`, the
+  thresholds, the adaptive noise floor and both hysteresis counters. The
+  segmenter keeps the pre-roll, the open frames and the ceiling, and asks the
+  machine what each frame means.
+- **Reason it is an extraction and not a rewrite**: the algorithm was already
+  right. Every constant, comparison and transition is carried over unchanged,
+  and the segmenter's seventeen existing tests — breath versus real pause,
+  noisy room, quiet voice, ceiling split, ragged buffers — pass untouched.
+  That is the evidence, not the claim.
+- **Why `Finalized` is a state**: it is reported for exactly the frame a turn
+  closes on and never after, so a consumer can act on the edge without
+  diffing two observations.
+- **Impact**: `Segmenter::speech_state()`, `SpeechSegment::end_reason` and
+  `hangover_ms`, `TranscriptionHealth::hangover_p50_ms`. Nothing built on top
+  of it: no barge-in, no interruption, no full duplex.
+
+---
+
+### D-022 — No model decides that a sentence has ended
+
+- **Context**: End-of-turn looks like a language problem — whether a clause is
+  complete is a question about meaning — and a model could be asked.
+- **Decision**: Energy against an adaptive noise floor, frame continuity and
+  two hysteresis counters. No LLM, no network, no ASR.
+- **Reason**: It is a control problem answered in milliseconds by arithmetic,
+  and it is the one decision in the pipeline that has to be instant. Routing it
+  through a model adds a round trip and a cost to the step whose whole job is
+  to be immediate, and makes the pipeline stop working when the model does.
+  Recent end-of-turn research points the same way — acoustic and prosodic
+  evidence gives the better accuracy/latency trade, and text understanding does
+  not automatically improve the decision.
+- **Consequence, and the reason it is worth recording**: it puts a floor on
+  latency that no model upgrade removes. A 400 ms hangover means no word can be
+  decoded sooner than 400 ms after it was said, and `hangover_p50_ms` is
+  reported next to the finalization percentiles so that tuning aims at the
+  right number. Shortening it is a real option with a real cost — a shorter
+  hangover fragments sentences at breaths — and it is now a measured trade
+  rather than a guess.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -441,12 +489,11 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-021 | Turn detection is a subsystem independent of ASR, with observable states, and acoustic evidence is its baseline — no LLM for basic end-of-turn | Stage 4 — the audit's §14.9 finalization-latency distribution is now measurable per meeting (D-017) |
-| D-022 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
-| D-023 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
-| D-024 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
-| D-025 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-024 |
-| D-026 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-027 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-028 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-027 |
-| D-029 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-022 exists to express it |
+| D-023 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
+| D-024 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
+| D-025 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
+| D-026 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-025 |
+| D-027 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-028 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-029 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-028 |
+| D-030 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-023 exists to express it |

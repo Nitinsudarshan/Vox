@@ -43,6 +43,8 @@ const transcription = (
   finalization_p50_ms: 900,
   finalization_p95_ms: 2400,
   finalization_max_ms: 5000,
+  hangover_p50_ms: 400,
+  segments_forced_split: 0,
   lock_wait_ms_total: 0,
   model_load_ms_total: 0,
   model_reloads: 0,
@@ -76,6 +78,8 @@ const segment = (overrides: Partial<SegmentDiagnostics> = {}): SegmentDiagnostic
   end_seconds: 2,
   channel: 'microphone',
   forced_split: false,
+  end_reason: 'silence',
+  hangover_ms: 400,
   voiced_seconds: 1.8,
   total_seconds: 2,
   no_speech_prob: 0.05,
@@ -195,6 +199,13 @@ describe('MeetingDiagnosticsPanel', () => {
       />,
     );
     expect(screen.getByText(/phrase_loop \(5\), subtitle_filler \(1\)/)).toBeInTheDocument();
+  });
+
+  it('reports the hangover next to the latency it is part of', () => {
+    // The two have to be read together: no speech model makes the hangover
+    // smaller, so "transcription is slow" has two very different answers.
+    render(<MeetingDiagnosticsPanel meetingId="meeting-1" diagnostics={diagnostics()} />);
+    expect(screen.getByText('400 ms')).toBeInTheDocument();
   });
 
   it('shows no confidence figure, because Whisper does not report one', () => {

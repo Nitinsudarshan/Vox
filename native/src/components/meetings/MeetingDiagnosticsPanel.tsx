@@ -213,6 +213,11 @@ export const MeetingDiagnosticsPanel: React.FC<MeetingDiagnosticsPanelProps> = (
             value={duration(transcription.finalization_p95_ms / 1000)}
             hint="From the segmenter closing a span to its text existing."
           />
+          <Stat
+            label="Turn hangover"
+            value={`${transcription.hangover_p50_ms} ms`}
+            hint="Quiet waited through before a turn was judged over. Part of the wait above that no speech model can remove."
+          />
           <Stat label="Peak queue" value={`${transcription.peak_queue_depth}`} />
           <Stat
             label="Wait after stop"

@@ -23,7 +23,8 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 | Stage | Module | What it decides |
 |---|---|---|
 | Capture | `capture.rs` | Opens the microphone and the default output device in loopback. Drains both in temporal lockstep and soft-mixes to one 16 kHz mono stream, keeping each channel's energy alongside it. |
-| Segmentation | `segmenter.rs` | Streaming energy VAD. Emits a span when speech starts, with 300 ms of pre-roll, tolerating 400 ms gaps, splitting anything past 25 s at its quietest frame. |
+| Turn detection | `speech_state.rs` | Where the speaker is — `Silence`, `PossibleSpeech`, `Speaking`, `ProbableEnd`, `Finalized` — from energy against an adaptive noise floor. No model, no network, no transcript. |
+| Segmentation | `segmenter.rs` | The audio behind that decision: 300 ms of pre-roll, a 400 ms hangover, and a 25 s ceiling split at the quietest frame. |
 | Transcription | `transcription.rs` | One serial decoder over a bounded queue. Screens every decode through `capture::speech_health` before it reaches the transcript. |
 | Durability | `checkpoint.rs` | A WAV checkpoint every 30 s, merged into `audio.wav` on stop. |
 | Storage | `store.rs` | One directory per meeting, atomic writes, crash recovery. |
@@ -157,6 +158,61 @@ can be detected as the wrong one partway through — and a chunk decoded under
 the wrong language does not fail. It comes back as fluent nonsense in the
 wrong language's phonology, which is worse than an error because nothing about
 it looks broken.
+
+## Turn detection
+
+Whether someone has finished speaking is an acoustic question, and it used to
+be answered as a side effect of buffering audio inside `segmenter.rs`. The
+algorithm was right; having no name for its states meant three things were
+impossible.
+
+The state was not observable, so "how much of the wait before a line appears is
+the hangover rather than the decoder" had no answer — and the answer matters,
+because **no speech model makes the hangover smaller**. A 400 ms wait to be
+sure a sentence has ended is the floor on how soon any word can be decoded.
+Diagnostics now report `hangover_p50_ms` beside the finalization percentiles
+for exactly that reason.
+
+It could not be reused, so anything later that needs to know someone has
+started talking — a live surface, cancelling playback when a person speaks over
+it — would have grown a second copy with its own thresholds.
+
+And it looked like a property of transcription, which invites the idea that a
+better model would finalize sooner.
+
+So `speech_state.rs` owns the decision and `segmenter.rs` owns the audio behind
+it. Same constants, same comparisons, same transitions: an extraction, not a
+rewrite, and the segmenter's seventeen existing tests are what hold it to that.
+
+```text
+   Silence ──frame ≥ onset──▶ PossibleSpeech ──3 in a row──▶ Speaking
+      ▲                             │                          │
+      │                       (did not hold)            frame < hold
+      │                             ▼                          ▼
+      └──────────────────────── Silence  ◀──400 ms quiet── ProbableEnd
+                                                               │
+                                                        (more speech)
+                                                               ▼
+                                                           Speaking
+```
+
+`Finalized` is reported for exactly the frame a turn closes on and never
+after — it is an edge, not a resting place, which lets a consumer act on it
+without diffing two observations.
+
+It runs with no speech model installed, with the decoder failed, and with the
+queue full, because it is arithmetic over energy. **No LLM decides that a
+sentence has ended, and none should**: it is a control problem answered in
+milliseconds by two counters, and routing it through a model would add a
+network round trip to the one decision in the pipeline that has to be instant.
+
+Every segment now says why its turn ended — `silence`, `ceiling` (cut
+mid-sentence, so the next line continues it) or `flush` (the recording
+stopped) — and how much quiet was waited through to decide.
+
+What this is *not* yet: barge-in, interruption, or any full-duplex behaviour.
+The state is observable and the detector is reusable; nothing speculative is
+built on top of it.
 
 ## Reports
 

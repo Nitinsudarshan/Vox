@@ -966,6 +966,8 @@ mod tests {
             end_seconds: sequence as f64 + 1.0,
             channel: SegmentChannel::Microphone,
             forced_split: false,
+            end_reason: crate::meetings::speech_state::TurnEnd::Silence,
+            hangover_ms: 400,
             voiced_seconds: 0.9,
             total_seconds: 1.0,
             no_speech_prob: Some(0.05),

@@ -40,6 +40,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// What a record written before turn reasons existed says about its end.
+fn default_end_reason() -> super::speech_state::TurnEnd {
+    super::speech_state::TurnEnd::Silence
+}
+
 /// Schema version for both files. A reader that does not recognise it skips
 /// the record rather than interpreting old numbers under new rules.
 pub const DIAGNOSTICS_VERSION: u32 = 1;
@@ -75,6 +80,18 @@ pub struct SegmentDiagnostics {
     /// Whether the segmenter cut this at its ceiling rather than at a silence,
     /// so the next segment continues the same sentence.
     pub forced_split: bool,
+    /// Why the turn ended.
+    #[serde(default = "default_end_reason")]
+    pub end_reason: super::speech_state::TurnEnd,
+    /// Quiet the segmenter waited through before deciding the turn was over.
+    ///
+    /// The part of a line's finalization latency that no decoder can remove.
+    /// Recorded separately from `decode_ms` because the two are fixed by
+    /// entirely different things, and confusing them is how "transcription is
+    /// slow" gets answered with a smaller model when the answer was a shorter
+    /// hangover.
+    #[serde(default)]
+    pub hangover_ms: u64,
 
     // --- the speech evidence the screen ran on ---
     /// Seconds of the span that cleared the voiced threshold, measured at 20 ms
@@ -208,6 +225,18 @@ pub struct TranscriptionHealth {
     pub finalization_p50_ms: u128,
     pub finalization_p95_ms: u128,
     pub finalization_max_ms: u128,
+    /// Median quiet waited through before a turn was judged over.
+    ///
+    /// Reported beside the finalization percentiles because together they
+    /// answer the question that decides what to tune: of the wait before a
+    /// line appears, how much is the decoder and how much is the hangover. No
+    /// model makes the second number smaller.
+    #[serde(default)]
+    pub hangover_p50_ms: u64,
+    /// Turns cut at the segmenter's ceiling rather than at a silence. Each one
+    /// is a sentence split across two transcript lines.
+    #[serde(default)]
+    pub segments_forced_split: u64,
 
     /// Total time spent waiting on the shared model slot.
     pub lock_wait_ms_total: u128,
@@ -285,7 +314,12 @@ impl MeetingDiagnostics {
 
         let mut decode_ms_total = 0u128;
         let mut finalizations: Vec<u128> = Vec::with_capacity(segments.len());
+        let mut hangovers: Vec<u64> = Vec::with_capacity(segments.len());
         for segment in segments {
+            hangovers.push(segment.hangover_ms);
+            if segment.forced_split {
+                transcription.segments_forced_split += 1;
+            }
             decode_ms_total += segment.decode_ms;
             transcription.lock_wait_ms_total += segment.lock_wait_ms;
             transcription.model_load_ms_total += segment.model_load_ms;
@@ -321,6 +355,8 @@ impl MeetingDiagnostics {
             decode_ms_total as f64 / 1000.0,
             capture.recording_seconds,
         );
+        hangovers.sort_unstable();
+        transcription.hangover_p50_ms = percentile_u64(&hangovers, 0.50);
         finalizations.sort_unstable();
         transcription.finalization_p50_ms = percentile(&finalizations, 0.50);
         transcription.finalization_p95_ms = percentile(&finalizations, 0.95);
@@ -374,6 +410,14 @@ pub struct StopFacts {
     pub drain_completed: bool,
 }
 
+fn percentile_u64(sorted: &[u64], fraction: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let index = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
+    sorted[index.min(sorted.len() - 1)]
+}
+
 fn percentile(sorted: &[u128], fraction: f64) -> u128 {
     if sorted.is_empty() {
         return 0;
@@ -403,6 +447,8 @@ mod tests {
             end_seconds: sequence as f64 + 1.0,
             channel: SegmentChannel::Microphone,
             forced_split: false,
+            end_reason: crate::meetings::speech_state::TurnEnd::Silence,
+            hangover_ms: 400,
             voiced_seconds: 0.8,
             total_seconds: 1.0,
             no_speech_prob: Some(0.1),
