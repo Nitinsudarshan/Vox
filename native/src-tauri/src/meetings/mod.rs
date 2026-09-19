@@ -49,6 +49,9 @@ pub mod capture;
 pub mod checkpoint;
 pub mod commands;
 pub mod engine;
+/// A synthetic long meeting, for the properties that can only fail over time.
+#[cfg(test)]
+pub mod endurance;
 pub mod import;
 pub mod model;
 pub mod segmenter;

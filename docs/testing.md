@@ -190,6 +190,55 @@ JSON round-trip. One test asserts the harness's queue depth equals
 `transcription::MAX_QUEUED_SEGMENTS`, so the benchmark cannot drift into
 measuring a pipeline that does not ship.
 
+## 1c. Long-meeting endurance (`meetings::endurance`)
+
+Every reliability property the meeting pipeline claims is a property over
+*time*: the queue stays bounded, the transcript stays ordered, memory does not
+grow, audio survives, nothing is lost quietly. None of them can fail in a
+five-minute demo and all of them can fail in an hour, so a fixture drives the
+production `Segmenter`, `CheckpointWriter` and `MeetingStore::append_segments`
+over a synthetic recording of arbitrary length. The audio is generated, so two
+hours costs seconds of CPU and no fixture file.
+
+It leaves out the decoder on purpose. A real decode needs a model this
+repository does not ship, and its speed is what `meetings::benchmark` already
+measures properly. What remains is everything *around* the decode, which is
+where the long-duration failures live.
+
+```bash
+cd native/src-tauri
+cargo test endurance                 # the fast ones, in CI
+cargo test -- --ignored endurance    # the two-hour run, before a release
+```
+
+What it asserts: a 15-minute meeting keeps every promise (audio merged,
+checkpointed as it went, every span queued, nothing dropped, transcript
+ordered); a decoder that cannot keep up sheds visibly and never exceeds the
+queue bound while the recording stays complete; an hour holds no more memory
+than five minutes; checkpoint memory is bounded by the interval rather than by
+the meeting; and pause/resume neither reorders nor loses transcript.
+
+### The one thing it found
+
+Persisting a transcript line costs more as the transcript grows.
+`append_segments` rewrites the whole file, so each append pays for everything
+already written. Over a synthetic two-hour meeting (1,439 lines) the first
+hundred lines cost **40 ms** to persist and the last hundred cost **2,056 ms**.
+
+Attributed: a **persistence** bottleneck, not capture, segmentation, queue,
+model or UI.
+
+Caching the parsed transcript in the store took the last hundred to
+**1,458 ms** — a 29% win, and the shape of that win says the remaining cost is
+serializing and writing rather than parsing.
+
+It was not taken further, and that is a decision rather than an omission. At
+1,439 lines this is roughly 15 ms per segment on the decode thread, against a
+decode measured in hundreds of milliseconds — a few percent. Removing the rest
+means not rewriting the file per line, which is a vault format change, and
+`docs/meetings.md` records the ceiling at which it becomes worth making. A
+test pins the growth's shape so a change that makes it worse is visible.
+
 ## 2. Native frontend (`native/src/`)
 
 370 tests, Vitest + React Testing Library, jsdom.

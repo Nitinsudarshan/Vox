@@ -24,6 +24,7 @@
 //! Every write that matters goes to a temporary file and is renamed into
 //! place. A half-written `transcript.json` is worse than a stale one.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -90,12 +91,34 @@ impl From<serde_json::Error> for MeetingStoreError {
 /// ever needed `&self`.
 pub struct MeetingStore {
     vault_dir: Mutex<PathBuf>,
+    /// The parsed transcript of whichever meetings have been touched, and the
+    /// modification time the parse was of.
+    ///
+    /// `append_segments` rewrites the whole file — the right trade for a
+    /// document that has to stay atomically replaceable — and it used to
+    /// re-read and re-parse it first, every time, on the decode thread.
+    /// Measured over a synthetic two-hour meeting: the first hundred lines
+    /// cost 40 ms to persist and the last hundred cost 2056 ms, fifty-one
+    /// times more, because each append paid for everything already written.
+    /// See `meetings::endurance`.
+    ///
+    /// Keyed by meeting id and validated against the file's modification
+    /// time, so a transcript edited outside Vox — which the vault is
+    /// explicitly meant to allow — is re-read rather than served stale.
+    transcripts: Mutex<HashMap<String, CachedTranscript>>,
+}
+
+/// A parsed transcript, and the file state it was parsed from.
+struct CachedTranscript {
+    modified: Option<std::time::SystemTime>,
+    segments: Vec<TranscriptSegment>,
 }
 
 impl MeetingStore {
     pub fn new(vault_dir: impl Into<PathBuf>) -> Self {
         Self {
             vault_dir: Mutex::new(vault_dir.into()),
+            transcripts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -103,6 +126,9 @@ impl MeetingStore {
     /// stay where they are, matching how the rest of the vault behaves.
     pub fn set_vault_dir(&self, new_dir: impl Into<PathBuf>) {
         *self.vault_dir.lock_or_recover() = new_dir.into();
+        // Meeting ids are unique, but a new vault is a different set of
+        // meetings and nothing cached under the old root describes it.
+        self.transcripts.lock_or_recover().clear();
     }
 
     /// The `meetings/` directory under the current vault root.
@@ -227,10 +253,16 @@ impl MeetingStore {
     ) -> Result<(), MeetingStoreError> {
         let dir = self.meeting_dir(id)?;
         fs::create_dir_all(&dir)?;
-        write_atomic(
-            &dir.join(TRANSCRIPT_FILE),
-            &serde_json::to_vec_pretty(segments)?,
-        )
+        let path = dir.join(TRANSCRIPT_FILE);
+        write_atomic(&path, &serde_json::to_vec_pretty(segments)?)?;
+        self.transcripts.lock_or_recover().insert(
+            id.to_string(),
+            CachedTranscript {
+                modified: modified_time(&path),
+                segments: segments.to_vec(),
+            },
+        );
+        Ok(())
     }
 
     /// A meeting's transcript, ordered by sequence.
@@ -240,11 +272,32 @@ impl MeetingStore {
     pub fn load_transcript(&self, id: &str) -> Result<Vec<TranscriptSegment>, MeetingStoreError> {
         let path = self.meeting_dir(id)?.join(TRANSCRIPT_FILE);
         if !path.exists() {
+            self.transcripts.lock_or_recover().remove(id);
             return Ok(Vec::new());
         }
+        let modified = modified_time(&path);
+        if modified.is_some() {
+            let cache = self.transcripts.lock_or_recover();
+            if let Some(cached) = cache.get(id) {
+                // An unchanged file is the common case by a wide margin, and
+                // parsing it again is most of what made a long meeting's
+                // thousandth line expensive to write.
+                if cached.modified == modified {
+                    return Ok(cached.segments.clone());
+                }
+            }
+        }
+
         let mut segments: Vec<TranscriptSegment> = serde_json::from_slice(&fs::read(&path)?)?;
         segments.sort_by_key(|segment| segment.sequence);
         segments.dedup_by_key(|segment| segment.sequence);
+        self.transcripts.lock_or_recover().insert(
+            id.to_string(),
+            CachedTranscript {
+                modified,
+                segments: segments.clone(),
+            },
+        );
         Ok(segments)
     }
 
@@ -570,6 +623,7 @@ impl MeetingStore {
     /// recording. Here the directory is the meeting; removing it removes all
     /// of it.
     pub fn delete_meeting(&self, id: &str) -> Result<(), MeetingStoreError> {
+        self.transcripts.lock_or_recover().remove(id);
         let dir = self.meeting_dir(id)?;
         if !dir.exists() {
             return Err(MeetingStoreError::NotFound(id.to_string()));
@@ -694,6 +748,15 @@ fn is_safe_id(id: &str) -> bool {
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A file's modification time, or `None` where the platform will not say.
+///
+/// `None` disables the transcript cache for that file rather than assuming it
+/// is unchanged: a cache that cannot tell whether it is stale must not claim
+/// it is fresh.
+fn modified_time(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
 /// Writes bytes to `path` through a temporary file in the same directory.

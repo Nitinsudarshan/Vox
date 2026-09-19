@@ -435,6 +435,38 @@ write diagnostics yet. They have no clock to fall behind, so backlog and drops
 cannot happen there; what is missing is the accuracy-side evidence, and that
 gap is real.
 
+## What a long meeting costs
+
+Two hours is the longest a meeting realistically runs, and `meetings::endurance`
+drives one synthetically — the real segmenter, checkpoint writer and store over
+generated audio — so the properties that can only fail over time are tested
+without waiting two hours. Memory held by the pipeline is bounded by the queue
+depth times the segment ceiling and does not grow with the meeting; checkpoint
+memory is bounded by the 30-second interval; ordering and the queue bound hold
+throughout.
+
+One cost does grow. `append_segments` rewrites the whole transcript, so each
+line pays for everything already written:
+
+| Two-hour meeting, 1,439 lines | Time to persist |
+|---|---|
+| first 100 lines | 40 ms |
+| last 100 lines | 2,056 ms |
+| last 100 lines, after caching the parsed transcript | 1,458 ms |
+
+The cache is in. The remaining 29%-smaller cost is serializing and writing
+rather than parsing, and removing it means **not rewriting the file per line** —
+appending to a journal and materialising `transcript.json` on stop, the shape
+the diagnostics log already uses.
+
+That is not done, deliberately. At 1,439 lines this is about 15 ms per segment
+on the decode thread, against a decode measured in hundreds of milliseconds.
+The ceiling worth watching is roughly **3,000 lines**, where it reaches tens of
+milliseconds per segment and starts to eat a real share of the decoder's
+budget. A meeting that long is an eight-hour recording or a very talkative
+three-hour one. Until one exists, the format stays as it is: one file per
+meeting, greppable, atomically replaceable.
+
 ## Failure and recovery
 
 Audio failures and transcript failures are reported on **separate channels**,

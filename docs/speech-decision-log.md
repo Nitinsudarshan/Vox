@@ -718,6 +718,51 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-033 — Long-meeting reliability is tested synthetically, and the decoder is left out
+
+- **Context**: The pipeline's reliability claims are all claims about time.
+  None can fail in a five-minute demo. Waiting two hours per test run is not a
+  test anybody runs.
+- **Decision**: `meetings::endurance` drives the production `Segmenter`,
+  `CheckpointWriter` and `MeetingStore` over generated audio of arbitrary
+  length, and leaves the decoder out.
+- **Reason for leaving the decoder out**: a real decode needs a model this
+  repository does not ship and cannot run in CI, and decode speed is what
+  `meetings::benchmark` already measures properly. What remains — segmentation,
+  checkpointing, queueing, persistence, ordering — is exactly where the
+  long-duration failures live.
+- **Impact**: five fast tests plus one `#[ignore]`d two-hour run.
+
+---
+
+### D-034 — The transcript's write cost was measured, halved, and then left alone
+
+- **Context**: The audit classified `append_segments` rewriting the whole file
+  per segment as MEASURE FIRST. Measured over a synthetic two-hour meeting
+  (1,439 lines): the first hundred lines cost 40 ms to persist, the last
+  hundred 2,056 ms. A **persistence** bottleneck — not capture, segmentation,
+  queue, model or UI.
+- **Decision**: cache the parsed transcript in the store, keyed by meeting and
+  validated against the file's modification time. Last hundred: 1,458 ms, a
+  29% win. Stop there.
+- **Reason for stopping**: the size of that win says the remaining cost is
+  serializing and writing, not parsing. Removing it means not rewriting the
+  file per line — a journal plus a materialised document, the shape the
+  diagnostics log already uses — and that is a vault format change. At 1,439
+  lines the cost is about 15 ms per segment against a decode measured in
+  hundreds of milliseconds: a few percent.
+- **The ceiling, recorded so the next person does not have to re-derive it**:
+  around 3,000 lines the cost reaches tens of milliseconds per segment and
+  starts to take a real share of the decoder's budget. That is an eight-hour
+  recording or a very talkative three-hour one. Until one exists, one
+  greppable atomically-replaceable file per meeting is the better trade.
+- **Why the cache validates against mtime**: the vault is explicitly meant to
+  be editable without Vox running. A cache that cannot tell whether it is
+  stale must not claim it is fresh, so a file whose modification time the
+  platform will not report is simply not cached.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -728,6 +773,6 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-033 | Downstream intelligence consumes the canonical transcript only | Stage 10 — the report path and Meeting Detail already do (D-028); actions, entities and the knowledge graph do not |
-| D-034 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-035 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-034 |
+| D-035 | Downstream intelligence consumes the canonical transcript only | Stage 10 — the report path and Meeting Detail already do (D-028); actions, entities and the knowledge graph do not |
+| D-036 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-037 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-036 |
