@@ -914,7 +914,22 @@ fn compute_alignment_ops<T: PartialEq>(ref_seq: &[T], hyp_seq: &[T]) -> (usize, 
 
 /// Normalizes text for evaluation: strips punctuation and normalizes whitespace,
 /// while preserving Devanagari script characters.
-fn normalize_for_eval(text: &str) -> String {
+/// Strips punctuation, folds case, and collapses whitespace, keeping
+/// alphanumerics and Devanagari.
+///
+/// Public because the meeting benchmark scores against the same references:
+/// two harnesses that normalize differently produce word error rates that
+/// cannot be compared, which defeats the point of measuring either.
+///
+/// Case is folded because Vox's own text normalizer *adds* sentence casing to
+/// every transcript line (`text_normalize`, `TextProfile::Transcript`), while
+/// a reference is written by hand. Comparing case-sensitively would charge
+/// every run a word error for capitalization nobody typed and nobody got
+/// wrong — a roughly constant penalty, which is worse than a large one because
+/// it looks like signal. The technical-term check below already lowercased
+/// both sides for exactly this reason; this makes the whole function agree
+/// with it.
+pub fn normalize_for_eval(text: &str) -> String {
     text.chars()
         .map(|c| {
             if c.is_alphanumeric() || c.is_whitespace() || is_devanagari(c) {
@@ -924,6 +939,7 @@ fn normalize_for_eval(text: &str) -> String {
             }
         })
         .collect::<String>()
+        .to_lowercase()
         .split_whitespace()
         .collect::<Vec<&str>>()
         .join(" ")
@@ -1100,6 +1116,17 @@ pub mod tests {
     use super::*;
     use crate::capture::stt::DEFAULT_MODEL_FILENAME;
     use crate::settings::LanguageSettings;
+
+    #[test]
+    fn scoring_ignores_the_casing_vox_itself_adds() {
+        // `text_normalize` gives every transcript line sentence casing, and a
+        // hand-written reference has none. Charging that as a word error would
+        // put a constant penalty on every run.
+        let metrics = calculate_accuracy("hello world", "Hello world.");
+        assert_eq!(metrics.wer, 0.0);
+        assert_eq!(metrics.substitutions, 0);
+        assert_eq!(normalize_for_eval("Hello, World!"), "hello world");
+    }
 
     #[test]
     fn test_eval_config_serialization() {

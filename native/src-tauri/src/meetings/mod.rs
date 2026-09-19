@@ -43,6 +43,7 @@
 //! - **A deleted meeting is deleted.** Meetily removes the database rows and
 //!   leaves the audio on disk.
 
+pub mod benchmark;
 pub mod capture;
 pub mod checkpoint;
 pub mod commands;

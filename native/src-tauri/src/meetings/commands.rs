@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::commands::{AppState, CommandError};
 use crate::sync::MutexExt;
 
+use super::benchmark;
 use super::engine::{MeetingEngineError, MeetingRecordingStatus};
 use super::import::{self, BatchConfig, ImportError};
 use super::model::{Meeting, MeetingListItem, MeetingSummary, TranscriptSegment};
@@ -101,6 +102,23 @@ impl From<MeetingStoreError> for CommandError {
             MeetingStoreError::NotFound(_) => "MEETING_NOT_FOUND",
             MeetingStoreError::InvalidId(_) => "MEETING_INVALID_ID",
             _ => "MEETING_STORAGE_FAILED",
+        };
+        CommandError::new(code, &err.to_string())
+    }
+}
+
+/// Benchmark failures map by cause, because the three the user can act on are
+/// different actions: fix the manifest, supply the audio, install the model.
+impl From<benchmark::BenchmarkError> for CommandError {
+    fn from(err: benchmark::BenchmarkError) -> Self {
+        let code = match err {
+            benchmark::BenchmarkError::Io(_) => "BENCHMARK_IO_FAILED",
+            benchmark::BenchmarkError::Json(_) | benchmark::BenchmarkError::Version { .. } => {
+                "BENCHMARK_BAD_MANIFEST"
+            }
+            benchmark::BenchmarkError::Invalid(_) => "BENCHMARK_INVALID",
+            benchmark::BenchmarkError::UnknownCase(_) => "BENCHMARK_UNKNOWN_CASE",
+            benchmark::BenchmarkError::Audio(_) => "BENCHMARK_AUDIO_FAILED",
         };
         CommandError::new(code, &err.to_string())
     }
@@ -1220,4 +1238,143 @@ mod tests {
         assert!(offered.contains(&"wav".to_string()));
         assert!(offered.contains(&"m4a".to_string()));
     }
+}
+
+// --- speech benchmark ---------------------------------------------------
+
+/// Key the benchmark's cancellation registers under. One run at a time: a
+/// benchmark that competed with itself for the single loaded model would
+/// measure the contention rather than the engine.
+const BENCHMARK_RUN_KEY: &str = "speech-benchmark";
+
+/// A starter corpus manifest — one entry per condition, with the recordings
+/// the user has to supply named rather than invented.
+#[tauri::command]
+pub fn speech_benchmark_template() -> benchmark::BenchmarkManifest {
+    benchmark::BenchmarkManifest::template()
+}
+
+/// Reads a corpus manifest and reports what it covers, without running it.
+///
+/// Separate from running because a corpus is assembled over weeks: "which
+/// conditions do I still have no recording for" is a question worth answering
+/// in a second rather than after an hour of decoding.
+#[tauri::command]
+pub fn inspect_speech_benchmark(
+    manifest_path: String,
+) -> Result<benchmark::BenchmarkManifest, CommandError> {
+    benchmark::BenchmarkManifest::load(std::path::Path::new(&manifest_path))
+        .map_err(CommandError::from)
+}
+
+/// What one benchmark run needs that the manifest does not say.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BenchmarkRequest {
+    /// Path to the corpus manifest. Its directory is the corpus root, and
+    /// every path inside it is resolved relative to that and may not escape.
+    pub manifest_path: String,
+    pub engine: benchmark::engines::EngineChoice,
+    #[serde(default)]
+    pub pacing: Option<String>,
+    /// Where to write the report. Defaults to a timestamped directory beside
+    /// the manifest.
+    #[serde(default)]
+    pub out_dir: Option<String>,
+    /// Decode overrides, so two profiles can be compared over one corpus.
+    #[serde(default)]
+    pub overrides: Option<BatchOverrides>,
+}
+
+/// Runs a corpus against one engine and writes the report.
+///
+/// Long-running by design — the long categories are half the point — so it
+/// reports progress and honours cancellation through the same registry
+/// imports use.
+#[tauri::command]
+pub async fn run_speech_benchmark(
+    app: AppHandle,
+    request: BenchmarkRequest,
+) -> Result<benchmark::BenchmarkReport, CommandError> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let manifest_path = std::path::PathBuf::from(&request.manifest_path);
+        let corpus_root = manifest_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| {
+                CommandError::new(
+                    "BENCHMARK_BAD_MANIFEST",
+                    "The manifest path has no directory to resolve the corpus against.",
+                )
+            })?;
+        let manifest = benchmark::BenchmarkManifest::load(&manifest_path)?;
+
+        let pacing = match request.pacing.as_deref() {
+            Some("realtime") => benchmark::Pacing::Realtime,
+            _ => benchmark::Pacing::Batch,
+        };
+        let overrides = request.overrides.unwrap_or_default();
+        let batch = batch_config(&state, &overrides)?;
+        let glossary = state.settings.lock_or_recover().dictionary.clone();
+
+        let cancel = state.meeting_imports.register(BENCHMARK_RUN_KEY);
+        let stt = state.stt.clone();
+        let choice = request.engine.clone();
+        let language = batch.language.clone();
+        let decoding = batch.decoding.clone();
+
+        let emitter = handle.clone();
+        let result = benchmark::run_manifest(
+            &corpus_root,
+            &manifest,
+            || choice.build(stt.clone(), language.clone(), decoding.clone()),
+            pacing,
+            &glossary,
+            &cancel,
+            |case_id, index, total| {
+                let _ = emitter.emit(
+                    BENCHMARK_PROGRESS_EVENT,
+                    BenchmarkProgress {
+                        case_id: case_id.to_string(),
+                        index,
+                        total,
+                    },
+                );
+            },
+        );
+        state.meeting_imports.finish(BENCHMARK_RUN_KEY);
+        let report = result?;
+
+        let out_dir = request
+            .out_dir
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                corpus_root.join("results").join(
+                    chrono::Utc::now()
+                        .format("%Y%m%dT%H%M%SZ")
+                        .to_string(),
+                )
+            });
+        report.write_to(&out_dir)?;
+        Ok(report)
+    })
+    .await
+    .map_err(|err| CommandError::new("MEETING_TASK_FAILED", &err.to_string()))?
+}
+
+/// Stops a benchmark part-way. The cases already finished are still reported.
+#[tauri::command]
+pub fn cancel_speech_benchmark(state: State<'_, AppState>) -> bool {
+    state.meeting_imports.cancel(BENCHMARK_RUN_KEY)
+}
+
+/// How far through a corpus a run is.
+pub const BENCHMARK_PROGRESS_EVENT: &str = "speech-benchmark-progress";
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BenchmarkProgress {
+    pub case_id: String,
+    pub index: usize,
+    pub total: usize,
 }

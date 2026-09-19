@@ -266,6 +266,64 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-015 — Long-form recordings are the primary accuracy benchmark, and the benchmark drives the meeting path
+
+- **Context**: Vox already had an accuracy harness, and it measured the wrong
+  pipeline over the wrong material. `capture::evaluation` scores the dictation
+  path — one clip, `VadConfig::process` over a whole buffer, one decode — across
+  a corpus of 35 dictation-length clips. A meeting is none of those things: it
+  is cut into spans by `meetings::segmenter`, those spans queue against a
+  bounded channel, and one decoder works through them in order.
+- **Decision**: A second harness, `meetings::benchmark`, which drives the
+  production `Segmenter`, `speech_health`, `text_normalize` and a queue of the
+  same depth and discipline as the live one. Its corpus is organised into
+  twelve named conditions, each with a minimum duration — 30 minutes for a
+  meeting, 5 for long-form speech, 3 for everything else — and a case below its
+  floor is reported as `UnderLength` rather than scored.
+- **Reason**: The failures worth measuring do not exist in a clip. Segmentation
+  cutting a clause in half, a backlog that grows until speech is dropped,
+  repetition at a forced split, a noise floor that drifts over an hour — none
+  of them can occur in ten words, and all of them are what a meeting recorder
+  is actually judged on. On top of that, a word error rate over a short
+  reference moves several points on one misheard clause, so two engines
+  separated by noise read as separated by quality.
+- **Alternatives considered**: Extending `capture::evaluation` (rejected — its
+  shape is one clip, one decode, and a meeting is neither; the two harnesses
+  answer different questions and should not be one function with a mode flag).
+  Synthesising a corpus with text-to-speech (rejected — it would measure the
+  synthesiser, not a room, and its failure modes are not a meeting's).
+- **Impact**: `meetings/benchmark/`, four `speech_benchmark_*` commands, and
+  `docs/testing.md` §1b. No audio ships: real meetings belong to the user, and
+  the manifest names what to supply rather than inventing it. Until a corpus
+  exists, every accuracy claim about Vox's transcription is an impression.
+- **Consequence for D-006**: the harness carries the no-fake-confidence rule
+  into measurement. An engine that reports no per-decode no-speech probability
+  records `None` and is not screened on a number it never produced — Parakeet
+  is such an engine, and its adapter declares it rather than leaving it to be
+  discovered from a report that looks comparable.
+
+---
+
+### D-016 — Word error rate is scored case-insensitively, because Vox adds the casing
+
+- **Context**: `text_normalize` gives every transcript line sentence casing and
+  terminal punctuation. A ground-truth reference is written by hand and has
+  neither. `normalize_for_eval` stripped punctuation and preserved case, and
+  `calculate_accuracy` compares words with `==`.
+- **Decision**: Fold case in `normalize_for_eval`, so both harnesses score the
+  same way.
+- **Reason**: Every run was being charged a word error for capitalization
+  nobody typed and no model got wrong. A roughly constant penalty is worse
+  than a large one, because it looks like signal: it survives every
+  comparison and shifts every absolute number. The technical-term check in the
+  same function already lowercased both sides, so the intent was always
+  case-insensitive matching and only half the function did it.
+- **Impact**: Word error rates from `capture::evaluation` computed before this
+  change are not comparable with ones computed after. Nothing user-facing reads
+  them, and no baseline had been recorded.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -276,9 +334,7 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-015 | Long-form recordings, not short clips, are the primary accuracy benchmark | Stage 1 — the existing corpus (`capture/evaluation.rs:get_curated_corpus`) is 35 dictation-length clips whose audio is not in the repo, and it is scored through `VadConfig::process` rather than through the meeting segmenter |
-| D-016 | Turn detection is a subsystem independent of ASR, with observable states | Stage 4 — needs §14.9's finalization-latency distribution first |
-| D-017 | Acoustic/prosodic turn detection is the baseline; no LLM for basic end-of-turn | Stage 4 |
+| D-017 | Turn detection is a subsystem independent of ASR, with observable states, and acoustic evidence is its baseline — no LLM for basic end-of-turn | Stage 4 — needs the audit's §14.9 finalization-latency distribution first |
 | D-018 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
 | D-019 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
 | D-020 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
