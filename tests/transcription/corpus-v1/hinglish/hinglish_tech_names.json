@@ -1,0 +1,20 @@
+{
+  "id": "hinglish_tech_names",
+  "corpus_version": "corpus-v1",
+  "language": "hinglish",
+  "category": "G_tech_domain",
+  "title": "Hinglish Domain Architecture with NavGurukul, SOSC, GHAR, and Technical Terms",
+  "description": "Technical code-switching featuring domain names: NavGurukul, SOSC, NGConnect, GHAR, Kishore, Abhishek, Macquarie, React, Tauri, Supabase, Rust.",
+  "voice": "hi-IN-SwaraNeural",
+  "rate": "+0%",
+  "word_count": 741,
+  "char_count": 5069,
+  "duration_seconds": 370.97,
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le",
+  "file_size_bytes": 11871020,
+  "tts_engine": "edge-tts-7.2.8",
+  "added_ambient_noise": false,
+  "generated_at": "2026-09-18T10:48:07.350520+00:00"
+}

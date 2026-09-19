@@ -1,0 +1,20 @@
+{
+  "id": "en_tech_domain",
+  "corpus_version": "corpus-v1",
+  "language": "en",
+  "category": "G_tech_domain",
+  "title": "Technical Domain Architecture with Specialized Vocabulary",
+  "description": "Deep domain focus with NavGurukul, SOSC, NGConnect, GHAR, Sama Saathi, Ares, Macquarie, Kishore, Abhishek, Rust, Tauri, Supabase, whisper.cpp.",
+  "voice": "en-US-JennyNeural",
+  "rate": "+0%",
+  "word_count": 831,
+  "char_count": 6451,
+  "duration_seconds": 403.66,
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le",
+  "file_size_bytes": 12917036,
+  "tts_engine": "edge-tts-7.2.8",
+  "added_ambient_noise": false,
+  "generated_at": "2026-09-18T10:45:26.296494+00:00"
+}

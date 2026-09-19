@@ -1,0 +1,20 @@
+{
+  "id": "hinglish_noisy_ops",
+  "corpus_version": "corpus-v1",
+  "language": "hinglish",
+  "category": "E_noisy",
+  "title": "Hinglish Operations Review with Background Acoustic Noise",
+  "description": "Realistic noisy meeting scenario with moderate background acoustic noise, testing VAD speech boundary detection and robust decoding.",
+  "voice": "hi-IN-MadhurNeural",
+  "rate": "+0%",
+  "word_count": 740,
+  "char_count": 4918,
+  "duration_seconds": 376.51,
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le",
+  "file_size_bytes": 12048428,
+  "tts_engine": "edge-tts-7.2.8",
+  "added_ambient_noise": true,
+  "generated_at": "2026-09-18T10:48:42.706437+00:00"
+}

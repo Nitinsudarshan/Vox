@@ -1,0 +1,2 @@
+id,language,category,words,audio_seconds,speech_seconds,wer_percent,cer_percent,substitutions,deletions,insertions,decode_rtf,pipeline_rtf,kept_segments,discarded_segments,suspicious_segments,failure_category
+en_clean_sprint,en,A_clean,811,340.68,323.14000000000004,15.17,8.03,86,26,11,3.0291762084545395,2.8732182693436656,43,0,0,DECODING
