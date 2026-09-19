@@ -763,6 +763,58 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-035 — Meeting intelligence reads the canonical transcript, and nothing else
+
+- **Context**: The report path was moved onto the assembler in Stage 7.
+  Promotion into the vault — and therefore into entities, memory and the
+  knowledge graph — still rendered raw segments directly.
+- **Decision**: `promote_meeting_to_scribble` assembles and renders the
+  canonical transcript like everything else.
+- **Reason**: a graph built on a different rendering of the same meeting is a
+  graph built on text no report was written from. The two would disagree about
+  what was said, with nothing to say which was right.
+- **Held by tests rather than by convention**: re-decoding a line changes what
+  downstream reads, and renaming a speaker changes the rendering and not one
+  byte of the evidence. Both are regression tests, in both directions.
+
+---
+
+### D-036 — A claim about a meeting carries its evidence, or says it has none
+
+- **Context**: "Why did Vox think this was an action item?" had no answer, and
+  the chain that would answer it — claim to canonical line to raw sequence to
+  span of audio — already existed link by link with no type carrying it.
+- **Decision**: `meetings::provenance`. `Evidence` names the meeting, the
+  canonical lines, the raw sequences and the seconds. `Attributed<T>` wraps
+  any claim, because a decision, an action, a question and a graph edge differ
+  in what they assert and not at all in how they are evidenced.
+- **It will not guess**: `locate` returns nothing when it cannot find the
+  quoted text, and refuses to anchor on fewer than three words — "the release"
+  occurs in half the lines of a meeting about a release. A claim with no
+  evidence is reported as such, never attached to the most similar line.
+- **Reason**: an approximate provenance is worse than none. It reads exactly
+  like a real one, so it does not merely fail to help — it actively misleads
+  the person checking, which is the one thing provenance exists to prevent.
+- **An untraceable claim is kept, not dropped**: it is still something the
+  model said, and hiding it would make the intelligence look better than it
+  is.
+
+---
+
+### D-037 — A report records the transcript it was written from
+
+- **Context**: `summary.json` carried a cache fingerprint — a hash answering
+  "may this be reused". Nothing answered "what was it made from".
+- **Decision**: the summary records the transcript's provenance, its line
+  count, and how many segments of recorded speech were missing from it.
+- **Reason**: a report generated from a transcript with a hole in it is a
+  different object from one generated from a complete transcript, and the two
+  should not be indistinguishable. The canonical renderer already marks gaps
+  in the text a model reads; this makes the same fact legible afterwards,
+  without re-deriving it.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -773,6 +825,5 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-035 | Downstream intelligence consumes the canonical transcript only | Stage 10 — the report path and Meeting Detail already do (D-028); actions, entities and the knowledge graph do not |
-| D-036 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-037 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-036 |
+| D-038 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-039 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-038 |

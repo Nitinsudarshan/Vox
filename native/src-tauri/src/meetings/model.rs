@@ -340,6 +340,23 @@ pub struct MeetingSummary {
     /// skips straight to the translation pass.
     #[serde(default)]
     pub fingerprint: Option<String>,
+    /// The transcript this report was written from.
+    ///
+    /// Not the same question as the cache fingerprint beside it. The
+    /// fingerprint answers "may this be reused"; this answers "what was it
+    /// made from" — which model, which pass, how many lines, and whether any
+    /// speech was missing from them. A report generated from a transcript
+    /// with a hole in it is a different object from one generated from a
+    /// complete transcript, and until now nothing said which it was.
+    #[serde(default)]
+    pub transcript_source: Option<TranscriptProvenance>,
+    /// Canonical lines the report was written from.
+    #[serde(default)]
+    pub transcript_segments: usize,
+    /// Segments of recorded speech the transcript did not contain. Non-zero
+    /// means the report describes an incomplete record, and says so.
+    #[serde(default)]
+    pub transcript_missing_segments: usize,
     #[serde(default)]
     pub chunk_count: u32,
     #[serde(default)]
@@ -365,6 +382,9 @@ impl MeetingSummary {
             model: None,
             language: None,
             fingerprint: None,
+            transcript_source: None,
+            transcript_segments: 0,
+            transcript_missing_segments: 0,
             chunk_count: 0,
             processing_ms: 0,
             started_at: Some(chrono::Utc::now().to_rfc3339()),

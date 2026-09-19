@@ -797,6 +797,67 @@ mod tests {
     }
 
     #[test]
+    fn a_change_to_the_raw_evidence_propagates_to_what_downstream_reads() {
+        // The contract in one direction: intelligence is downstream of the
+        // transcript, so re-decoding a line has to change what a report would
+        // be written from.
+        let before = build(&[raw(0, "we will ship on Thursday", 0.0, 3.0)]);
+        let after = build(&[raw(0, "we will ship on Tuesday", 0.0, 3.0)]);
+
+        assert_ne!(before.segments[0].text, after.segments[0].text);
+        assert_ne!(render_transcript(&before), render_transcript(&after));
+    }
+
+    #[test]
+    fn renaming_a_speaker_changes_the_rendering_and_not_the_evidence() {
+        // The contract in the other direction, and the one that is easy to
+        // get wrong: a name is the user's word about a voice, not a claim
+        // about what was said.
+        let segments = [raw(0, "we will ship on Thursday", 0.0, 3.0)];
+        let before = segments.to_vec();
+        let attribution = attributed(&[(0, "speaker-1")]);
+
+        let speaker = |label: &str| {
+            vec![Speaker {
+                id: "speaker-1".into(),
+                label: label.into(),
+                named_by_user: true,
+                channel: SegmentChannel::Microphone,
+                sample_start_seconds: 0.0,
+                sample_end_seconds: 3.0,
+                segment_count: 1,
+                speaking_seconds: 3.0,
+            }]
+        };
+
+        let anonymous = assemble(
+            "m",
+            &segments,
+            &attribution,
+            &speaker("Speaker 1"),
+            None,
+            &AssemblyOptions::default(),
+        );
+        let named = assemble(
+            "m",
+            &segments,
+            &attribution,
+            &speaker("Payal"),
+            None,
+            &AssemblyOptions::default(),
+        );
+
+        assert_eq!(segments.to_vec(), before, "the raw evidence is untouched");
+        assert_eq!(
+            anonymous.segments[0].text, named.segments[0].text,
+            "and so are the words"
+        );
+        assert_eq!(anonymous.segments[0].speaker_label, "Speaker 1");
+        assert_eq!(named.segments[0].speaker_label, "Payal");
+        assert!(render_transcript(&named).contains("Payal"));
+    }
+
+    #[test]
     fn a_canonical_transcript_round_trips_through_json() {
         let transcript = build(&[raw(0, "hello", 0.0, 1.0)]);
         let json = serde_json::to_string(&transcript).expect("serialize");

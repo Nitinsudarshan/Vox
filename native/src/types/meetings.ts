@@ -241,6 +241,19 @@ export interface MeetingSummary {
   model?: string | null;
   language?: string | null;
   fingerprint?: string | null;
+  /**
+   * The transcript this report was written from — a different question from
+   * the cache fingerprint beside it. The fingerprint says whether the report
+   * may be reused; this says what it was made from.
+   */
+  transcript_source?: TranscriptProvenance | null;
+  /** Canonical lines the report was written from. */
+  transcript_segments?: number;
+  /**
+   * Recorded speech the transcript did not contain. Non-zero means the report
+   * describes an incomplete record.
+   */
+  transcript_missing_segments?: number;
   chunk_count: number;
   processing_ms: number;
   started_at?: string | null;

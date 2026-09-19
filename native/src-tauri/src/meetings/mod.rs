@@ -54,6 +54,7 @@ pub mod engine;
 pub mod endurance;
 pub mod import;
 pub mod model;
+pub mod provenance;
 pub mod segmenter;
 pub mod speech_state;
 pub mod series;

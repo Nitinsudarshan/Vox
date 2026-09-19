@@ -356,6 +356,46 @@ What this is *not* yet: barge-in, interruption, or any full-duplex behaviour.
 The state is observable and the detector is reusable; nothing speculative is
 built on top of it.
 
+## What a claim about a meeting rests on
+
+*Why did Vox think this was an action item?*
+
+Without an answer, meeting intelligence is a set of assertions with no
+standing: a user who disagrees with one has nowhere to look, and a user who
+agrees has no reason to. The chain is short and every link already existed —
+
+```text
+claim  ─▶  canonical segment(s)  ─▶  raw ASR segment(s)  ─▶  span of audio
+```
+
+— and `provenance.rs` is the type that carries it. `Evidence` names the
+meeting, the canonical lines, the raw sequences underneath them (what a player
+seeks to) and the seconds they span. `Attributed<T>` wraps any claim —
+decision, action, question, graph edge — because they differ in what they
+assert and not at all in how they are evidenced.
+
+**It will not guess.** `Evidence::locate` matches a claim's quoted text
+against the transcript and returns nothing when it cannot find it, and refuses
+to anchor on fewer than three words. A claim with no evidence is reported as a
+claim with no evidence, never attached to whichever line was most similar: an
+approximate provenance reads exactly like a real one, and the point is to be
+checkable. Punctuation is ignored, because a model quoting a transcript
+reproduces the words and rarely the commas.
+
+Reports carry their own provenance too. `summary.json` records the transcript
+it was written from — which model, which pass, how many lines, and how many
+segments of recorded speech were *missing* from them. That is a different
+question from the cache fingerprint beside it: the fingerprint says whether
+the report may be reused, this says what it was made from. A report generated
+from a transcript with a hole in it is a different object from one generated
+from a complete transcript, and now it says so.
+
+Everything downstream reads the canonical transcript: the report pipeline,
+Meeting Detail, and promotion into the vault and the knowledge graph. Two
+regression tests hold the contract in both directions — re-decoding a line
+changes what a report would be written from, and renaming a speaker changes
+the rendering and not one byte of the evidence.
+
 ## Reports
 
 A template is JSON: a list of sections, each with a heading, an instruction in

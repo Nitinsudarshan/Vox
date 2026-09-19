@@ -304,6 +304,12 @@ impl SummaryService {
 
         let mut record = MeetingSummary::pending(meeting_id, &template.id);
         record.status = SummaryStatus::Processing;
+        // What this report was made from, recorded before it is made: a
+        // report generated from a transcript with a hole in it is a different
+        // object from one generated from a complete transcript.
+        record.transcript_source = canonical.source.clone();
+        record.transcript_segments = canonical.segments.len();
+        record.transcript_missing_segments = canonical.missing_sequences().len();
         record.previous_markdown = previous_markdown.clone();
         record.provider = Some(format!("{:?}", client.provider_type()));
         record.model = Some(client.model_name());

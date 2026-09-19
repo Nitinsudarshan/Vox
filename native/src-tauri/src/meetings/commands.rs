@@ -857,12 +857,25 @@ pub fn promote_meeting_to_scribble(
     let store = &state.meeting_store;
     let meeting = store.load_meeting(&meeting_id)?;
     let summary = store.load_summary(&meeting_id)?;
+    // The canonical transcript, not the raw segments: the knowledge layer is
+    // downstream of the transcript everything else reads, and handing it a
+    // different rendering would mean a graph built on text no report was
+    // written from.
     let body = summary
         .as_ref()
         .and_then(|s| s.markdown.clone())
         .filter(|markdown| !markdown.trim().is_empty())
         .unwrap_or_else(|| {
-            super::transcription::render_transcript(&store.load_transcript(&meeting_id).unwrap_or_default())
+            let segments = store.load_transcript(&meeting_id).unwrap_or_default();
+            let canonical = crate::meetings::canonical::assemble(
+                &meeting_id,
+                &segments,
+                &store.load_attribution(&meeting_id).unwrap_or_default(),
+                &store.load_speakers(&meeting_id).unwrap_or_default(),
+                meeting.transcript.clone(),
+                &crate::meetings::canonical::AssemblyOptions::default(),
+            );
+            crate::meetings::canonical::render_transcript(&canonical)
         });
     if body.trim().is_empty() {
         return Err(CommandError::new(
