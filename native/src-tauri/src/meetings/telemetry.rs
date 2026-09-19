@@ -167,6 +167,14 @@ pub struct CaptureHealth {
     pub audio_checkpoints_written: bool,
     /// Checkpoint writes that failed. Non-zero means the recording has gaps.
     pub checkpoint_failures: u64,
+    /// Audio that was captured and never reached the writer, because the
+    /// bounded channel to the pump was full or a device FIFO overran.
+    ///
+    /// Should be 0.0 on every ordinary recording. Non-zero is a hole in the
+    /// recording itself, which is worse than anything on the transcription
+    /// side, because nothing can regenerate it.
+    #[serde(default)]
+    pub audio_lost_seconds: f64,
 }
 
 /// How transcription went.
@@ -563,6 +571,24 @@ mod tests {
     }
 
     #[test]
+    fn lost_audio_is_a_separate_fact_from_a_failed_checkpoint() {
+        // Two different holes: one where the writer refused, one where the
+        // audio never reached the writer. They have different causes and the
+        // rollup must not collapse them into "something went wrong".
+        let capture = CaptureHealth {
+            recording_seconds: 600.0,
+            audio_checkpoints_written: true,
+            checkpoint_failures: 0,
+            audio_lost_seconds: 1.4,
+            ..CaptureHealth::default()
+        };
+        let rollup = MeetingDiagnostics::summarize("m", &[], capture, StopFacts::default());
+        assert!(rollup.capture.audio_checkpoints_written);
+        assert_eq!(rollup.capture.checkpoint_failures, 0);
+        assert!(rollup.capture.audio_lost_seconds > 0.0);
+    }
+
+    #[test]
     fn capture_health_and_transcription_health_are_separately_answerable() {
         // The wrong device: the stream opened and nothing was ever heard on
         // it. Nothing about transcription can express that, which is why they
@@ -575,6 +601,7 @@ mod tests {
             system_audio_heard: true,
             audio_checkpoints_written: true,
             checkpoint_failures: 0,
+            audio_lost_seconds: 0.0,
         };
         let rollup =
             MeetingDiagnostics::summarize("m", &[], capture, StopFacts::default());

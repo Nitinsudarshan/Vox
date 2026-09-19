@@ -374,6 +374,63 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-019 — A bounded loss beats an unbounded one, and the loss is counted
+
+- **Context**: The decode queue was carefully bounded and the audio channel
+  feeding it was not. `meetings/capture.rs` used an unbounded `std_mpsc`
+  channel from the mixer to the pump, and both device FIFOs were unbounded
+  `VecDeque`s. A pump that stalls — a slow disk during a checkpoint write —
+  grew memory with nothing shedding load and nothing reporting depth.
+- **Decision**: The channel holds ten seconds of audio and the mixer uses
+  `try_send`; past that a block is shed and counted. Each device FIFO holds a
+  minute and discards its oldest samples, counted. Both totals reach
+  `CaptureHealth::audio_lost_seconds`.
+- **Reason**: Unbounded is not the safe option, it is the option whose failure
+  is worst. Against an unbounded channel a stalled pump grows memory until the
+  process dies, and that costs every second recorded since the last
+  checkpoint. Shedding twenty milliseconds costs twenty milliseconds. Neither
+  is good; only one of them is bounded, and only one of them can be reported.
+- **Why the mixer sheds rather than blocks**: blocking would push the backlog
+  one level up into the device FIFOs, which the audio callbacks write to. The
+  shed keeps the mixer draining, which is what keeps those FIFOs empty.
+- **Why the oldest samples go**: what someone just said matters more than what
+  they said a minute ago.
+- **Consequence**: `audio_lost_seconds` should be 0.0 on every ordinary
+  recording. A non-zero value is the most serious thing in the diagnostics: it
+  is audio that is in neither the recording nor the transcript, and nothing can
+  regenerate it.
+
+---
+
+### D-020 — Audio warnings travel on their own channel, and both directions of device failure are reported
+
+- **Context**: The audit found the pattern that transcript loss was loud and
+  audio loss was silent. A checkpoint writer that could not be created logged
+  at `error` and the recording continued with nothing being saved; a failed
+  checkpoint write did the same; and a microphone that failed while system
+  audio opened produced no warning at all, while the reverse case had one.
+- **Decision**: A `meeting-recording-warning` event, separate from
+  `meeting-transcription-warning`, carrying `microphone`, `system_audio`,
+  `audio_storage` or `audio_shed`. `run_pump` is given an `AppHandle` so it can
+  speak. The microphone-failed case gets the warning the system-audio case
+  already had.
+- **Reason for the separate event**: they are different failures with different
+  remedies, and the audio one is the more serious. Mixing them would put "this
+  meeting is not being recorded" in the same stream as "one line is missing".
+- **Reason for warning during the meeting**: it is the only point at which the
+  user can do anything — change device, free disk, restart. A log line
+  discovered afterwards is a post-mortem.
+- **Warned once, not per failure**: a full disk fails every write, and one
+  warning per 30 seconds of audio would bury the first.
+- **Deliberately not done**: separate `mic.wav` / `system.wav` files. Writing
+  per-channel audio triples the disk a meeting costs, and the only thing it
+  buys is per-channel decoding, which the audit classified MEASURE FIRST
+  (§13.18) because it doubles decode cost for a benefit nobody has measured.
+  Per-channel *energy* — which is all channel attribution needs — is already
+  kept.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -384,12 +441,12 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-019 | Turn detection is a subsystem independent of ASR, with observable states, and acoustic evidence is its baseline — no LLM for basic end-of-turn | Stage 4 — the audit's §14.9 finalization-latency distribution is now measurable per meeting (D-017) |
-| D-020 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
-| D-021 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
-| D-022 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
-| D-023 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-022 |
-| D-024 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-025 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-026 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-019 and D-025 |
-| D-027 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-020 exists to express it |
+| D-021 | Turn detection is a subsystem independent of ASR, with observable states, and acoustic evidence is its baseline — no LLM for basic end-of-turn | Stage 4 — the audit's §14.9 finalization-latency distribution is now measurable per meeting (D-017) |
+| D-022 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
+| D-023 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
+| D-024 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
+| D-025 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-024 |
+| D-026 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-027 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-028 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-027 |
+| D-029 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-022 exists to express it |

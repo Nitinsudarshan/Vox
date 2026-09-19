@@ -28,6 +28,7 @@ import {
   type SummaryProgress,
   type TranscriptSegment,
   type TranscriptionWarning,
+  type RecordingWarning,
 } from '@/types/meetings';
 
 /** Polls the recording clock while a meeting is in flight. */
@@ -277,6 +278,13 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         }
       }),
       listen<TranscriptionWarning>(MEETING_EVENTS.transcriptionWarning, (event) => {
+        notify('error', event.payload.message);
+      }),
+      // Audio problems arrive on their own channel. They are raised while the
+      // meeting is still running precisely because that is the only point at
+      // which the user can do anything about them — move to another device,
+      // free disk, or start again.
+      listen<RecordingWarning>(MEETING_EVENTS.recordingWarning, (event) => {
         notify('error', event.payload.message);
       }),
     ];

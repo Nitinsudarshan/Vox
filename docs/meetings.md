@@ -239,10 +239,23 @@ gap is real.
 
 ## Failure and recovery
 
+Audio failures and transcript failures are reported on **separate channels**,
+because they are not the same kind of problem. `meeting-transcription-warning`
+means a line is missing from the transcript; `meeting-recording-warning` means
+something is wrong with the recording itself — and that is the more serious of
+the two, because a transcript can be regenerated from a recording and a
+recording cannot be regenerated from anything. Both reach the user while the
+meeting is still running, which is the only point at which they can act: move
+to another device, free some disk, start again.
+
 | What happens | What the user gets |
 |---|---|
 | Vox is killed mid-recording | Audio up to the last 30 s checkpoint, the transcript flushed so far, and the meeting marked complete on next launch with a note saying it was interrupted. |
 | System audio will not open | The recording proceeds with the microphone alone, and says so — in the recorder, on the list row, and in the summarization prompt. |
+| The microphone will not open | The recording proceeds with system audio alone, and says so. The mirror of the row above, and the more serious half: without it the person running Vox is the one missing from their own meeting. |
+| Audio cannot be written at all | A recording warning during the meeting, and the diagnostics say `audio_checkpoints_written: false` afterwards. The transcript is still produced — it is most of the value — but the user is told while there is still a meeting to move. |
+| A checkpoint write fails part-way | Counted, warned once (a full disk fails every write, and one warning per 30 s of audio would bury the first), and reported as gaps in the recording. |
+| Audio arrives faster than it can be written | The channel to the pump holds ten seconds; past that a 20 ms block is shed, counted in `audio_lost_seconds`, and warned once. Unbounded was the previous behaviour and it is worse: memory grows until the process dies, which costs every second since the last checkpoint instead of twenty milliseconds. |
 | No speech model installed | Recording is refused before anything is captured, rather than producing audio that can never become a transcript. |
 | Transcription falls behind real time | The queue holds 64 segments; past that a segment is refused, counted, reported in the UI and recorded on the meeting. |
 | A segment will not decode | Counted, reported once, and the meeting's `dropped_segments` says how many. |

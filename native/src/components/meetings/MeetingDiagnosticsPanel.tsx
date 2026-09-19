@@ -88,6 +88,7 @@ export const MeetingDiagnosticsPanel: React.FC<MeetingDiagnosticsPanelProps> = (
     (capture.system_audio_opened && !capture.system_audio_heard);
   const audioIncomplete =
     !capture.audio_checkpoints_written || capture.checkpoint_failures > 0;
+  const audioLost = capture.audio_lost_seconds > 0;
   const lostSpeech = transcription.segments_dropped + transcription.segments_failed;
   const behind = transcription.pipeline_rtf > 1;
 
@@ -121,6 +122,16 @@ export const MeetingDiagnosticsPanel: React.FC<MeetingDiagnosticsPanelProps> = (
             {capture.audio_checkpoints_written
               ? `${capture.checkpoint_failures} checkpoint write(s) failed, so the recording has gaps.`
               : 'No audio was saved for this meeting. The transcript is all that exists of it.'}
+          </span>
+        </p>
+      )}
+
+      {audioLost && (
+        <p className="flex items-start gap-2 text-[11px] text-destructive mb-2">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            {duration(capture.audio_lost_seconds)} of audio never reached the writer, because it
+            arrived faster than the disk took it. That much of the recording is missing.
           </span>
         </p>
       )}

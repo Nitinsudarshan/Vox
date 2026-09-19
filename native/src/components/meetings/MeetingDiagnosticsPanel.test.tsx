@@ -21,6 +21,7 @@ const capture = (overrides: Partial<CaptureHealth> = {}): CaptureHealth => ({
   system_audio_heard: true,
   audio_checkpoints_written: true,
   checkpoint_failures: 0,
+  audio_lost_seconds: 0,
   ...overrides,
 });
 
@@ -133,6 +134,18 @@ describe('MeetingDiagnosticsPanel', () => {
       />,
     );
     expect(screen.getByText(/3 checkpoint write\(s\) failed/)).toBeInTheDocument();
+  });
+
+  it('says how much of the recording is missing when audio was shed', () => {
+    // The worst kind of loss: it is in neither the audio nor the transcript,
+    // and nothing can regenerate it.
+    render(
+      <MeetingDiagnosticsPanel
+        meetingId="meeting-1"
+        diagnostics={diagnostics({ capture: capture({ audio_lost_seconds: 2.5 }) })}
+      />,
+    );
+    expect(screen.getByText(/2.5 s of audio never reached the writer/)).toBeInTheDocument();
   });
 
   it('names the wrong-device signature rather than showing a silent meter', () => {

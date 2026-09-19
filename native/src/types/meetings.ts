@@ -283,10 +283,24 @@ export const MEETING_EVENTS = {
   segment: 'meeting-transcript-segment',
   transcriptionProgress: 'meeting-transcription-progress',
   transcriptionWarning: 'meeting-transcription-warning',
+  recordingWarning: 'meeting-recording-warning',
   summaryProgress: 'meeting-summary-progress',
   importProgress: 'meeting-import-progress',
   translationProgress: 'meeting-translation-progress',
 } as const;
+
+/**
+ * Something went wrong with the *recording*, as distinct from the transcript.
+ *
+ * Kept separate because a transcript can be regenerated from a recording and a
+ * recording cannot be regenerated from anything, so these are the more serious
+ * of the two and must not be mixed in with decoder complaints.
+ */
+export interface RecordingWarning {
+  /** `microphone`, `system_audio`, `audio_storage` or `audio_shed`. */
+  kind: string;
+  message: string;
+}
 
 /** How far a transcript translation has got. */
 export interface TranslationProgress {
@@ -412,6 +426,13 @@ export interface CaptureHealth {
   system_audio_heard: boolean;
   audio_checkpoints_written: boolean;
   checkpoint_failures: number;
+  /**
+   * Audio that was captured and never reached the writer. Should be 0 on any
+   * ordinary recording; non-zero is a hole in the recording itself, which is
+   * worse than anything on the transcription side because nothing can
+   * regenerate it.
+   */
+  audio_lost_seconds: number;
 }
 
 /** How transcription went. */
