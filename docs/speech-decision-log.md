@@ -863,14 +863,83 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-040 — Full duplex is a layer above the meeting pipeline, not a replacement for it
+
+- **Context**: Stage 12 asked for full-duplex readiness. The tempting reading
+  is that a speech-to-speech model eventually replaces the capture → segment →
+  decode → assemble chain with one component.
+- **Decision**: build `conversation/` as a state machine and an event model
+  over the pieces that already exist — `meetings::speech_state` for the turn
+  verdict, `tts::SpeechQueue` for a voice that stops mid-sentence — and state
+  in the module itself that this is not a migration away from the meeting
+  pipeline.
+- **Reason**: a meeting transcript's value in Vox is that every claim traces
+  back to a span of audio — claim → canonical segment (D-028) → raw ASR
+  sequence → sample range (`meetings::provenance`). An end-to-end speech model
+  has no text turn to attach that chain to, so adopting one for meetings would
+  trade the property that makes the output trustworthy for latency meetings do
+  not need. A live conversation is the opposite trade, and is a different
+  product.
+- **What was built**: `ConversationState`, `ConversationEvent`,
+  `ConversationAction`, `ConversationMachine`. Pure — events in, actions out,
+  no audio, no model, no I/O, and nothing wired to it. Actions are returned
+  rather than performed, so the machine is testable by feeding it a sequence
+  of verdicts and the things it drives stay swappable.
+- **The one property that cannot be added later**: the microphone stays open
+  while Vox speaks. `ConversationState::microphone_open` is true in every
+  state but `Idle`, and a test pins it. A system whose microphone closes
+  during playback has a recorder and a speaker, not a conversation, and every
+  layer above that assumption has to be redesigned to change it.
+- **`Thinking` belongs to Vox**: the user has stopped and is waiting, so a
+  token from the model is a continuation. But the microphone stays open and
+  speech during `Thinking` returns the turn and abandons the answer in
+  flight — somebody who adds a sentence while Vox thinks has not finished,
+  whatever the acoustics decided 200 ms ago.
+- **What is deliberately absent**: a playback path, a duplex device
+  configuration, echo cancellation, a backchannel classifier, and any product
+  policy about when Vox should stop talking. `docs/speech-duplex.md` lists,
+  per future, what is decided and what is still entirely unbuilt — because a
+  seam that implies more than it delivers is worse than no seam.
+- **Depends on** D-021 (speech state as its own subsystem) and D-038/D-039 (a
+  voice that can be cancelled mid-sentence). Neither needed a change.
+
+---
+
+### D-041 — Barge-in holds for a run of frames, because Vox can hear itself
+
+- **Context**: on a laptop with no headphones the microphone hears the
+  speaker. A detector that treats any speech during playback as an
+  interruption interrupts Vox with Vox, every time, and the user reports it as
+  a flaky microphone rather than as a policy error.
+- **Real fix, and why it is not available**: acoustic echo cancellation needs
+  the playback signal as a reference, aligned sample-for-sample against what
+  is being played. `meetings::capture` takes the output device in loopback to
+  record *other people*, not to subtract Vox from its own input, and nothing
+  in the tree lines the two up.
+- **Decision**: put the guard in the state model. While Vox has the turn,
+  interruption requires `BargeInPolicy::frames_to_interrupt` **consecutive**
+  `Speaking` observations — six 20 ms frames, 120 ms, by default.
+- **Reason consecutive rather than cumulative**: echo arrives in bursts that
+  track Vox's own syllables, with gaps between them, so a cumulative counter
+  trips on any sufficiently long answer. A test feeds exactly that pattern —
+  speech, silence, speech, silence — and asserts the run never accumulates.
+- **Stated cost**: this makes talking over Vox harder for everyone, including
+  people on headphones with no echo at all. 120 ms is a guess at the balance,
+  which is why it is a field on a policy struct rather than a constant, and
+  why `BargeInPolicy::disabled()` exists for surfaces where Vox should finish
+  its sentence.
+- **Labelled as a mitigation**, in the module doc and in
+  `docs/speech-duplex.md`. A hold time is not echo cancellation and must not
+  be recorded as though it were; the measurement that would justify a
+  different number has not been taken, and inventing one would be a guess
+  wearing a number's clothing.
+
+---
+
 ## Reserved, not yet decided
 
-These ids are reserved so that the staged plan's numbering and this log's do
-not diverge. Each is a **proposal** in
-[speech-architecture-audit.md](speech-architecture-audit.md) §13, not a
-decision, and each becomes an entry above only when the stage that implements
-it lands — with the measurement that justified it.
-
-| Id | Proposal | Blocked on |
-|---|---|---|
-| D-040 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 (turn state) and D-038 (a cancellable voice) |
+Nothing. Every id the staged plan reserved has landed with the stage that
+implemented it, D-001 through D-041 above. New proposals belong in
+[speech-architecture-audit.md](speech-architecture-audit.md) §13 until the
+work that justifies them exists — a decision recorded before its measurement
+is a preference.

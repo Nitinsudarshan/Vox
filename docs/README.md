@@ -21,6 +21,7 @@ is right and the document is a bug to be fixed in the same change.
 | [capture.md](capture.md) | Web capture: the browser extension, the loopback bridge, the reveal-and-extract architecture, what a capture may claim about its own completeness, and why captured content is never an instruction. |
 | [testing.md](testing.md) | What is tested, with what, and where the tests live. |
 | [speech-providers.md](speech-providers.md) | The speech engines behind `SpeechRecognizer`: what each can do, what it cannot, what is unmeasured, and how a task picks one. |
+| [speech-duplex.md](speech-duplex.md) | Speaking and listening at the same time: the conversation state model, why the microphone stays open while Vox talks, why a laptop's own speakers break naive barge-in, and what full duplex, backchannels, a real-time assistant and STS would each still have to build. |
 | [GOOGLE_OAUTH_SETUP.md](GOOGLE_OAUTH_SETUP.md) | The OAuth 2.0 PKCE architecture and Google Cloud setup. |
 
 ## Decision records

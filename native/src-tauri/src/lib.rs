@@ -3,6 +3,7 @@ pub mod calendar;
 pub mod capture;
 pub mod commands;
 pub mod context;
+pub mod conversation;
 pub mod developer;
 pub mod diagnostics;
 pub mod entities;

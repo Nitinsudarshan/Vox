@@ -354,7 +354,10 @@ stopped) — and how much quiet was waited through to decide.
 
 What this is *not* yet: barge-in, interruption, or any full-duplex behaviour.
 The state is observable and the detector is reusable; nothing speculative is
-built on top of it.
+built on top of it. The turn model that *would* consume it — states, events,
+and an interruption policy, with no audio behind any of it — is
+`conversation::ConversationMachine`; see
+[speech-duplex.md](speech-duplex.md).
 
 ## What a claim about a meeting rests on
 
