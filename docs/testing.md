@@ -136,7 +136,8 @@ resolved model paths and settings:
 | `cancel_speech_benchmark` | stops part-way; finished cases are still reported |
 
 `run_speech_benchmark` takes an `engine` (`whisper` with a model path, or
-`parakeet` with a model directory) and a `pacing`:
+`parakeet` with a model directory — a `RecognizerChoice`, which deliberately
+has no variant that can hold a credential) and a `pacing`:
 
 - **`batch`** — as fast as the decoder manages. Measures accuracy and real-time
   factor. Queue depth and drops are meaningless here, because nothing is racing.
@@ -162,7 +163,10 @@ Three honesty constraints are built in rather than left to the reader:
 
 - **No invented confidence.** An engine that reports no per-decode no-speech
   probability records `None`, and is not screened on a number it never
-  produced. Parakeet is such an engine and its adapter says so.
+  produced. Parakeet is such an engine, and its declared capabilities travel
+  into the report with it, so a comparison states what one side could not do
+  rather than leaving a reader to infer it from a column of zeroes. See
+  `docs/speech-providers.md`.
 - **`pipeline_rtf` is the number that matters**, not `decode_rtf`. Audio
   arrives at wall-clock rate, so above 1.0 the backlog grows by
   `L × (rtf − 1)` over a meeting of length `L` and takes that long to clear

@@ -20,6 +20,7 @@ is right and the document is a bug to be fixed in the same change.
 | [meetings.md](meetings.md) | Meetings: dual-stream capture, streaming segmentation, the serial decoder, durable checkpoints, templated reports, and every place this deliberately differs from Meetily. |
 | [capture.md](capture.md) | Web capture: the browser extension, the loopback bridge, the reveal-and-extract architecture, what a capture may claim about its own completeness, and why captured content is never an instruction. |
 | [testing.md](testing.md) | What is tested, with what, and where the tests live. |
+| [speech-providers.md](speech-providers.md) | The speech engines behind `SpeechRecognizer`: what each can do, what it cannot, what is unmeasured, and how a task picks one. |
 | [GOOGLE_OAUTH_SETUP.md](GOOGLE_OAUTH_SETUP.md) | The OAuth 2.0 PKCE architecture and Google Cloud setup. |
 
 ## Decision records

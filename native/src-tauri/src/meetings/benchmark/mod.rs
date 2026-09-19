@@ -26,6 +26,10 @@
 //! events. The queue geometry is taken from the same constant so the two cannot
 //! drift silently, and a test enforces it.
 //!
+//! The engines come from [`crate::capture::recognizer`], so a corpus runs
+//! against the same interface the rest of Vox will use and an engine's
+//! declared limits travel into the report with it.
+//!
 //! ## Nothing here changes a recording
 //!
 //! No function in this module is reachable from [`crate::meetings::engine`].
@@ -42,18 +46,20 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::capture::evaluation::{calculate_accuracy, normalize_for_eval};
+use crate::capture::recognizer::{
+    RecognitionRequest, RecognizerCapabilities, SpeechRecognizer,
+};
 use crate::capture::speech_health::{self, DecodeEvidence};
 use crate::capture::text_normalize;
 
 use super::segmenter::{Segmenter, SpeechSegment, SEGMENT_SAMPLE_RATE};
 use super::transcription::MAX_QUEUED_SEGMENTS;
-
-pub mod engines;
 
 /// Audio handed to the segmenter per iteration.
 ///
@@ -325,41 +331,22 @@ fn check_relative(value: &str, case_id: &str, field: &str) -> Result<(), Benchma
 /// What produced a run's transcript.
 ///
 /// Recorded on every result so two runs are comparable only when they say they
-/// are. `model` is a filename or model id, never a path — a report is shared
-/// and a path names a machine and often a person.
+/// are — including what each engine *cannot* do, which is why the capabilities
+/// travel with it. A report comparing Whisper and Parakeet can then say that
+/// one of them reports no no-speech evidence, rather than leaving a reader to
+/// infer it from a column of zeroes.
+///
+/// `model` is a filename or model id, never a path: a report is shared, and a
+/// path names a machine and usually a person.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineDescriptor {
     pub engine: String,
     pub model: String,
-    /// The language the engine was pinned to, or `None` for auto-detection.
+    /// The language the run pinned, or `None` for auto-detection.
     pub language: Option<String>,
     /// Decode profile, in whatever terms the engine uses.
     pub profile: String,
-}
-
-/// One decode's output.
-///
-/// `mean_no_speech_prob` is `None` for an engine that does not report one.
-/// There is no default and no derived stand-in: a number invented here would
-/// be indistinguishable from a measurement downstream, which is the mistake
-/// `docs/speech-decision-log.md` D-006 exists to prevent.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DecodeOutput {
-    pub text: String,
-    pub mean_no_speech_prob: Option<f32>,
-}
-
-/// The one thing the benchmark needs an engine to do.
-///
-/// Deliberately narrower than a transcription provider: the benchmark supplies
-/// the audio the segmenter chose, and wants text back. Stage 5's
-/// `SpeechRecognizer` is the general interface; this is the slice of it a
-/// measurement needs, so a new engine can be benchmarked before it is
-/// integrated.
-pub trait BenchmarkDecoder: Send {
-    fn descriptor(&self) -> EngineDescriptor;
-
-    fn decode(&mut self, samples: &[f32]) -> Result<DecodeOutput, String>;
+    pub capabilities: RecognizerCapabilities,
 }
 
 // --- results ------------------------------------------------------------
@@ -530,6 +517,37 @@ pub struct BenchmarkRun {
     pub errors: Vec<String>,
 }
 
+/// Everything about a run that is not the engine and not the corpus.
+///
+/// Bundled because they travel together and because three of the four are
+/// `Option<String>`/`bool`, which is the shape where a transposed pair
+/// compiles cleanly and measures the wrong thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunProfile {
+    pub pacing: Pacing,
+    /// Language to pin, or `None` to let the engine decide. Ignored by an
+    /// engine whose language is fixed — which is why the descriptor carries
+    /// the capability that says so.
+    pub language: Option<String>,
+    /// Ask for English out of non-English speech in one pass.
+    pub translate: bool,
+    /// Decode profile, in whatever terms the engine uses. Recorded so two runs
+    /// are comparable only when they say they are.
+    pub profile: String,
+}
+
+impl RunProfile {
+    /// A batch run with nothing pinned — the default shape of a comparison.
+    pub fn batch() -> Self {
+        Self {
+            pacing: Pacing::Batch,
+            language: None,
+            translate: false,
+            profile: "default".to_string(),
+        }
+    }
+}
+
 /// How audio is fed to the segmenter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -603,15 +621,23 @@ pub struct CaseRunner {
 
 impl CaseRunner {
     /// Starts the decode thread and the clock.
-    pub fn start(decoder: Box<dyn BenchmarkDecoder>, pacing: Pacing, glossary: &[String]) -> Self {
-        let engine = decoder.descriptor();
+    pub fn start(recognizer: Arc<dyn SpeechRecognizer>, run: RunProfile, glossary: &[String]) -> Self {
+        let descriptor = recognizer.descriptor();
+        let engine = EngineDescriptor {
+            engine: descriptor.id,
+            model: descriptor.model,
+            language: run.language.clone(),
+            profile: run.profile.clone(),
+            capabilities: descriptor.capabilities,
+        };
+        let pacing = run.pacing;
         let started = Instant::now();
         let (tx, rx) = std_mpsc::sync_channel::<QueuedSegment>(MAX_QUEUED_SEGMENTS);
-        let language = engine.language.clone();
+        let language = run.language.clone();
         let glossary = glossary.to_vec();
         let consumer = std::thread::Builder::new()
             .name("vox-benchmark-decode".into())
-            .spawn(move || consume(rx, decoder, started, language, glossary))
+            .spawn(move || consume(rx, recognizer, started, language, run.translate, glossary))
             .expect("spawning the benchmark decode thread");
 
         Self {
@@ -728,11 +754,11 @@ pub fn run_case(
     case: &BenchmarkCase,
     samples: &[f32],
     reference: Option<&str>,
-    decoder: Box<dyn BenchmarkDecoder>,
-    pacing: Pacing,
+    recognizer: Arc<dyn SpeechRecognizer>,
+    run: RunProfile,
     glossary: &[String],
 ) -> BenchmarkRun {
-    let mut runner = CaseRunner::start(decoder, pacing, glossary);
+    let mut runner = CaseRunner::start(recognizer, run, glossary);
     runner.push(samples);
     runner.finish(case, reference)
 }
@@ -740,9 +766,10 @@ pub fn run_case(
 /// The serial decoder, in the shape the live worker uses.
 fn consume(
     rx: std_mpsc::Receiver<QueuedSegment>,
-    mut decoder: Box<dyn BenchmarkDecoder>,
+    recognizer: Arc<dyn SpeechRecognizer>,
     started: Instant,
     language: Option<String>,
+    translate: bool,
     glossary: Vec<String>,
 ) -> Vec<SegmentRecord> {
     let mut records = Vec::new();
@@ -755,12 +782,16 @@ fn consume(
         let profile = speech_health::profile_speech(&job.segment.samples, SEGMENT_SAMPLE_RATE);
 
         let decode_start = Instant::now();
-        let decoded = decoder.decode(&job.segment.samples);
+        let decoded = recognizer.transcribe(RecognitionRequest {
+            samples: &job.segment.samples,
+            language: language.clone(),
+            translate,
+        });
         let decode_ms = decode_start.elapsed().as_millis();
 
         let post_start = Instant::now();
         let (outcome, text) = match decoded {
-            Err(message) => (SegmentOutcome::Failed(message), String::new()),
+            Err(err) => (SegmentOutcome::Failed(err.to_string()), String::new()),
             Ok(output) if output.text.trim().is_empty() => (SegmentOutcome::Empty, String::new()),
             Ok(output) => {
                 let evidence = DecodeEvidence {
@@ -769,7 +800,7 @@ fn consume(
                     // An engine that reports nothing must not be punished by a
                     // screen tuned for one that does, so the neutral value is
                     // "definitely speech" rather than an invented estimate.
-                    mean_no_speech_prob: output.mean_no_speech_prob.unwrap_or(0.0),
+                    mean_no_speech_prob: output.mean_no_speech_prob().unwrap_or(0.0),
                 };
                 match speech_health::screen_decode(
                     "meeting-benchmark",
@@ -1129,15 +1160,15 @@ pub fn resolve_case(
 pub fn run_case_from_disk(
     corpus_root: &Path,
     case: &BenchmarkCase,
-    decoder: Box<dyn BenchmarkDecoder>,
-    pacing: Pacing,
+    recognizer: Arc<dyn SpeechRecognizer>,
+    run: RunProfile,
     glossary: &[String],
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<BenchmarkRun, BenchmarkError> {
     use crate::meetings::import::{self, ImportError};
 
     let (audio_path, reference) = resolve_case(corpus_root, case)?;
-    let mut runner = CaseRunner::start(decoder, pacing, glossary);
+    let mut runner = CaseRunner::start(recognizer, run, glossary);
     {
         let mut sink = |chunk: &[f32], _total: Option<f64>| -> Result<(), ImportError> {
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1154,16 +1185,14 @@ pub fn run_case_from_disk(
 
 /// Runs every case in a manifest against one engine.
 ///
-/// `build_decoder` is called per case rather than once, so an engine that
-/// holds a model can be rebuilt between cases and a failure on one case does
-/// not poison the rest. A case that cannot run becomes an error row instead of
-/// aborting the corpus — an hour into a long run, losing the finished cases to
-/// a missing file is its own kind of defect.
+/// A case that cannot run becomes an error row rather than aborting the
+/// corpus: an hour into a long run, losing the finished cases to one missing
+/// file is its own kind of defect.
 pub fn run_manifest(
     corpus_root: &Path,
     manifest: &BenchmarkManifest,
-    mut build_decoder: impl FnMut() -> Result<Box<dyn BenchmarkDecoder>, BenchmarkError>,
-    pacing: Pacing,
+    mut build_recognizer: impl FnMut() -> Result<Arc<dyn SpeechRecognizer>, BenchmarkError>,
+    run: RunProfile,
     glossary: &[String],
     cancel: &std::sync::atomic::AtomicBool,
     mut progress: impl FnMut(&str, usize, usize),
@@ -1177,10 +1206,13 @@ pub fn run_manifest(
             break;
         }
         progress(&case.id, index, total);
-        let decoder = build_decoder()?;
-        match run_case_from_disk(corpus_root, case, decoder, pacing, glossary, cancel) {
-            Ok(run) => runs.push(run),
-            Err(err) => runs.push(failed_run(case, pacing, err)),
+        // Per case rather than once: an engine that holds a model can be
+        // rebuilt between cases, and a failure on one case becomes an error
+        // row instead of losing the hour of finished ones behind it.
+        let recognizer = build_recognizer()?;
+        match run_case_from_disk(corpus_root, case, recognizer, run.clone(), glossary, cancel) {
+            Ok(finished) => runs.push(finished),
+            Err(err) => runs.push(failed_run(case, run.pacing, err)),
         }
     }
 
@@ -1199,6 +1231,7 @@ fn failed_run(case: &BenchmarkCase, pacing: Pacing, err: BenchmarkError) -> Benc
             model: "none".into(),
             language: None,
             profile: "none".into(),
+            capabilities: RecognizerCapabilities::local_batch(),
         },
         pacing,
         pipeline: PipelineReport::default(),
@@ -1218,47 +1251,77 @@ fn failed_run(case: &BenchmarkCase, pacing: Pacing, err: BenchmarkError) -> Benc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    /// A decoder that returns scripted text, so every metric below is checked
-    /// against a known answer rather than against whatever a model happened to
-    /// say on the day.
-    struct ScriptedDecoder {
-        lines: Vec<Result<String, String>>,
-        next: usize,
-        no_speech_prob: Option<f32>,
+    /// A recognizer that returns scripted text, so every metric below is
+    /// checked against a known answer rather than against whatever a model
+    /// happened to say on the day.
+    struct ScriptedRecognizer {
+        lines: Mutex<std::vec::IntoIter<Result<String, String>>>,
+        reports_no_speech_prob: bool,
     }
 
-    impl ScriptedDecoder {
-        fn new(lines: Vec<Result<String, String>>) -> Box<Self> {
-            Box::new(Self {
-                lines,
-                next: 0,
-                no_speech_prob: Some(0.0),
+    impl ScriptedRecognizer {
+        fn new(lines: Vec<Result<String, String>>) -> Arc<Self> {
+            Arc::new(Self {
+                lines: Mutex::new(lines.into_iter()),
+                reports_no_speech_prob: true,
+            })
+        }
+
+        /// An engine with no no-speech probability to report — Parakeet's
+        /// shape, and the case the screen must not punish.
+        fn without_no_speech_prob(lines: Vec<Result<String, String>>) -> Arc<Self> {
+            Arc::new(Self {
+                lines: Mutex::new(lines.into_iter()),
+                reports_no_speech_prob: false,
             })
         }
     }
 
-    impl BenchmarkDecoder for ScriptedDecoder {
-        fn descriptor(&self) -> EngineDescriptor {
-            EngineDescriptor {
-                engine: "scripted".into(),
+    impl SpeechRecognizer for ScriptedRecognizer {
+        fn descriptor(&self) -> crate::capture::recognizer::RecognizerDescriptor {
+            crate::capture::recognizer::RecognizerDescriptor {
+                id: "scripted".into(),
+                display_name: "Scripted".into(),
                 model: "test".into(),
-                language: Some("en".into()),
-                profile: "none".into(),
+                capabilities: RecognizerCapabilities {
+                    no_speech_evidence: self.reports_no_speech_prob,
+                    ..RecognizerCapabilities::local_batch()
+                },
             }
         }
 
-        fn decode(&mut self, _samples: &[f32]) -> Result<DecodeOutput, String> {
-            let line = self.lines.get(self.next).cloned();
-            self.next += 1;
+        fn transcribe(
+            &self,
+            _request: RecognitionRequest<'_>,
+        ) -> Result<crate::capture::recognizer::Recognition, crate::capture::recognizer::RecognitionError>
+        {
+            let line = self.lines.lock().expect("scripted lines").next();
             match line {
-                Some(Ok(text)) => Ok(DecodeOutput {
+                Some(Ok(text)) => Ok(crate::capture::recognizer::Recognition {
+                    spans: vec![crate::capture::recognizer::RecognizedSpan {
+                        text: text.clone(),
+                        start_seconds: None,
+                        end_seconds: None,
+                        no_speech_prob: self.reports_no_speech_prob.then_some(0.0),
+                    }],
                     text,
-                    mean_no_speech_prob: self.no_speech_prob,
+                    language: Some("en".into()),
+                    timing: Default::default(),
                 }),
-                Some(Err(message)) => Err(message),
-                None => Ok(DecodeOutput::default()),
+                Some(Err(message)) => {
+                    Err(crate::capture::recognizer::RecognitionError::Failed(message))
+                }
+                None => Ok(crate::capture::recognizer::Recognition::default()),
             }
+        }
+    }
+
+    fn english_run() -> RunProfile {
+        RunProfile {
+            language: Some("en".into()),
+            ..RunProfile::batch()
         }
     }
 
@@ -1310,8 +1373,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &samples,
             Some("hello world hello world"),
-            ScriptedDecoder::new(vec![Ok("hello world".into()), Ok("hello world".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("hello world".into()), Ok("hello world".into())]),
+            english_run(),
             &[],
         );
 
@@ -1337,8 +1400,8 @@ mod tests {
             &case("short", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             Some("hello"),
-            ScriptedDecoder::new(vec![Ok("hello".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("hello".into())]),
+            english_run(),
             &[],
         );
         assert_eq!(run.status, CaseStatus::UnderLength);
@@ -1351,8 +1414,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             None,
-            ScriptedDecoder::new(vec![Ok("anything".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("anything".into())]),
+            english_run(),
             &[],
         );
         assert_eq!(run.status, CaseStatus::NoReference);
@@ -1367,8 +1430,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             None,
-            ScriptedDecoder::new(vec![Err("model exploded".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Err("model exploded".into())]),
+            english_run(),
             &[],
         );
         assert_eq!(run.pipeline.segments_failed, 1);
@@ -1385,8 +1448,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             None,
-            ScriptedDecoder::new(vec![Ok(looped)]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok(looped)]),
+            english_run(),
             &[],
         );
         assert_eq!(run.pipeline.segments_kept, 0);
@@ -1404,8 +1467,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &samples,
             None,
-            ScriptedDecoder::new(vec![Ok("hello".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("hello".into())]),
+            english_run(),
             &[],
         );
         // Most of the recording is silence, so transcript coverage is low and
@@ -1529,8 +1592,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             None,
-            ScriptedDecoder::new(vec![Ok("hello".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("hello".into())]),
+            english_run(),
             &[],
         );
         let report = BenchmarkReport::new(vec![run], vec![BenchmarkCategory::Hinglish]);
@@ -1546,8 +1609,8 @@ mod tests {
             &case("c", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             Some("hello"),
-            ScriptedDecoder::new(vec![Ok("hello".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("hello".into())]),
+            english_run(),
             &[],
         );
         let report = BenchmarkReport::new(vec![run], Vec::new());
@@ -1561,14 +1624,14 @@ mod tests {
         // An engine with no `no_speech_prob` must not be systematically
         // rejected by a screen tuned for one that has it. D-006: absent is
         // absent, not zero-confidence.
-        let mut decoder = ScriptedDecoder::new(vec![Ok("a real sentence of speech".into())]);
-        decoder.no_speech_prob = None;
+        let recognizer =
+            ScriptedRecognizer::without_no_speech_prob(vec![Ok("a real sentence of speech".into())]);
         let run = run_case(
             &case("c", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             None,
-            decoder,
-            Pacing::Batch,
+            recognizer,
+            english_run(),
             &[],
         );
         assert_eq!(run.pipeline.segments_kept, 1);
@@ -1587,8 +1650,8 @@ mod tests {
             &case("clean", BenchmarkCategory::CleanEnglish),
             &speech(2.0),
             Some("hello"),
-            ScriptedDecoder::new(vec![Ok("hello".into())]),
-            Pacing::Batch,
+            ScriptedRecognizer::new(vec![Ok("hello".into())]),
+            english_run(),
             &[],
         );
         BenchmarkReport::new(vec![run], Vec::new())

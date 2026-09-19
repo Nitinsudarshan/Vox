@@ -479,6 +479,81 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-023 — An engine declares what it can do; the interface does not assume
+
+- **Context**: Vox ran two engines and they sat side by side inside
+  `SttEngine` as two methods with different shapes. The seam was real; what
+  was missing was a name for it.
+- **Decision**: `capture::recognizer::SpeechRecognizer`, with a
+  `RecognizerCapabilities` that each engine declares — batch, streaming,
+  timestamps, language handling, translation, no-speech evidence, partial
+  transcripts, local, network.
+- **Reason this is not one uniform result type**: the tempting design forces
+  every engine to look like the weakest one, or to pretend. Parakeet reports no
+  per-decode no-speech probability. A uniform interface would have it return
+  `0.0`, and the hallucination screen — tuned against Whisper's probability —
+  would then be grading it on a number it never produced. Its language is
+  likewise fixed at English, and handing an English-only model Hindi audio does
+  not fail: it returns fluent nonsense in English phonology, which is worse
+  than an error because nothing about it looks broken.
+- **Three-valued support**: `Yes`, `No`, `Unknown`, and `Unknown` is never
+  usable. A provider table full of `no` where the honest answer is "nobody
+  measured this" reads as a comparison and is not one.
+- **Impact**: `capture/recognizer.rs`, `capture/recognizers.rs`, and the
+  benchmark folded onto it — its private `BenchmarkDecoder` is deleted rather
+  than left beside its replacement. An engine's declared limits now travel into
+  the benchmark report with it, so a comparison states what one side could not
+  do. `docs/speech-providers.md` is the table.
+- **Deliberately not done**: the production decode paths still call
+  `SttEngine`. Changing what decodes a meeting changes what users get, and
+  belongs with the measurement that justifies it rather than arriving as a
+  refactor. Stage 6's live/final split is where the interface gets its reason.
+
+---
+
+### D-024 — Task, then capability, then provider, then model
+
+- **Context**: "What is the best speech model for Vox" has no stable answer —
+  the models change every few months — and answering it once bakes that answer
+  into the architecture.
+- **Decision**: `SpeechTask` names what Vox needs recognition *for*, and
+  `SpeechTask::requires` says what a task cannot do without. An engine is
+  eligible when it satisfies those; choosing between eligible engines is a
+  measured comparison, not a ranking in code.
+- **Reason**: push-to-talk wants latency and needs no timestamps; a live
+  meeting must average faster than a clock; a final pass has no clock and wants
+  accuracy. Three different requirements over the same audio. Naming them makes
+  "should we switch to X" a question with a procedure rather than an opinion.
+- **What this makes structural**: `PushToTalk` and `LiveMeeting` require
+  `offline`, so a networked engine is excluded from them by the type rather
+  than by a convention someone has to remember. `FinalPass` does not require
+  it, because a final pass has no clock and a user who wants to spend money on
+  one meeting's accuracy is making a reasonable choice. This is D-012's
+  local-first rule expressed in code.
+- **Consequence**: Deepgram, or any other cloud STT, is a benchmark entry and
+  an optional provider. Nothing about the meeting pipeline requires one to
+  exist.
+- **`engines_for` deliberately does not rank.** It filters and preserves the
+  caller's order. Ranking engines without measuring them is exactly how "the
+  best model" becomes the architecture.
+
+---
+
+### D-025 — A provider choice cannot express a credential
+
+- **Context**: `RecognizerChoice` is serialized, stored in settings, and logged
+  in a benchmark report. The obvious shape for a cloud provider is a variant
+  holding an endpoint and an API key.
+- **Decision**: The enum carries a model path or a model directory and nothing
+  else. A cloud adapter reads its key through the keyring path the rest of Vox
+  uses.
+- **Reason**: structural rather than a review rule. A secret cannot reach a
+  settings file, a log line or a shared benchmark report by being storable
+  there, because there is nowhere to store it. A test asserts the serialized
+  form contains no key or token field.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -489,11 +564,9 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-023 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
-| D-024 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
-| D-025 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
-| D-026 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-025 |
-| D-027 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-028 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-029 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-028 |
-| D-030 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-023 exists to express it |
+| D-026 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already, and D-023's interface is where it plugs in |
+| D-027 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
+| D-028 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-027 |
+| D-029 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-030 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-031 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-021 and D-030 |

@@ -1298,7 +1298,7 @@ pub struct BenchmarkRequest {
     /// Path to the corpus manifest. Its directory is the corpus root, and
     /// every path inside it is resolved relative to that and may not escape.
     pub manifest_path: String,
-    pub engine: benchmark::engines::EngineChoice,
+    pub engine: crate::capture::recognizers::RecognizerChoice,
     #[serde(default)]
     pub pacing: Option<String>,
     /// Where to write the report. Defaults to a timestamped directory beside
@@ -1346,15 +1346,25 @@ pub async fn run_speech_benchmark(
         let cancel = state.meeting_imports.register(BENCHMARK_RUN_KEY);
         let stt = state.stt.clone();
         let choice = request.engine.clone();
-        let language = batch.language.clone();
         let decoding = batch.decoding.clone();
+        let run = benchmark::RunProfile {
+            pacing,
+            language: batch.language.whisper_language.clone(),
+            translate: batch.language.translate,
+            profile: format!("{:?}", batch.decoding.strategy),
+        };
 
         let emitter = handle.clone();
         let result = benchmark::run_manifest(
             &corpus_root,
             &manifest,
-            || choice.build(stt.clone(), language.clone(), decoding.clone()),
-            pacing,
+            || {
+                choice
+                    .build(stt.clone(), decoding.clone())
+                    .map(std::sync::Arc::from)
+                    .map_err(|err| benchmark::BenchmarkError::Invalid(err.to_string()))
+            },
+            run,
             &glossary,
             &cancel,
             |case_id, index, total| {
