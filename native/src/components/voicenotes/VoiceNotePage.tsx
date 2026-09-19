@@ -1,7 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { HardDrive, Mic, ShieldCheck, Edit3, Trash2, GitMerge, Copy, Check, X, Save, Sparkles, Undo, AlertCircle, CheckSquare } from 'lucide-react';
+import {
+  HardDrive,
+  Mic,
+  ShieldCheck,
+  Edit3,
+  Trash2,
+  GitMerge,
+  Copy,
+  Check,
+  X,
+  Save,
+  Sparkles,
+  Undo,
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  LayoutGrid,
+  List,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { findSelection, looksLikeVocabulary, type PhraseSelection } from './selection';
 import { Button } from '@/components/ui/button';
@@ -9,12 +28,13 @@ import { PageHeader } from '../common/PageHeader';
 import { EmptyState } from '../common/EmptyState';
 import { AppSettings, CorrectionRecord, VaultLocationInfo, VaultNote } from '../../types';
 
-
 type VaultViewState =
   | { status: 'loading' }
   | { status: 'setup' }
   | { status: 'recovery' }
   | { status: 'ready' };
+
+export type ViewMode = 'grid' | 'list';
 
 function formatNoteTimestamp(iso: string): string {
   const date = new Date(iso);
@@ -32,6 +52,59 @@ function formatNoteTimestamp(iso: string): string {
 
 function countWords(str: string): number {
   return str.trim().split(/\s+/).filter(Boolean).length;
+}
+
+interface DateGroup {
+  key: string;
+  label: string;
+  dateStr: string;
+  notes: VaultNote[];
+  totalWords: number;
+}
+
+function groupNotesByDay(notes: VaultNote[]): DateGroup[] {
+  const groups: Map<string, { label: string; dateStr: string; notes: VaultNote[] }> = new Map();
+  const now = new Date();
+  const todayKey = now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const yesterdayKey = yesterday.toDateString();
+
+  for (const note of notes) {
+    const d = new Date(note.created_at);
+    const key = Number.isNaN(d.getTime()) ? 'other' : d.toDateString();
+    let label = 'Other';
+    if (key === todayKey) {
+      label = 'Today';
+    } else if (key === yesterdayKey) {
+      label = 'Yesterday';
+    } else if (!Number.isNaN(d.getTime())) {
+      label = d.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric',
+        year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+      });
+    }
+
+    if (!groups.has(key)) {
+      groups.set(key, { label, dateStr: key, notes: [] });
+    }
+    groups.get(key)!.notes.push(note);
+  }
+
+  const result: DateGroup[] = [];
+  for (const [key, val] of groups.entries()) {
+    const totalWords = val.notes.reduce((sum, n) => sum + countWords(n.content), 0);
+    result.push({
+      key,
+      label: val.label,
+      dateStr: val.dateStr,
+      notes: val.notes,
+      totalWords,
+    });
+  }
+
+  return result;
 }
 
 interface VaultSetupPromptProps {
@@ -52,7 +125,7 @@ const VaultSetupPrompt: React.FC<VaultSetupPromptProps> = ({
   onUseDefault,
 }) => (
   <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-    <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary mb-4">
+    <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary mb-4 shadow-sm">
       {recovery ? <ShieldCheck className="w-6 h-6" /> : <HardDrive className="w-6 h-6" />}
     </div>
     <h2 className="text-lg font-bold text-foreground mb-1">
@@ -65,7 +138,7 @@ const VaultSetupPrompt: React.FC<VaultSetupPromptProps> = ({
     </p>
 
     {error && (
-      <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 max-w-md">
+      <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 max-w-md shadow-xs">
         {error}
       </div>
     )}
@@ -90,19 +163,78 @@ export const VoiceNotePage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // View Mode: grid or list
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try {
+      const saved = localStorage.getItem('vox_voicenotes_view_mode');
+      if (saved === 'grid' || saved === 'list') {
+        return saved;
+      }
+    } catch {}
+    return 'grid';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('vox_voicenotes_view_mode', viewMode);
+    } catch {}
+  }, [viewMode]);
+
   // Interactive Action States
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
-  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
-  const [mergingNoteId, setMergingNoteId] = useState<string | null>(null);
   const [unmergingNoteId, setUnmergingNoteId] = useState<string | null>(null);
   const [copiedNoteId, setCopiedNoteId] = useState<string | null>(null);
   const [promotedNoteIds, setPromotedNoteIds] = useState<Set<string>>(new Set());
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
-  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [activeSelectionMode, setActiveSelectionMode] = useState<'merge' | 'delete' | null>(null);
+  const [isMergingBatch, setIsMergingBatch] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+
+  // Accordion & Pagination states
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [expandedDaysWithAllNotes, setExpandedDaysWithAllNotes] = useState<Set<string>>(new Set());
+
+  // Group notes chronologically by day
+  const dateGroups = useMemo(() => groupNotesByDay(notes), [notes]);
+
+  // Set default accordion expansion: 'Today' open, or first available group if today is empty
+  useEffect(() => {
+    if (dateGroups.length > 0 && expandedSections.size === 0) {
+      const todayGroup = dateGroups.find((g) => g.label === 'Today');
+      if (todayGroup) {
+        setExpandedSections(new Set([todayGroup.key]));
+      } else {
+        setExpandedSections(new Set([dateGroups[0].key]));
+      }
+    }
+  }, [dateGroups, expandedSections.size]);
+
+  const toggleSection = (key: string) => {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleShowAllForDay = (key: string) => {
+    setExpandedDaysWithAllNotes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   const toggleSelectNote = (id: string) => {
     setSelectedNoteIds((prev) => {
@@ -116,20 +248,81 @@ export const VoiceNotePage: React.FC = () => {
     });
   };
 
+  const handleCardClick = (id: string, e: React.MouseEvent) => {
+    const sel = window.getSelection()?.toString().trim();
+    if (sel && sel.length > 0) {
+      return;
+    }
+    toggleSelectNote(id);
+  };
+
+  const handleSelectAll = () => {
+    if (selectedNoteIds.size === notes.length) {
+      setSelectedNoteIds(new Set());
+    } else {
+      setSelectedNoteIds(new Set(notes.map((n) => n.id)));
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedNoteIds(new Set());
+    setActiveSelectionMode(null);
+    setIsMergingBatch(false);
+    setIsBulkDeleting(false);
+  };
+
+  // Bulk or Single Delete
   const handleBulkDelete = async () => {
     if (selectedNoteIds.size === 0) return;
     setActionBusy(true);
     setError('');
     const idsToDelete = Array.from(selectedNoteIds);
     try {
-      await invoke('delete_voice_notes', { ids: idsToDelete });
+      if (idsToDelete.length === 1) {
+        await invoke('delete_voice_note', { id: idsToDelete[0] });
+      } else {
+        await invoke('delete_voice_notes', { ids: idsToDelete });
+      }
       setNotes((prev) => prev.filter((n) => !selectedNoteIds.has(n.id)));
       setSelectedNoteIds(new Set());
       setIsBulkDeleting(false);
-      setIsSelectMode(false);
+      setActiveSelectionMode(null);
     } catch (err: any) {
-      console.error('Failed to bulk delete voice notes', err);
+      console.error('Failed to delete voice notes', err);
       setError(err?.message || 'Failed to delete selected voice notes.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  // Chronological Batch Merge: oldest at top, newest at bottom
+  const handleBatchMerge = async () => {
+    if (selectedNoteIds.size < 2) return;
+    setActionBusy(true);
+    setError('');
+
+    const sortedSelectedNotes = notes
+      .filter((n) => selectedNoteIds.has(n.id))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+    const sortedIds = sortedSelectedNotes.map((n) => n.id);
+
+    try {
+      const merged = await invoke<VaultNote>('merge_multiple_voice_notes', { ids: sortedIds });
+      const secondaryIds = new Set(sortedIds.filter((id) => id !== merged.id));
+
+      setNotes((prev) =>
+        prev
+          .filter((n) => !secondaryIds.has(n.id))
+          .map((n) => (n.id === merged.id ? merged : n))
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      );
+      setSelectedNoteIds(new Set());
+      setIsMergingBatch(false);
+      setActiveSelectionMode(null);
+    } catch (err: any) {
+      console.error('Failed to merge voice notes', err);
+      setError(err?.message || 'Failed to merge selected voice notes.');
     } finally {
       setActionBusy(false);
     }
@@ -255,13 +448,7 @@ export const VoiceNotePage: React.FC = () => {
     }
   };
 
-  // Phrase correction. Deliberately separate from the full editor above: a
-  // one-word fix should not require opening a textarea over the whole note.
-  //
-  // Two steps on purpose. Selecting a phrase offers what can be done with it —
-  // correcting it, or telling Vox the spelling is one to remember — and only
-  // "Correct" opens an input. Jumping straight to a text field would answer a
-  // question the user has not been asked yet.
+  // Phrase correction state and listeners
   const [selection, setSelection] = useState<PhraseSelection | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [replacement, setReplacement] = useState('');
@@ -272,8 +459,6 @@ export const VoiceNotePage: React.FC = () => {
     { noteId: string; message: string; undoable: boolean } | null
   >(null);
   const noteBodyRefs = useRef<Record<string, HTMLElement | null>>({});
-  // Read inside a document-level listener, which is registered once and would
-  // otherwise close over the first value of each of these.
   const notesRef = useRef<VaultNote[]>(notes);
   notesRef.current = notes;
   const selectionRef = useRef<PhraseSelection | null>(null);
@@ -281,10 +466,6 @@ export const VoiceNotePage: React.FC = () => {
   const correctionOpenRef = useRef(false);
   correctionOpenRef.current = correctionOpen;
 
-  // A document listener rather than handlers on each paragraph: `<p>` is not
-  // focusable, so a `keyup` bound to it never fires for keyboard selection.
-  // `selectionchange` is the one event that sees mouse, keyboard and touch
-  // alike, and it does not touch scrolling or the edit button.
   useEffect(() => {
     const onSelectionChange = () => {
       const found = findSelection(
@@ -292,7 +473,6 @@ export const VoiceNotePage: React.FC = () => {
         (noteId) => notesRef.current.find((n) => n.id === noteId)?.content,
       );
       if (found) {
-        // Re-reporting the same span must not wipe a half-typed replacement.
         const previous = selectionRef.current;
         if (
           previous &&
@@ -309,8 +489,6 @@ export const VoiceNotePage: React.FC = () => {
         setCorrectionError(null);
         return;
       }
-      // Clicking into the replacement input collapses the selection. Dropping
-      // the range at that moment would close the form under the user's cursor.
       if (!correctionOpenRef.current) {
         setSelection(null);
       }
@@ -320,11 +498,6 @@ export const VoiceNotePage: React.FC = () => {
     return () => document.removeEventListener('selectionchange', onSelectionChange);
   }, []);
 
-  // Cancelling and finishing both end here, and neither touches the note.
-  // Dropping the browser's own selection matters after a correction: the
-  // paragraph re-renders with new text under a range that was measured against
-  // the old, and leaving it there would re-open the popover over a phrase the
-  // user never picked.
   const dismissSelection = () => {
     setSelection(null);
     setCorrectionOpen(false);
@@ -351,10 +524,6 @@ export const VoiceNotePage: React.FC = () => {
         replacement: replacement.trim(),
         learn: teachVox,
       });
-      // Read out of the response before queueing the update. A `setNotes`
-      // updater runs during React's next render, so dereferencing the result
-      // inside it would throw there — past this catch, and past any chance of
-      // telling the user the correction did not land.
       const corrected = result.note;
       setNotes((prev) => prev.map((n) => (n.id === corrected.id ? corrected : n)));
       setUndoState({
@@ -373,9 +542,6 @@ export const VoiceNotePage: React.FC = () => {
     }
   };
 
-  // Adds the selected spelling to Settings › Dictionary — the same list, from
-  // where the user noticed it. Distinct from teaching a correction: this says
-  // "this spelling is right", not "that phrase should read as this one".
   const handleAddToDictionary = async () => {
     if (!selection) return;
     const word = selection.text.trim();
@@ -386,8 +552,6 @@ export const VoiceNotePage: React.FC = () => {
       setUndoState({
         noteId: selection.noteId,
         message: `Added "${word}" to your dictionary`,
-        // Removing a dictionary word is Settings › Dictionary's job, and it is
-        // already the one place the list is managed.
         undoable: false,
       });
       dismissSelection();
@@ -399,9 +563,6 @@ export const VoiceNotePage: React.FC = () => {
     }
   };
 
-  // Undo reverses the recorded range rather than restoring a snapshot, so a
-  // full-editor change made in between is refused instead of thrown away —
-  // which is why this needs no versioning of its own.
   const handleUndoCorrection = async () => {
     if (!undoState) return;
     try {
@@ -413,8 +574,6 @@ export const VoiceNotePage: React.FC = () => {
       setUndoState(null);
     } catch (err: any) {
       console.error('Failed to undo correction', err);
-      // Offering the button again would only fail again: the note has moved
-      // on, and reversing the range is refused precisely to protect that.
       setUndoState({
         ...undoState,
         message: err?.message || 'That correction can no longer be undone.',
@@ -427,8 +586,7 @@ export const VoiceNotePage: React.FC = () => {
   const handleStartEdit = (note: VaultNote) => {
     setEditingNoteId(note.id);
     setEditingContent(note.content);
-    setDeletingNoteId(null);
-    setMergingNoteId(null);
+    setUnmergingNoteId(null);
   };
 
   const handleCancelEdit = () => {
@@ -448,49 +606,6 @@ export const VoiceNotePage: React.FC = () => {
       setEditingNoteId(null);
     } catch (err) {
       console.error('Failed to update voice note', err);
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    setActionBusy(true);
-    try {
-      await invoke('delete_voice_note', { id });
-      setNotes((prev) => prev.filter((n) => n.id !== id));
-      setSelectedNoteIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      setDeletingNoteId(null);
-      if (editingNoteId === id) setEditingNoteId(null);
-      if (mergingNoteId === id) setMergingNoteId(null);
-    } catch (err) {
-      console.error('Failed to delete voice note', err);
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
-  const handleMerge = async (primaryId: string, secondaryId: string) => {
-    setActionBusy(true);
-    setError('');
-    try {
-      const merged = await invoke<VaultNote>('merge_voice_notes', {
-        primaryId,
-        secondaryId,
-      });
-      setNotes((prev) =>
-        prev
-          .filter((n) => n.id !== secondaryId)
-          .map((n) => (n.id === primaryId ? merged : n))
-          .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      );
-      setMergingNoteId(null);
-    } catch (err: any) {
-      console.error('Failed to merge voice notes', err);
-      setError(err?.message || 'Failed to merge voice notes.');
     } finally {
       setActionBusy(false);
     }
@@ -536,6 +651,317 @@ export const VoiceNotePage: React.FC = () => {
     const notesToday = notes.filter((n) => new Date(n.created_at).toDateString() === todayKey).length;
     return { total, totalWords, notesToday };
   }, [notes]);
+
+  // Reusable Phrase Selection & Correction Popover
+  const renderPhraseCorrectionPopover = (note: VaultNote) => {
+    if (selection?.noteId !== note.id) return null;
+    return (
+      <div
+        role="group"
+        aria-label="Correct selected phrase"
+        onClick={(e) => e.stopPropagation()}
+        className="mt-2.5 rounded-xl border border-border/80 bg-card/95 dark:bg-card/90 backdrop-blur-md shadow-lg dark:shadow-xl dark:shadow-black/50 p-3 space-y-2.5 animate-in fade-in zoom-in-95 duration-150 ring-1 ring-border/50"
+      >
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[11px] font-medium text-muted-foreground shrink-0 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-primary" />
+              Selected
+            </span>
+            <code className="px-2 py-0.5 rounded-md bg-primary/10 dark:bg-primary/20 text-primary dark:text-primary font-mono text-xs font-semibold border border-primary/20 break-all shadow-2xs">
+              {selection.text}
+            </code>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label="Dismiss selection"
+            onClick={dismissSelection}
+            className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground rounded-md"
+          >
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+
+        {!correctionOpen ? (
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => setCorrectionOpen(true)}
+              className="h-7 text-xs font-semibold gap-1.5 shadow-xs"
+            >
+              <Edit3 className="w-3 h-3" />
+              Correct
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={correcting}
+              onClick={() => void handleAddToDictionary()}
+              className="h-7 text-xs font-medium gap-1.5"
+            >
+              <Plus className="w-3 h-3" />
+              Add to Dictionary
+            </Button>
+            <span className="text-[10px] text-muted-foreground/80">
+              Adding keeps this spelling — correcting changes the note.
+            </span>
+          </div>
+        ) : (
+          <div className="space-y-2 pt-1 border-t border-border/40">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <input
+                autoFocus
+                value={replacement}
+                onChange={(e) => setReplacement(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleApplyCorrection();
+                  if (e.key === 'Escape') dismissSelection();
+                }}
+                placeholder="Replace with…"
+                aria-label="Replacement text"
+                className="flex-1 min-w-[150px] text-xs rounded-lg border border-border bg-background px-2.5 py-1.5 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+              />
+              <Button
+                size="sm"
+                variant="default"
+                disabled={!replacement.trim() || correcting}
+                onClick={() => void handleApplyCorrection()}
+                className="h-7 text-xs font-semibold shadow-xs"
+              >
+                Replace
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={dismissSelection}
+                className="h-7 text-xs"
+              >
+                Cancel
+              </Button>
+            </div>
+
+            <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer pt-0.5">
+              <input
+                type="checkbox"
+                checked={teachVox}
+                onChange={(e) => setTeachVox(e.target.checked)}
+                className="accent-primary rounded"
+              />
+              <span>
+                Teach Vox this correction
+                {replacement.trim() && looksLikeVocabulary(selection.text, replacement) && (
+                  <span className="ml-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                    · looks like a name Vox misheard
+                  </span>
+                )}
+              </span>
+            </label>
+            <p className="text-[10px] text-muted-foreground/80 leading-snug">
+              Replaces only this occurrence. Teaching also repairs it in future transcripts.
+            </p>
+          </div>
+        )}
+
+        {correctionError && (
+          <p role="alert" className="text-[11px] text-destructive leading-snug">
+            {correctionError}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  // Reusable Inline Edit Mode
+  const renderInlineEdit = (note: VaultNote) => (
+    <div className="space-y-2 pt-1" onClick={(e) => e.stopPropagation()}>
+      <textarea
+        value={editingContent}
+        onChange={(e) => setEditingContent(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            handleSaveEdit(note.id);
+          }
+          if (e.key === 'Escape') {
+            handleCancelEdit();
+          }
+        }}
+        disabled={actionBusy}
+        className="w-full min-h-[120px] p-2.5 text-xs md:text-sm bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-sans leading-relaxed resize-y"
+        autoFocus
+      />
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-muted-foreground">
+          <kbd className="font-mono text-[9px] bg-muted px-1 py-0.5 rounded">Ctrl+Enter</kbd> to save, <kbd className="font-mono text-[9px] bg-muted px-1 py-0.5 rounded">Esc</kbd> to cancel
+        </span>
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleCancelEdit}
+            disabled={actionBusy}
+            className="h-6 text-xs px-2"
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={() => handleSaveEdit(note.id)}
+            disabled={actionBusy || !editingContent.trim()}
+            className="h-6 text-xs gap-1 px-2.5"
+          >
+            <Save className="w-3 h-3" />
+            <span>Save</span>
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Reusable Action Toolbar for Notes
+  const renderNoteActions = (note: VaultNote) => (
+    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+      {note.merged_from && note.merged_from.length > 0 && (
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => setUnmergingNoteId(unmergingNoteId === note.id ? null : note.id)}
+          disabled={actionBusy}
+          className={`h-6 w-6 rounded-md transition-colors ${
+            unmergingNoteId === note.id
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-primary hover:bg-primary/10'
+          }`}
+          title="Unmerge this Voice Note"
+          aria-label="Unmerge this Voice Note"
+        >
+          <Undo className="w-3 h-3" />
+        </Button>
+      )}
+
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={() => handlePromoteToScribble(note)}
+        disabled={actionBusy || promotedNoteIds.has(note.id)}
+        className={`h-6 w-6 rounded-md transition-colors ${
+          promotedNoteIds.has(note.id)
+            ? 'bg-primary/10 text-primary cursor-default'
+            : 'text-muted-foreground hover:text-primary hover:bg-primary/10'
+        }`}
+        title={promotedNoteIds.has(note.id) ? 'Promoted to Scribble' : 'Save as Scribble'}
+        aria-label="Save as Scribble"
+      >
+        {promotedNoteIds.has(note.id) ? (
+          <Check className="w-3 h-3 text-primary" />
+        ) : (
+          <Sparkles className="w-3 h-3" />
+        )}
+      </Button>
+
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={() => handleStartEdit(note)}
+        className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+        title="Edit transcript"
+        aria-label="Edit transcript"
+      >
+        <Edit3 className="w-3 h-3" />
+      </Button>
+
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={() => handleCopy(note)}
+        className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+        title="Copy transcript"
+        aria-label="Copy transcript"
+      >
+        {copiedNoteId === note.id ? (
+          <Check className="w-3 h-3 text-emerald-500" />
+        ) : (
+          <Copy className="w-3 h-3" />
+        )}
+      </Button>
+    </div>
+  );
+
+  // Reusable Undo Notification
+  const renderUndoNotification = (note: VaultNote) => {
+    if (undoState?.noteId !== note.id) return null;
+    return (
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/60 dark:bg-muted/30 backdrop-blur-xs px-2.5 py-1.5 text-xs animate-in fade-in duration-150 shadow-xs"
+      >
+        <span className="text-muted-foreground break-all text-[11px]">{undoState.message}</span>
+        <div className="flex items-center gap-1">
+          {undoState.undoable && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void handleUndoCorrection()}
+              className="h-6 text-xs gap-1 px-1.5 text-primary hover:text-primary"
+            >
+              <Undo className="w-3 h-3" />
+              Undo
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setUndoState(null)}
+            className="h-6 text-xs px-1.5 text-muted-foreground"
+          >
+            Dismiss
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  // Reusable Unmerge Confirmation Banner
+  const renderUnmergeBanner = (note: VaultNote) => {
+    if (unmergingNoteId !== note.id) return null;
+    return (
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="my-2 p-3 bg-accent/40 border border-border rounded-lg text-xs space-y-2 animate-in fade-in duration-150"
+      >
+        <div className="flex items-center gap-1.5 font-semibold text-foreground">
+          <Undo className="w-4 h-4 text-primary shrink-0" />
+          <span>Unmerge this Voice Note?</span>
+        </div>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          This will restore the original Voice Notes and remove the merged version.
+        </p>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={actionBusy}
+            onClick={() => setUnmergingNoteId(null)}
+            className="h-7 text-xs"
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="default"
+            disabled={actionBusy}
+            onClick={() => handleUnmerge(note.id)}
+            className="h-7 text-xs gap-1.5 font-semibold"
+          >
+            <Undo className="w-3.5 h-3.5" />
+            <span>Unmerge</span>
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
   if (vaultState.status === 'loading') {
     return (
@@ -598,7 +1024,7 @@ export const VoiceNotePage: React.FC = () => {
 
       {/* Error Alert Banner */}
       {error && (
-        <div className="flex items-center justify-between gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 shrink-0">
+        <div className="flex items-center justify-between gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 shrink-0 mb-3 shadow-xs">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{error}</span>
@@ -615,82 +1041,244 @@ export const VoiceNotePage: React.FC = () => {
       )}
 
       {/* Main Transcript History Container */}
-      <div className="flex-1 flex flex-col min-h-0 rounded-lg border border-border bg-card p-5">
+      <div className="flex-1 flex flex-col min-h-0 rounded-xl border border-border bg-card/85 backdrop-blur-xs p-5 shadow-xs">
+        {/* Header Toolbar: Transcript History, View Mode Switcher, & Top Actions */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4 shrink-0 pb-3 border-b border-border/60">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-bold text-foreground">Transcript History</h2>
             <Badge variant="outline" className="text-[10px] font-mono">
               {notes.length} voice note{notes.length === 1 ? '' : 's'}
             </Badge>
+
+            {/* View Mode Switcher */}
+            {notes.length > 0 && (
+              <div className="flex items-center bg-muted/60 dark:bg-muted/30 p-0.5 rounded-lg border border-border/60 ml-2">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('grid')}
+                  className={`p-1.5 rounded-md transition-all ${
+                    viewMode === 'grid'
+                      ? 'bg-background text-primary shadow-2xs font-semibold'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title="Masonry Grid View (3 Columns)"
+                  aria-label="Masonry Grid View"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('list')}
+                  className={`p-1.5 rounded-md transition-all ${
+                    viewMode === 'list'
+                      ? 'bg-background text-primary shadow-2xs font-semibold'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title="Compact List View"
+                  aria-label="Compact List View"
+                >
+                  <List className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
 
           {notes.length > 0 && (
             <div className="flex items-center gap-2">
-              {isSelectMode ? (
-                <>
-                  {selectedNoteIds.size > 0 && (
-                    <div className="flex items-center gap-2 animate-in fade-in duration-150">
-                      <Badge variant="secondary" className="text-xs font-mono px-2 py-0.5">
-                        {selectedNoteIds.size} selected
-                      </Badge>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => setIsBulkDeleting(true)}
-                        disabled={actionBusy}
-                        className="h-7 text-xs gap-1.5 font-semibold"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Selected ({selectedNoteIds.size})</span>
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setSelectedNoteIds(new Set());
-                          setIsBulkDeleting(false);
-                        }}
-                        disabled={actionBusy}
-                        className="h-7 text-xs px-2"
-                      >
-                        Clear
-                      </Button>
-                    </div>
-                  )}
+              {/* Active Selection Info Pill & Controls */}
+              {selectedNoteIds.size > 0 && (
+                <div className="flex items-center gap-2 animate-in fade-in duration-150">
+                  <Badge variant="secondary" className="text-xs font-mono px-2.5 py-0.5 bg-primary/10 text-primary border border-primary/20">
+                    {selectedNoteIds.size} selected
+                  </Badge>
                   <Button
                     size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setIsSelectMode(false);
-                      setSelectedNoteIds(new Set());
-                      setIsBulkDeleting(false);
-                    }}
+                    variant="ghost"
+                    onClick={handleSelectAll}
                     disabled={actionBusy}
-                    className="h-7 text-xs gap-1 font-mono"
+                    className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground font-medium"
                   >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Done</span>
+                    {selectedNoteIds.size === notes.length ? 'Deselect All' : 'Select All'}
                   </Button>
-                </>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setIsSelectMode(true)}
-                  disabled={actionBusy}
-                  className="h-7 text-xs gap-1.5 font-mono"
-                >
-                  <CheckSquare className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span>Select</span>
-                </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleClearSelection}
+                    disabled={actionBusy}
+                    className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground"
+                  >
+                    Clear
+                  </Button>
+                </div>
               )}
+
+              {/* Top Merge Action */}
+              <Button
+                size="sm"
+                variant={selectedNoteIds.size >= 2 ? 'default' : activeSelectionMode === 'merge' ? 'secondary' : 'outline'}
+                onClick={() => {
+                  if (selectedNoteIds.size >= 2) {
+                    setIsMergingBatch(true);
+                    setIsBulkDeleting(false);
+                  } else {
+                    setActiveSelectionMode((prev) => (prev === 'merge' ? null : 'merge'));
+                    setIsMergingBatch(false);
+                  }
+                }}
+                disabled={actionBusy}
+                className={`h-7 text-xs gap-1.5 transition-all ${
+                  selectedNoteIds.size >= 2
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs hover:bg-primary/90'
+                    : activeSelectionMode === 'merge'
+                    ? 'bg-primary/15 text-primary border-primary/30'
+                    : ''
+                }`}
+                title={selectedNoteIds.size >= 2 ? `Merge ${selectedNoteIds.size} notes` : 'Select notes to merge'}
+              >
+                <GitMerge className="w-3.5 h-3.5" />
+                <span>{selectedNoteIds.size >= 2 ? `Merge (${selectedNoteIds.size})` : 'Merge'}</span>
+              </Button>
+
+              {/* Top Delete Action */}
+              <Button
+                size="sm"
+                variant={selectedNoteIds.size >= 1 ? 'destructive' : activeSelectionMode === 'delete' ? 'secondary' : 'outline'}
+                onClick={() => {
+                  if (selectedNoteIds.size >= 1) {
+                    setIsBulkDeleting(true);
+                    setIsMergingBatch(false);
+                  } else {
+                    setActiveSelectionMode((prev) => (prev === 'delete' ? null : 'delete'));
+                    setIsBulkDeleting(false);
+                  }
+                }}
+                disabled={actionBusy}
+                className={`h-7 text-xs gap-1.5 transition-all ${
+                  selectedNoteIds.size >= 1
+                    ? 'font-semibold shadow-xs'
+                    : activeSelectionMode === 'delete'
+                    ? 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30'
+                    : ''
+                }`}
+                title={selectedNoteIds.size >= 1 ? `Delete ${selectedNoteIds.size} note${selectedNoteIds.size > 1 ? 's' : ''}` : 'Select notes to delete'}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{selectedNoteIds.size >= 1 ? `Delete (${selectedNoteIds.size})` : 'Delete'}</span>
+              </Button>
             </div>
           )}
         </div>
 
-        {/* Bulk Delete Banner */}
+        {/* Merge Mode Guidance Banner */}
+        {activeSelectionMode === 'merge' && selectedNoteIds.size < 2 && !isMergingBatch && (
+          <div className="mb-4 p-3 rounded-xl bg-primary/10 border border-primary/25 flex items-center justify-between gap-2 text-xs text-primary shrink-0 animate-in fade-in duration-150">
+            <div className="flex items-center gap-2">
+              <GitMerge className="w-4 h-4 shrink-0" />
+              <span>
+                Click cards to select 2 or more Voice Notes to merge. Notes are ordered chronologically: oldest at the top, newest at the bottom.
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setActiveSelectionMode(null)}
+              className="h-6 text-xs px-2 text-primary hover:bg-primary/15"
+            >
+              Done
+            </Button>
+          </div>
+        )}
+
+        {/* Delete Mode Guidance Banner */}
+        {activeSelectionMode === 'delete' && selectedNoteIds.size === 0 && !isBulkDeleting && (
+          <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/25 flex items-center justify-between gap-2 text-xs text-red-600 dark:text-red-400 shrink-0 animate-in fade-in duration-150">
+            <div className="flex items-center gap-2">
+              <Trash2 className="w-4 h-4 shrink-0" />
+              <span>Click cards to select one or more Voice Notes to delete.</span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setActiveSelectionMode(null)}
+              className="h-6 text-xs px-2 text-red-600 dark:text-red-400 hover:bg-red-500/15"
+            >
+              Done
+            </Button>
+          </div>
+        )}
+
+        {/* Chronological Batch Merge Preview Banner */}
+        {isMergingBatch && selectedNoteIds.size >= 2 && (
+          <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-card via-card/95 to-card/90 border border-primary/30 shadow-md space-y-3 shrink-0 animate-in fade-in duration-150">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <GitMerge className="w-4 h-4 text-primary shrink-0" />
+                <span className="text-xs font-bold text-foreground">
+                  Merge {selectedNoteIds.size} Voice Notes Chronologically
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={actionBusy}
+                  onClick={() => setIsMergingBatch(false)}
+                  className="h-7 text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={actionBusy}
+                  onClick={handleBatchMerge}
+                  className="h-7 text-xs gap-1.5 font-semibold bg-primary text-primary-foreground shadow-xs hover:bg-primary/90"
+                >
+                  <GitMerge className="w-3.5 h-3.5" />
+                  <span>Confirm Merge ({selectedNoteIds.size})</span>
+                </Button>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              The selected notes will be combined in chronological order: the oldest note is first at the top, and the newest note is at the bottom.
+            </p>
+            <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+              {notes
+                .filter((n) => selectedNoteIds.has(n.id))
+                .sort((a, b) => a.created_at.localeCompare(b.created_at))
+                .map((n, idx, arr) => (
+                  <div
+                    key={n.id}
+                    className="flex items-center gap-2 text-xs bg-muted/40 dark:bg-muted/15 p-2 rounded-lg border border-border/50"
+                  >
+                    <span className="font-mono text-[10px] text-muted-foreground shrink-0 w-6">
+                      #{idx + 1}
+                    </span>
+                    <span className="font-mono text-[10px] text-primary shrink-0">
+                      {formatNoteTimestamp(n.created_at)}
+                    </span>
+                    <span className="truncate text-foreground/85 flex-1 font-sans text-xs">
+                      {n.content}
+                    </span>
+                    {idx === 0 && (
+                      <Badge variant="outline" className="text-[9px] font-mono py-0 px-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                        Oldest (Top)
+                      </Badge>
+                    )}
+                    {idx === arr.length - 1 && (
+                      <Badge variant="outline" className="text-[9px] font-mono py-0 px-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                        Newest (Bottom)
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* Bulk or Single Delete Banner */}
         {isBulkDeleting && selectedNoteIds.size > 0 && (
-          <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-red-600 dark:text-red-400 shrink-0 animate-in fade-in duration-150">
+          <div className="mb-4 p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex flex-wrap items-center justify-between gap-3 text-xs text-red-600 dark:text-red-400 shrink-0 animate-in fade-in duration-150 shadow-xs">
             <div className="flex items-center gap-2">
               <Trash2 className="w-4 h-4 shrink-0" />
               <span className="font-medium">
@@ -712,7 +1300,7 @@ export const VoiceNotePage: React.FC = () => {
                 variant="destructive"
                 disabled={actionBusy}
                 onClick={handleBulkDelete}
-                className="h-7 text-xs gap-1.5 font-semibold"
+                className="h-7 text-xs gap-1.5 font-semibold shadow-xs"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Move {selectedNoteIds.size} to Trash</span>
@@ -730,481 +1318,245 @@ export const VoiceNotePage: React.FC = () => {
             className="flex-1"
           />
         ) : (
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-            {notes.map((note, index) => {
-              const isEditing = editingNoteId === note.id;
-              const isDeleting = deletingNoteId === note.id;
-              const isMerging = mergingNoteId === note.id;
-              const isUnmerging = unmergingNoteId === note.id;
-              const isSelected = selectedNoteIds.has(note.id);
-              const canMergeWithNext = index < notes.length - 1;
-              const nextNote = canMergeWithNext ? notes[index + 1] : null;
+          /* Date-based Accordions (Masonry Grid & Compact List) */
+          <div className="flex-1 overflow-y-auto space-y-6 pr-1">
+            {dateGroups.map((group) => {
+              const isExpanded = expandedSections.has(group.key);
+              const showAll = expandedDaysWithAllNotes.has(group.key);
+              const displayNotes = showAll ? group.notes : group.notes.slice(0, 9);
+              const hasMore = group.notes.length > 9;
 
               return (
-                <div
-                  key={note.id}
-                  className={`p-4 rounded-lg border transition-all space-y-2 group ${
-                    isSelected
-                      ? 'border-primary/50 bg-primary/5 ring-1 ring-primary/20'
-                      : 'border-border bg-muted/20 hover:border-border/80'
-                  }`}
-                >
-                  {/* Card Header without redundant 'Voice Note' label */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {isSelectMode && (
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectNote(note.id)}
-                          className="w-4 h-4 rounded border-border text-primary focus:ring-primary accent-primary cursor-pointer shrink-0 animate-in fade-in duration-150"
-                          aria-label={`Select voice note from ${formatNoteTimestamp(note.created_at)}`}
-                        />
-                      )}
-                      <span className="text-xs font-semibold text-foreground font-mono">
-                        {formatNoteTimestamp(note.created_at)}
+                <div key={group.key} className="space-y-3">
+                  {/* Date Accordion Header */}
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(group.key)}
+                    className="w-full flex items-center justify-between py-1.5 px-1 group/header text-left select-none transition-colors"
+                    aria-expanded={isExpanded}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-5 h-5 rounded-md flex items-center justify-center text-muted-foreground group-hover/header:text-foreground transition-transform">
+                        {isExpanded ? (
+                          <ChevronDown className="w-4 h-4 text-primary" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4" />
+                        )}
+                      </div>
+                      <span className="text-xs md:text-sm font-bold text-foreground font-sans tracking-tight">
+                        {group.label}
                       </span>
-                      <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
-                        {countWords(note.content)} words
+                      <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0 bg-muted/30">
+                        {group.notes.length} note{group.notes.length === 1 ? '' : 's'}
                       </Badge>
-                      {note.merged_from && note.merged_from.length > 0 && (
-                        <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
-                          <GitMerge className="w-2.5 h-2.5" />
-                          <span>Merged · {note.merged_from.length} Voice Notes</span>
-                        </Badge>
-                      )}
-                      {promotedNoteIds.has(note.id) && (
-                        <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
-                          <Sparkles className="w-2.5 h-2.5" />
-                          <span>SCRIBBLE</span>
-                        </Badge>
-                      )}
+                      <span className="text-[10px] font-mono text-muted-foreground/80">
+                        · {group.totalWords.toLocaleString()} words
+                      </span>
                     </div>
+                    <div className="h-[1px] flex-1 bg-border/40 mx-4" />
+                    <span className="text-[10px] font-mono text-muted-foreground opacity-0 group-hover/header:opacity-100 transition-opacity">
+                      {isExpanded ? 'Collapse' : 'Expand'}
+                    </span>
+                  </button>
 
-                    {/* Action Buttons Toolbar */}
-                    {!isEditing && (
-                      <div className="flex items-center gap-1">
-                        {/* Unmerge Action for Merged Notes */}
-                        {note.merged_from && note.merged_from.length > 0 && (
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => {
-                              setUnmergingNoteId(isUnmerging ? null : note.id);
-                              setMergingNoteId(null);
-                              setDeletingNoteId(null);
-                            }}
-                            disabled={actionBusy}
-                            className={`h-7 w-7 rounded-lg transition-colors ${
-                              isUnmerging
-                                ? 'bg-primary/10 text-primary'
-                                : 'text-muted-foreground hover:text-primary hover:bg-primary/10'
-                            }`}
-                            title="Unmerge this Voice Note"
-                            aria-label="Unmerge this Voice Note"
-                          >
-                            <Undo className="w-3.5 h-3.5" />
-                          </Button>
-                        )}
+                  {isExpanded && (
+                    <div className="space-y-3 animate-in fade-in duration-150">
+                      {/* VIEW 1: MASONRY GRID */}
+                      {viewMode === 'grid' && (
+                        <div className="columns-1 md:columns-2 lg:columns-3 gap-3.5 [column-fill:_balance]">
+                          {displayNotes.map((note) => {
+                            const isEditing = editingNoteId === note.id;
+                            const isSelected = selectedNoteIds.has(note.id);
 
-                        {/* Merge with adjacent earlier note */}
-                        {canMergeWithNext && (
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => {
-                              setMergingNoteId(isMerging ? null : note.id);
-                              setDeletingNoteId(null);
-                              setUnmergingNoteId(null);
-                            }}
-                            disabled={actionBusy}
-                            className={`h-7 w-7 rounded-lg transition-colors ${
-                              isMerging
-                                ? 'bg-primary/10 text-primary'
-                                : 'text-muted-foreground hover:text-primary hover:bg-primary/10'
-                            }`}
-                            title="Merge with adjacent earlier note"
-                            aria-label="Merge with adjacent earlier note"
-                          >
-                            <GitMerge className="w-3.5 h-3.5" />
-                          </Button>
-                        )}
-
-                        {/* Save / Promote as Scribble */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handlePromoteToScribble(note)}
-                          disabled={actionBusy || promotedNoteIds.has(note.id)}
-                          className={`h-7 w-7 rounded-lg transition-colors ${
-                            promotedNoteIds.has(note.id)
-                              ? 'bg-primary/10 text-primary cursor-default'
-                              : 'text-muted-foreground hover:text-primary hover:bg-primary/10'
-                          }`}
-                          title={promotedNoteIds.has(note.id) ? 'Promoted to Scribble' : 'Save as Scribble (Promote into Knowledge Layer)'}
-                          aria-label="Save as Scribble"
-                        >
-                          {promotedNoteIds.has(note.id) ? (
-                            <Check className="w-3.5 h-3.5 text-primary" />
-                          ) : (
-                            <Sparkles className="w-3.5 h-3.5" />
-                          )}
-                        </Button>
-
-                        {/* Edit Note */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleStartEdit(note)}
-                          className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
-                          title="Edit transcript"
-                          aria-label="Edit transcript"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </Button>
-
-                        {/* Copy Content */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleCopy(note)}
-                          className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
-                          title="Copy transcript"
-                          aria-label="Copy transcript"
-                        >
-                          {copiedNoteId === note.id ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-500" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </Button>
-
-                        {/* Delete Note */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => {
-                            setDeletingNoteId(isDeleting ? null : note.id);
-                            setMergingNoteId(null);
-                          }}
-                          className={`h-7 w-7 rounded-lg transition-colors ${
-                            isDeleting
-                              ? 'bg-red-500/15 text-red-600 dark:text-red-400'
-                              : 'text-muted-foreground hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10'
-                          }`}
-                          title="Delete note"
-                          aria-label="Delete note"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Body: Editing Mode vs Normal Display */}
-                  {isEditing ? (
-                    <div className="space-y-2 pt-1">
-                      <textarea
-                        value={editingContent}
-                        onChange={(e) => setEditingContent(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                            handleSaveEdit(note.id);
-                          }
-                          if (e.key === 'Escape') {
-                            handleCancelEdit();
-                          }
-                        }}
-                        disabled={actionBusy}
-                        className="w-full min-h-[90px] p-3 text-sm bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-sans leading-relaxed resize-y"
-                        autoFocus
-                      />
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-muted-foreground">
-                          Press <kbd className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">Ctrl+Enter</kbd> to save, <kbd className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">Esc</kbd> to cancel
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={handleCancelEdit}
-                            disabled={actionBusy}
-                            className="h-7 text-xs gap-1"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                            <span>Cancel</span>
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="default"
-                            onClick={() => handleSaveEdit(note.id)}
-                            disabled={actionBusy || !editingContent.trim()}
-                            className="h-7 text-xs gap-1"
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            <span>Save Changes</span>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {/* `select-text` is load-bearing here, not decoration.
-                          Relay sets `user-select: none` on `<body>` (both
-                          index.html and index.css) to feel native, and it
-                          inherits down to here — without this the transcript
-                          cannot be highlighted at all and the correction
-                          popover can never open. */}
-                      <p
-                        ref={(el) => {
-                          noteBodyRefs.current[note.id] = el;
-                        }}
-                        className="text-sm text-foreground whitespace-pre-wrap break-words leading-relaxed select-text cursor-text"
-                      >
-                        {note.content}
-                      </p>
-
-                      {/* Selection popover — the lightweight path. The pencil
-                          above still opens the whole note. */}
-                      {selection?.noteId === note.id && (
-                        <div
-                          role="group"
-                          aria-label="Correct selected phrase"
-                          className="rounded-lg border border-border bg-card p-2.5 space-y-2 animate-in fade-in duration-150"
-                        >
-                          <div className="flex items-center justify-between gap-2 text-xs">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-muted-foreground shrink-0">Selected</span>
-                              <code className="px-1.5 py-0.5 rounded-lg bg-muted text-foreground break-all">
-                                {selection.text}
-                              </code>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              aria-label="Dismiss selection"
-                              onClick={dismissSelection}
-                              className="h-6 w-6 p-0 shrink-0"
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
-                          </div>
-
-                          {!correctionOpen ? (
-                            /* What can be done with this phrase, before asking
-                               for anything. */
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <Button
-                                size="sm"
-                                variant="default"
-                                onClick={() => setCorrectionOpen(true)}
-                                className="h-7 text-xs"
+                            return (
+                              <div
+                                key={note.id}
+                                onClick={(e) => handleCardClick(note.id, e)}
+                                className={`rounded-xl border transition-all duration-200 group flex flex-col justify-between p-4 select-none relative cursor-pointer break-inside-avoid mb-3.5 w-full ${
+                                  isSelected
+                                    ? 'border-primary/60 bg-primary/10 dark:bg-primary/15 ring-2 ring-primary/30 shadow-sm dark:shadow-primary/10'
+                                    : 'border-border/80 bg-card/90 dark:bg-card/50 hover:border-border hover:bg-muted/15 dark:hover:bg-muted/10 hover:shadow-md hover:-translate-y-0.5'
+                                }`}
                               >
-                                Correct
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={correcting}
-                                onClick={() => void handleAddToDictionary()}
-                                className="h-7 text-xs"
-                              >
-                                Add to Dictionary
-                              </Button>
-                              <span className="text-[10px] text-muted-foreground">
-                                Adding keeps this spelling — correcting changes the note.
-                              </span>
-                            </div>
-                          ) : (
-                            <>
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <input
-                                  autoFocus
-                                  value={replacement}
-                                  onChange={(e) => setReplacement(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') void handleApplyCorrection();
-                                    if (e.key === 'Escape') dismissSelection();
-                                  }}
-                                  placeholder="Replace with…"
-                                  aria-label="Replacement text"
-                                  className="flex-1 min-w-[140px] text-xs rounded-lg border border-border bg-background px-2 py-1.5 text-foreground"
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="default"
-                                  disabled={!replacement.trim() || correcting}
-                                  onClick={() => void handleApplyCorrection()}
-                                  className="h-7 text-xs"
-                                >
-                                  Replace
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={dismissSelection}
-                                  className="h-7 text-xs"
-                                >
-                                  Cancel
-                                </Button>
-                              </div>
+                                <div className="flex items-center justify-between gap-2 mb-2.5 shrink-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                    <button
+                                      type="button"
+                                      role="checkbox"
+                                      aria-checked={isSelected}
+                                      aria-label={`Select voice note from ${formatNoteTimestamp(note.created_at)}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleSelectNote(note.id);
+                                      }}
+                                      className={`w-4 h-4 rounded-md border flex items-center justify-center transition-all ${
+                                        isSelected
+                                          ? 'bg-primary border-primary text-primary-foreground shadow-2xs'
+                                          : 'border-border/80 bg-background/60 hover:border-primary/50 text-transparent'
+                                      }`}
+                                    >
+                                      <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                    </button>
 
-                              <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={teachVox}
-                                  onChange={(e) => setTeachVox(e.target.checked)}
-                                  className="accent-primary"
-                                />
-                                <span>
-                                  Teach Vox this correction
-                                  {replacement.trim() && looksLikeVocabulary(selection.text, replacement) && (
-                                    <span className="ml-1 text-emerald-600 dark:text-emerald-400">
-                                      · looks like a name Vox keeps mishearing
+                                    <span className="text-[11px] font-semibold text-foreground font-mono truncate">
+                                      {formatNoteTimestamp(note.created_at)}
                                     </span>
+                                    <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-muted/40 text-muted-foreground shrink-0">
+                                      {countWords(note.content)}w
+                                    </Badge>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {note.merged_from && note.merged_from.length > 0 && (
+                                      <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
+                                        <GitMerge className="w-2.5 h-2.5" />
+                                        <span>Merged · {note.merged_from.length} Voice Notes</span>
+                                      </Badge>
+                                    )}
+                                    {promotedNoteIds.has(note.id) && (
+                                      <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
+                                        <Sparkles className="w-2.5 h-2.5" />
+                                        <span>SCRIBBLE</span>
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex-1 min-h-0 relative my-1 select-text">
+                                  {isEditing ? (
+                                    renderInlineEdit(note)
+                                  ) : (
+                                    <p
+                                      ref={(el) => {
+                                        noteBodyRefs.current[note.id] = el;
+                                      }}
+                                      className="text-xs md:text-sm text-foreground/90 leading-relaxed font-sans select-text cursor-text break-words whitespace-pre-wrap"
+                                    >
+                                      {note.content}
+                                    </p>
                                   )}
-                                </span>
-                              </label>
-                              <p className="text-[10px] text-muted-foreground leading-snug">
-                                Replaces only this occurrence. Teaching also repairs it in future
-                                transcripts.
-                              </p>
-                            </>
-                          )}
 
-                          {correctionError && (
-                            <p role="alert" className="text-[11px] text-destructive leading-snug">
-                              {correctionError}
-                            </p>
-                          )}
+                                  {renderPhraseCorrectionPopover(note)}
+                                  {renderUndoNotification(note)}
+                                  {renderUnmergeBanner(note)}
+                                </div>
+
+                                {!isEditing && (
+                                  <div
+                                    className="flex items-center justify-between pt-2 mt-auto border-t border-border/50 shrink-0"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <span className="text-[10px] text-muted-foreground font-mono">
+                                      {new Date(note.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                                    </span>
+                                    {renderNoteActions(note)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
 
-                      {/* Undo, inline rather than a toast: this page has no
-                          toast system, and inventing one for a single action
-                          would be a larger change than the feature. */}
-                      {undoState?.noteId === note.id && (
-                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs animate-in fade-in duration-150">
-                          <span className="text-muted-foreground break-all">{undoState.message}</span>
-                          <div className="flex items-center gap-1">
-                            {undoState.undoable && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => void handleUndoCorrection()}
-                                className="h-6 text-xs gap-1"
+                      {/* VIEW 2: COMPACT LIST */}
+                      {viewMode === 'list' && (
+                        <div className="space-y-2">
+                          {displayNotes.map((note) => {
+                            const isEditing = editingNoteId === note.id;
+                            const isSelected = selectedNoteIds.has(note.id);
+
+                            return (
+                              <div
+                                key={note.id}
+                                onClick={(e) => handleCardClick(note.id, e)}
+                                className={`rounded-xl border transition-all duration-150 p-3 select-none relative cursor-pointer ${
+                                  isSelected
+                                    ? 'border-primary/60 bg-primary/10 ring-1 ring-primary/30 shadow-2xs'
+                                    : 'border-border/70 bg-card/70 hover:border-border hover:bg-muted/15'
+                                }`}
                               >
-                                <Undo className="w-3 h-3" />
-                                Undo
-                              </Button>
-                            )}
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setUndoState(null)}
-                              className="h-6 text-xs"
-                            >
-                              Dismiss
-                            </Button>
-                          </div>
+                                <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                                    <button
+                                      type="button"
+                                      role="checkbox"
+                                      aria-checked={isSelected}
+                                      aria-label={`Select voice note from ${formatNoteTimestamp(note.created_at)}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleSelectNote(note.id);
+                                      }}
+                                      className={`w-4 h-4 mt-0.5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
+                                        isSelected
+                                          ? 'bg-primary border-primary text-primary-foreground'
+                                          : 'border-border bg-background/60 hover:border-primary/50 text-transparent'
+                                      }`}
+                                    >
+                                      <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                    </button>
+
+                                    <div className="flex-1 min-w-0 select-text">
+                                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                        <span className="text-[11px] font-semibold text-foreground font-mono">
+                                          {formatNoteTimestamp(note.created_at)}
+                                        </span>
+                                        <Badge variant="outline" className="text-[9px] font-mono px-1 py-0">
+                                          {countWords(note.content)}w
+                                        </Badge>
+                                        {note.merged_from && note.merged_from.length > 0 && (
+                                          <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
+                                            <GitMerge className="w-2.5 h-2.5" />
+                                            <span>Merged · {note.merged_from.length} Voice Notes</span>
+                                          </Badge>
+                                        )}
+                                        {promotedNoteIds.has(note.id) && (
+                                          <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
+                                            <Sparkles className="w-2.5 h-2.5" />
+                                            <span>SCRIBBLE</span>
+                                          </Badge>
+                                        )}
+                                      </div>
+
+                                      {isEditing ? (
+                                        renderInlineEdit(note)
+                                      ) : (
+                                        <p
+                                          ref={(el) => {
+                                            noteBodyRefs.current[note.id] = el;
+                                          }}
+                                          className="text-xs text-foreground/90 leading-relaxed font-sans select-text cursor-text break-words whitespace-pre-wrap"
+                                        >
+                                          {note.content}
+                                        </p>
+                                      )}
+
+                                      {renderPhraseCorrectionPopover(note)}
+                                      {renderUndoNotification(note)}
+                                      {renderUnmergeBanner(note)}
+                                    </div>
+                                  </div>
+
+                                  {!isEditing && renderNoteActions(note)}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
-                    </div>
-                  )}
 
-                  {/* Delete Confirmation Inline Banner */}
-                  {isDeleting && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-600 dark:text-red-400 animate-in fade-in duration-150">
-                      <span className="font-medium">Move this Voice Note to Trash? (Kept for 30 days before permanent deletion)</span>
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={actionBusy}
-                          onClick={() => setDeletingNoteId(null)}
-                          className="h-7 text-xs"
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          disabled={actionBusy}
-                          onClick={() => handleDelete(note.id)}
-                          className="h-7 text-xs gap-1 font-semibold"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Move to Trash</span>
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Unmerge Confirmation Inline Banner */}
-                  {isUnmerging && (
-                    <div className="p-3 bg-accent/40 border border-border rounded-lg text-xs space-y-2 animate-in fade-in duration-150">
-                      <div className="flex items-center gap-1.5 font-semibold text-foreground">
-                        <Undo className="w-4 h-4 text-primary shrink-0" />
-                        <span>Unmerge this Voice Note?</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        This will restore the original Voice Notes and remove the merged version.
-                      </p>
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={actionBusy}
-                          onClick={() => setUnmergingNoteId(null)}
-                          className="h-7 text-xs"
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="default"
-                          disabled={actionBusy}
-                          onClick={() => handleUnmerge(note.id)}
-                          className="h-7 text-xs gap-1.5 font-semibold"
-                        >
-                          <Undo className="w-3.5 h-3.5" />
-                          <span>Unmerge</span>
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Merge Confirmation Inline Banner */}
-                  {isMerging && nextNote && (
-                    <div className="p-3 bg-accent/40 border border-border rounded-lg text-xs space-y-2 animate-in fade-in duration-150">
-                      <div className="flex items-center gap-1.5 font-semibold text-foreground">
-                        <GitMerge className="w-4 h-4 text-primary shrink-0" />
-                        <span>Merge with adjacent note ({formatNoteTimestamp(nextNote.created_at)})?</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground line-clamp-2 italic bg-background/60 p-2 rounded border border-border/50">
-                        "{nextNote.content}"
-                      </p>
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={actionBusy}
-                          onClick={() => setMergingNoteId(null)}
-                          className="h-7 text-xs"
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="default"
-                          disabled={actionBusy}
-                          onClick={() => handleMerge(note.id, nextNote.id)}
-                          className="h-7 text-xs gap-1.5"
-                        >
-                          <GitMerge className="w-3.5 h-3.5" />
-                          <span>Combine Notes</span>
-                        </Button>
-                      </div>
+                      {/* Pagination / Show More button */}
+                      {hasMore && (
+                        <div className="flex justify-center pt-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => toggleShowAllForDay(group.key)}
+                            className="text-xs text-muted-foreground hover:text-foreground h-7 px-3 rounded-lg border border-border/50"
+                          >
+                            {showAll ? 'Show fewer notes' : `Show ${group.notes.length - 9} more notes`}
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1213,7 +1565,6 @@ export const VoiceNotePage: React.FC = () => {
           </div>
         )}
       </div>
-
     </div>
   );
 };
