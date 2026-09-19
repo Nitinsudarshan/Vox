@@ -564,6 +564,7 @@ pub fn run() {
             meetings::commands::detect_meeting_speakers,
             meetings::commands::rename_meeting_speaker,
             meetings::commands::cancel_meeting_import,
+            meetings::commands::get_meeting_segment_diagnostics,
             meetings::commands::speech_benchmark_template,
             meetings::commands::inspect_speech_benchmark,
             meetings::commands::run_speech_benchmark,

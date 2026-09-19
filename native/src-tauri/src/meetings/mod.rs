@@ -53,6 +53,7 @@ pub mod model;
 pub mod segmenter;
 pub mod series;
 pub mod store;
+pub mod telemetry;
 pub mod summary;
 pub mod transcription;
 pub mod speakers;

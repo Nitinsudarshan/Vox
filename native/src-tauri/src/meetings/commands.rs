@@ -39,6 +39,12 @@ pub struct MeetingDetail {
     /// transcript.
     #[serde(default)]
     pub speakers: Vec<crate::meetings::model::Speaker>,
+    /// How the recording and the transcription went. `None` for a meeting
+    /// recorded before diagnostics existed, or one that never finished — both
+    /// of which are ordinary, so the surface renders nothing rather than
+    /// claiming zeroes.
+    #[serde(default)]
+    pub diagnostics: Option<crate::meetings::telemetry::MeetingDiagnostics>,
 }
 
 /// In-flight import and re-transcription runs, so they can be cancelled.
@@ -331,6 +337,7 @@ pub fn get_meeting(
         summary,
         notes: store.load_notes(&meeting_id)?,
         speakers: store.load_speakers(&meeting_id)?,
+        diagnostics: store.load_diagnostics(&meeting_id)?,
     })
 }
 
@@ -1238,6 +1245,24 @@ mod tests {
         assert!(offered.contains(&"wav".to_string()));
         assert!(offered.contains(&"m4a".to_string()));
     }
+}
+
+// --- diagnostics --------------------------------------------------------
+
+/// Every per-segment record for a meeting, in sequence order.
+///
+/// Separate from the rollup because it is large and is only wanted when the
+/// rollup has already said something is wrong: the rollup says the p95 was
+/// twelve seconds, and this says which segments they were.
+#[tauri::command]
+pub fn get_meeting_segment_diagnostics(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Vec<crate::meetings::telemetry::SegmentDiagnostics>, CommandError> {
+    state
+        .meeting_store
+        .load_segment_diagnostics(&meeting_id)
+        .map_err(CommandError::from)
 }
 
 // --- speech benchmark ---------------------------------------------------

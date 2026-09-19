@@ -165,6 +165,12 @@ export interface MeetingDetail {
    * optional rather than merely empty.
    */
   speakers?: Speaker[];
+  /**
+   * How the recording and the transcription went. Absent for a meeting
+   * recorded before diagnostics existed, or one that never finished — both
+   * ordinary, so the surface renders nothing rather than claiming zeroes.
+   */
+  diagnostics?: MeetingDiagnostics | null;
 }
 
 export interface MeetingSearchHit {
@@ -344,4 +350,115 @@ export interface MeetingReminderPayload {
   participants: string[];
   /** Whether there is a conferencing link behind the Join button. */
   can_join: boolean;
+}
+
+// --- diagnostics ---------------------------------------------------------
+
+/** What happened to one decoded segment. */
+export type SegmentStatus = 'kept' | 'discarded' | 'failed';
+
+/**
+ * One segment's journey from the segmenter to the transcript.
+ *
+ * Every duration is milliseconds and they are deliberately separate: a single
+ * total cannot tell "the model is slow" from "something else held the model"
+ * from "the queue was behind", and those need three different fixes.
+ *
+ * There is no confidence field. What Whisper reports is `no_speech_prob`, and
+ * an engine that reports none sends none rather than a stand-in.
+ */
+export interface SegmentDiagnostics {
+  version: number;
+  /** Joins to `TranscriptSegment.sequence`, including for segments that never produced one. */
+  sequence: number;
+  start_seconds: number;
+  end_seconds: number;
+  channel: SegmentChannel;
+  forced_split: boolean;
+  voiced_seconds: number;
+  total_seconds: number;
+  no_speech_prob?: number | null;
+  queue_wait_ms: number;
+  lock_wait_ms: number;
+  model_load_ms: number;
+  model_reloaded: boolean;
+  decode_ms: number;
+  post_ms: number;
+  persist_ms: number;
+  model: string;
+  language?: string | null;
+  expensive_script_profile: boolean;
+  audio_ctx?: number | null;
+  status: SegmentStatus;
+  /** The `speech_health` reason key, for a discarded segment. */
+  rejection?: string | null;
+  error?: string | null;
+  text_chars: number;
+  queue_depth_after: number;
+}
+
+/**
+ * How the recording itself went.
+ *
+ * Separate from {@link TranscriptionHealth} because they fail for different
+ * reasons: a microphone that heard nothing is a device problem, a backlog is a
+ * model problem. `opened && !heard` is the signature of the wrong device.
+ */
+export interface CaptureHealth {
+  recording_seconds: number;
+  microphone_opened: boolean;
+  system_audio_opened: boolean;
+  microphone_heard: boolean;
+  system_audio_heard: boolean;
+  audio_checkpoints_written: boolean;
+  checkpoint_failures: number;
+}
+
+/** How transcription went. */
+export interface TranscriptionHealth {
+  segments_emitted: number;
+  segments_kept: number;
+  segments_discarded: number;
+  segments_failed: number;
+  /** Speech that exists in the recording and not in the transcript. */
+  segments_dropped: number;
+  peak_queue_depth: number;
+  speech_seconds: number;
+  transcribed_seconds: number;
+  mean_decode_rtf: number;
+  worst_decode_rtf: number;
+  worst_decode_sequence: number;
+  /**
+   * Decode time against wall-clock recording length. Above 1.0 the backlog
+   * grows; below it nothing accumulates.
+   */
+  pipeline_rtf: number;
+  finalization_p50_ms: number;
+  finalization_p95_ms: number;
+  finalization_max_ms: number;
+  lock_wait_ms_total: number;
+  model_load_ms_total: number;
+  model_reloads: number;
+  drain_seconds: number;
+  /** False when the drain gave up on a backlog it could not clear. */
+  drain_completed: boolean;
+  /** Discarded segments by `speech_health` reason key. */
+  rejections: Record<string, number>;
+}
+
+/** One meeting's diagnostics rollup. */
+export interface MeetingDiagnostics {
+  version: number;
+  meeting_id: string;
+  completed_at: string;
+  /** Model filename, never its path. */
+  model: string;
+  language?: string | null;
+  strategy: string;
+  threads: string;
+  /** Each decode-profile change, as [first segment on the new profile, is the cheaper one]. */
+  profile_switches: [number, boolean][];
+  segments_on_cheap_profile: number;
+  capture: CaptureHealth;
+  transcription: TranscriptionHealth;
 }

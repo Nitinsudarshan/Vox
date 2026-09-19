@@ -48,6 +48,7 @@ use super::checkpoint::{self, CheckpointWriter};
 use super::model::{Meeting, MeetingSource, MeetingState};
 use super::segmenter::Segmenter;
 use super::store::{MeetingStore, MeetingStoreError};
+use super::telemetry;
 use super::transcription::{self, TranscriptionQueue, WorkerConfig};
 
 /// Recording lifecycle, for every surface that shows recording state.
@@ -151,11 +152,33 @@ impl MeetingRecordingStatus {
     }
 }
 
+/// What the stop path knows that the per-segment log cannot.
+struct DiagnosticsFacts {
+    recording_seconds: f64,
+    drain_seconds: f64,
+    drain_completed: bool,
+    microphone_opened: bool,
+    system_audio_opened: bool,
+    microphone_heard: bool,
+    system_audio_heard: bool,
+    checkpoints_written: bool,
+    checkpoint_failures: u64,
+    segments_emitted: u64,
+    segments_dropped: u64,
+}
+
 /// What the pump thread reports back when the recording ends.
 struct PumpResult {
     /// The merged recording, if any audio was captured.
     audio_path: Option<String>,
     duration_seconds: f64,
+    /// Whether a checkpoint writer existed at all. `false` means the recording
+    /// was never being saved — the worst failure in the subsystem, and until
+    /// now one that only appeared in the log.
+    checkpoints_written: bool,
+    /// Checkpoint writes that failed mid-recording. Non-zero means the audio
+    /// has gaps in it.
+    checkpoint_failures: u64,
 }
 
 struct ActiveMeeting {
@@ -392,6 +415,7 @@ impl MeetingEngine {
         active.capture.stop();
         let binding = active.capture.binding();
         let heard_system = active.capture.system_audio_heard();
+        let microphone_heard = active.capture.microphone_heard();
 
         // 2. The pump flushes the segmenter, submitting whatever sentence was
         //    still open, then merges the audio.
@@ -402,6 +426,8 @@ impl MeetingEngine {
                 PumpResult {
                     audio_path: None,
                     duration_seconds: 0.0,
+                    checkpoints_written: false,
+                    checkpoint_failures: 0,
                 }
             }
         };
@@ -435,14 +461,38 @@ impl MeetingEngine {
         };
         let drain_seconds = t_drain_start.elapsed().as_secs_f64();
 
-        if let Some(stats) = stats {
+        if let Some(stats) = &stats {
             transcription::print_meeting_summary(
                 &id,
-                &stats,
-                pump.duration_seconds as f64,
+                stats,
+                pump.duration_seconds,
                 drain_seconds,
             );
         }
+
+        // The diagnostics rollup, built from the per-segment log the worker
+        // wrote plus the facts only the stop path holds: how long the
+        // recording ran, whether the drain finished, and what the devices did.
+        // Written before the meeting record so a crash between the two leaves
+        // diagnostics for a meeting that reads as interrupted, rather than a
+        // finished meeting with nothing explaining it.
+        self.write_diagnostics(
+            &id,
+            stats.as_ref(),
+            DiagnosticsFacts {
+                recording_seconds: pump.duration_seconds,
+                drain_seconds,
+                drain_completed: drained,
+                microphone_opened: binding.microphone,
+                system_audio_opened: binding.system_audio,
+                microphone_heard,
+                system_audio_heard: heard_system,
+                checkpoints_written: pump.checkpoints_written,
+                checkpoint_failures: pump.checkpoint_failures,
+                segments_emitted: queued,
+                segments_dropped: dropped,
+            },
+        );
 
         // 4. Write the finished record.
         let segments = self.store.load_transcript(&id)?;
@@ -500,6 +550,56 @@ impl MeetingEngine {
         recovered
     }
 
+    /// Writes the meeting's diagnostics rollup.
+    ///
+    /// Never fatal: a meeting whose telemetry could not be written is still a
+    /// meeting, and failing the stop over it would trade the recording for the
+    /// notes about the recording.
+    fn write_diagnostics(
+        &self,
+        id: &str,
+        stats: Option<&transcription::TranscriptionStats>,
+        facts: DiagnosticsFacts,
+    ) {
+        let segments = match self.store.load_segment_diagnostics(id) {
+            Ok(segments) => segments,
+            Err(err) => {
+                tracing::warn!("meeting {}: could not read segment diagnostics: {}", id, err);
+                return;
+            }
+        };
+
+        let capture = telemetry::CaptureHealth {
+            recording_seconds: facts.recording_seconds,
+            microphone_opened: facts.microphone_opened,
+            system_audio_opened: facts.system_audio_opened,
+            microphone_heard: facts.microphone_heard,
+            system_audio_heard: facts.system_audio_heard,
+            audio_checkpoints_written: facts.checkpoints_written,
+            checkpoint_failures: facts.checkpoint_failures,
+        };
+        let stop = telemetry::StopFacts {
+            model: stats
+                .map(|s| transcription::model_name(&s.model_path))
+                .unwrap_or_default(),
+            language: stats.map(|s| s.language.clone()),
+            strategy: stats.map(|s| s.strategy.clone()).unwrap_or_default(),
+            threads: stats.map(|s| s.threads.clone()).unwrap_or_default(),
+            profile_switches: stats.map(|s| s.switches.clone()).unwrap_or_default(),
+            segments_on_cheap_profile: stats.map_or(0, |s| s.segments_on_cheap_profile),
+            segments_emitted: facts.segments_emitted,
+            segments_dropped: facts.segments_dropped,
+            peak_queue_depth: stats.map_or(0, |s| s.peak_in_queue),
+            drain_seconds: facts.drain_seconds,
+            drain_completed: facts.drain_completed,
+        };
+
+        let diagnostics = telemetry::MeetingDiagnostics::summarize(id, &segments, capture, stop);
+        if let Err(err) = self.store.save_diagnostics(&diagnostics) {
+            tracing::warn!("meeting {}: could not save diagnostics: {}", id, err);
+        }
+    }
+
     fn emit_state(&self, app: &Option<AppHandle>) {
         if let Some(handle) = app {
             let _ = handle.emit(MEETING_STATE_EVENT, self.status());
@@ -518,6 +618,7 @@ fn run_pump(
     queue: TranscriptionQueue,
 ) -> PumpResult {
     let mut segmenter = Segmenter::new();
+    let mut checkpoint_failures = 0u64;
     let mut writer = match CheckpointWriter::new(&audio_dir) {
         Ok(writer) => Some(writer),
         Err(err) => {
@@ -542,6 +643,7 @@ fn run_pump(
         }
         if let Some(writer) = writer.as_mut() {
             if let Err(err) = writer.push(&block.mixed) {
+                checkpoint_failures += 1;
                 tracing::error!("meeting checkpoint failed: {}", err);
             }
         }
@@ -552,6 +654,7 @@ fn run_pump(
         queue.submit(segment);
     }
 
+    let checkpoints_written = writer.is_some();
     let duration_seconds = writer
         .as_ref()
         .map(|writer| writer.duration_seconds())
@@ -567,6 +670,8 @@ fn run_pump(
     PumpResult {
         audio_path,
         duration_seconds,
+        checkpoints_written,
+        checkpoint_failures,
     }
 }
 

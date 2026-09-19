@@ -42,6 +42,8 @@ transcript.json ─ summary::service ─ template + LLM ─ summary.json
 ├── speakers.json     the voices detection proposed, and the names you gave them
 ├── summary.json      the report, its cache fingerprint, and the English original
 ├── notes.md          whatever the user typed
+├── diagnostics.jsonl one line per decoded segment, appended as it goes
+├── diagnostics.json  the run's rollup, written once on stop
 └── audio/
     ├── chunk_000000.wav   durable 30 s checkpoints, during recording
     └── audio.wav          the merged recording, written on stop
@@ -185,6 +187,55 @@ The transcript reaches the model through `pipeline::source_boundary`: anyone
 on a call can say "ignore your instructions", and a transcript is full of
 imperative sentences, so it is framed as data inside an unguessable delimiter
 rather than filtered.
+
+## Diagnostics
+
+Every decode was already measured — queue wait, lock wait, model load, decode,
+post-processing, persistence, and the voiced-time profile the hallucination
+screen judged it against. Those numbers were printed to a terminal and
+dropped, which is enough to watch one run and not enough to answer any
+question about behaviour over time. That is most questions: *is this model too
+slow on this machine*, *did the backlog grow*, *how often does the screen
+reject real speech*.
+
+Two files, two shapes. `diagnostics.jsonl` is a log, appended one line per
+segment, so the thousandth costs what the first did and a crash keeps
+everything written before it — a torn final line is skipped on read, which
+would be unacceptable for a transcript and is exactly right for telemetry
+about a run that has already crashed. `diagnostics.json` is a document,
+written once on stop, atomically like everything else in the vault.
+
+What is deliberately **not** in them: transcript text (the record carries
+`text_chars`; the transcript already holds the words, and a second copy is a
+second thing to leak and to delete), audio, speaker attribution
+(`transcript.json` carries `speaker_id` against the same `sequence`, and two
+copies of one fact is how they disagree), and confidence — Whisper does not
+report one, so the field is called `no_speech_prob`, and an engine that
+reports nothing records nothing.
+
+The rollup answers two questions separately, because they fail for different
+reasons and are fixed by different actions:
+
+| | Answers |
+|---|---|
+| `capture` | Did the devices open, did each one *hear* anything, was durable audio written, did any checkpoint fail. `opened && !heard` is the wrong device. |
+| `transcription` | What the segmenter emitted and what became text, the two coverage figures, decode RTF against speech and pipeline RTF against the clock, finalization p50/p95/max, peak queue, model reloads, the wait after stop, and discarded segments broken down by the reason `speech_health` gave. |
+
+`pipeline_rtf` is the number that decides whether a meeting can be transcribed
+live at all: audio arrives at wall-clock rate, so above 1.0 the backlog grows
+by `L × (rtf − 1)` over a meeting of length `L` and takes that long to clear
+after stop. `decode_rtf` measures the model against speech and can look
+excellent while the backlog grows, because a meeting is mostly silence.
+
+Meeting Detail renders this once the recording has finished — not during one,
+because a rollup of an unfinished run reads as a verdict on it — and offers
+the slowest segments on request rather than loading a thousand records nobody
+asked for.
+
+Re-transcription and import decode through `import::run_batch` and do **not**
+write diagnostics yet. They have no clock to fall behind, so backlog and drops
+cannot happen there; what is missing is the accuracy-side evidence, and that
+gap is real.
 
 ## Failure and recovery
 

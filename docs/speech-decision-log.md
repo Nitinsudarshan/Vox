@@ -324,6 +324,56 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-017 — Telemetry is persisted, and persisted as a log rather than a document
+
+- **Context**: D-011 recorded that the pipeline's phases are measured
+  separately. They were — and then printed to stdout with `println!` and
+  dropped. Nothing about behaviour over time was answerable, which is what
+  every performance question actually is.
+- **Decision**: Two files per meeting. `diagnostics.jsonl` gets one appended
+  line per decoded segment; `diagnostics.json` gets the rollup, written once
+  on stop.
+- **Reason for the split**: they are different kinds of thing. A per-segment
+  record is a log entry — appending must cost the same at segment one thousand
+  as at segment one, which rewriting a growing file does not, and a crash
+  should keep every line written before it. A rollup is a document, so it
+  goes through `write_atomic` like every other document in the vault. A torn
+  final line in the log is skipped on read: for a transcript that would be
+  unacceptable, and for telemetry about a run that has already crashed it is
+  precisely the right trade.
+- **What is excluded, and why**: transcript text (`text_chars` only — a second
+  copy of meeting content is a second thing to leak and a second thing to
+  delete), audio, and speaker attribution (`transcript.json` already carries
+  `speaker_id` against the same `sequence`; two copies of one fact is how they
+  come to disagree, which is the defect `model.rs` calls out in Meetily's
+  never-written `speaker` column).
+- **Impact**: `meetings/telemetry.rs`, four store methods, the worker writing
+  a record per segment, the rollup written on stop, `MeetingDetail.diagnostics`
+  and a panel on Meeting Detail. A diagnostics write that fails is logged and
+  the meeting carries on — trading a recording for the notes about a recording
+  is the wrong way round.
+- **Not covered**: `import::run_batch`, so re-transcription and import write no
+  diagnostics. They have no clock to fall behind, so backlog and drops cannot
+  occur there; the accuracy-side evidence is genuinely missing and is recorded
+  as such in `docs/meetings.md`.
+
+---
+
+### D-018 — A model path is never written into a diagnostics file
+
+- **Context**: `TranscriptionStats` carried `model_path`, and the obvious thing
+  to record is what the worker was configured with.
+- **Decision**: Diagnostics record the model's *filename*.
+- **Reason**: A diagnostics file exists to be shared — attached to a bug
+  report, pasted into a thread. An absolute path names a machine and, on
+  Windows, almost always a person. The filename is the whole of what a reader
+  needs to know which model ran.
+- **Consequence**: the same rule applies to the benchmark's `EngineDescriptor`,
+  which already followed it, and to anything later that reports what produced
+  a transcript.
+
+---
+
 ## Reserved, not yet decided
 
 These ids are reserved so that the staged plan's numbering and this log's do
@@ -334,12 +384,12 @@ it lands — with the measurement that justified it.
 
 | Id | Proposal | Blocked on |
 |---|---|---|
-| D-017 | Turn detection is a subsystem independent of ASR, with observable states, and acoustic evidence is its baseline — no LLM for basic end-of-turn | Stage 4 — needs the audit's §14.9 finalization-latency distribution first |
-| D-018 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
-| D-019 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
-| D-020 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
-| D-021 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-020 |
-| D-022 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
-| D-023 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
-| D-024 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-016 and D-023 |
-| D-025 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-018 exists to express it |
+| D-019 | Turn detection is a subsystem independent of ASR, with observable states, and acoustic evidence is its baseline — no LLM for basic end-of-turn | Stage 4 — the audit's §14.9 finalization-latency distribution is now measurable per meeting (D-017) |
+| D-020 | STT is provider-neutral behind a capability-declaring interface | Stage 5 — Whisper and Parakeet already coexist inside `SttEngine`, so the seam is real; the trait is not |
+| D-021 | Live speed and final accuracy are distinct optimization targets | Stage 6 — `import::retranscribe` is most of the final pass already |
+| D-022 | Raw ASR segments and canonical transcript are separate layers, and every transformation retains provenance | Stage 7 — today `transcript.json` is written by five different producers (audit §3) |
+| D-023 | Downstream intelligence consumes the canonical transcript only | Stage 10 — depends on D-022 |
+| D-024 | A glossary is contextual evidence, never blind replacement | Stage 8 — depends on §14.6 (proper-noun accuracy is unmeasured) |
+| D-025 | TTS is a separate, replaceable, cancellable subsystem | Stage 11 — **and first**, a decision entry recording that Talkback and `tts/` were removed, which is why Decisions 47–56, `maybe_later.md` §§1–3 and FR-2.4 describe code that is not in the tree (audit §10) |
+| D-026 | Full duplex is a future layer, not a replacement for the meeting pipeline | Stage 12 — depends on D-019 and D-025 |
+| D-027 | Never make "the best model" the architecture: task → capability → provider → model | Stage 5, once D-020 exists to express it |

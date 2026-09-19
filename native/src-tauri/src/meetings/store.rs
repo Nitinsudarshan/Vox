@@ -36,6 +36,7 @@ use super::series::MeetingSeries;
 use super::model::{
     Meeting, MeetingListItem, MeetingState, MeetingSummary, SummaryStatus, TranscriptSegment,
 };
+use super::telemetry::{MeetingDiagnostics, SegmentDiagnostics};
 
 /// Directory under the vault root that holds every meeting.
 pub const MEETINGS_DIR: &str = "meetings";
@@ -45,6 +46,10 @@ const TRANSCRIPT_FILE: &str = "transcript.json";
 const SUMMARY_FILE: &str = "summary.json";
 const NOTES_FILE: &str = "notes.md";
 const SPEAKERS_FILE: &str = "speakers.json";
+/// Per-segment decode telemetry, one JSON object per line.
+const SEGMENT_DIAGNOSTICS_FILE: &str = "diagnostics.jsonl";
+/// The meeting's diagnostics rollup, written once on stop.
+const DIAGNOSTICS_FILE: &str = "diagnostics.json";
 const AUDIO_DIR: &str = "audio";
 /// Where the recurring-meeting records live, beside the meetings themselves.
 const SERIES_FILE: &str = "series.json";
@@ -259,6 +264,80 @@ impl MeetingStore {
         let total = segments.len();
         self.save_transcript(id, &segments)?;
         Ok(total)
+    }
+
+    /// Appends one segment's telemetry to the meeting's diagnostics log.
+    ///
+    /// Appended a line at a time rather than rewritten, unlike every other
+    /// document here. Two reasons, and they both point the same way: this is a
+    /// log rather than a document, so recording the thousandth segment must
+    /// cost what the first did; and a crash should keep every line written
+    /// before it rather than losing the file. A torn final line is tolerable
+    /// because [`Self::load_segment_diagnostics`] skips what it cannot parse —
+    /// for a transcript that would be unacceptable, and for telemetry about a
+    /// run that has already crashed it is exactly right.
+    pub fn append_segment_diagnostics(
+        &self,
+        id: &str,
+        record: &SegmentDiagnostics,
+    ) -> Result<(), MeetingStoreError> {
+        use std::io::Write;
+
+        let dir = self.meeting_dir(id)?;
+        fs::create_dir_all(&dir)?;
+        let mut line = serde_json::to_vec(record)?;
+        line.push(b'\n');
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(SEGMENT_DIAGNOSTICS_FILE))?;
+        file.write_all(&line)?;
+        Ok(())
+    }
+
+    /// Every segment record for a meeting, in sequence order.
+    ///
+    /// A line that will not parse is skipped rather than failing the read: the
+    /// common reason for one is the crash whose diagnostics are being read.
+    pub fn load_segment_diagnostics(
+        &self,
+        id: &str,
+    ) -> Result<Vec<SegmentDiagnostics>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(SEGMENT_DIAGNOSTICS_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = fs::read_to_string(&path)?;
+        let mut records: Vec<SegmentDiagnostics> = raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        records.sort_by_key(|record| record.sequence);
+        Ok(records)
+    }
+
+    pub fn save_diagnostics(
+        &self,
+        diagnostics: &MeetingDiagnostics,
+    ) -> Result<(), MeetingStoreError> {
+        let dir = self.meeting_dir(&diagnostics.meeting_id)?;
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(DIAGNOSTICS_FILE),
+            &serde_json::to_vec_pretty(diagnostics)?,
+        )
+    }
+
+    pub fn load_diagnostics(
+        &self,
+        id: &str,
+    ) -> Result<Option<MeetingDiagnostics>, MeetingStoreError> {
+        let path = self.meeting_dir(id)?.join(DIAGNOSTICS_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(serde_json::from_slice(&fs::read(&path)?).ok())
     }
 
     pub fn save_summary(&self, summary: &MeetingSummary) -> Result<(), MeetingStoreError> {
@@ -876,5 +955,144 @@ mod tests {
         assert_eq!(store.load_notes("meeting-k").unwrap(), "");
         store.save_notes("meeting-k", "- follow up with ops").unwrap();
         assert_eq!(store.load_notes("meeting-k").unwrap(), "- follow up with ops");
+    }
+
+    fn diagnostic(sequence: u64) -> SegmentDiagnostics {
+        use crate::meetings::telemetry::{SegmentStatus, DIAGNOSTICS_VERSION};
+        SegmentDiagnostics {
+            version: DIAGNOSTICS_VERSION,
+            sequence,
+            start_seconds: sequence as f64,
+            end_seconds: sequence as f64 + 1.0,
+            channel: SegmentChannel::Microphone,
+            forced_split: false,
+            voiced_seconds: 0.9,
+            total_seconds: 1.0,
+            no_speech_prob: Some(0.05),
+            queue_wait_ms: 1,
+            lock_wait_ms: 0,
+            model_load_ms: 0,
+            model_reloaded: false,
+            decode_ms: 100,
+            post_ms: 1,
+            persist_ms: 1,
+            model: "ggml-small.bin".into(),
+            language: Some("en".into()),
+            expensive_script_profile: false,
+            audio_ctx: None,
+            status: SegmentStatus::Kept,
+            rejection: None,
+            error: None,
+            text_chars: 12,
+            queue_depth_after: 0,
+        }
+    }
+
+    #[test]
+    fn segment_diagnostics_append_rather_than_rewriting_the_file() {
+        let store = MeetingStore::new(temp_vault("diag-append"));
+        store
+            .create(&Meeting::new("meeting-d".into(), "Diag".into(), MeetingSource::Recorded))
+            .unwrap();
+
+        for sequence in 0..5 {
+            store
+                .append_segment_diagnostics("meeting-d", &diagnostic(sequence))
+                .unwrap();
+        }
+        let loaded = store.load_segment_diagnostics("meeting-d").unwrap();
+        assert_eq!(loaded.len(), 5);
+        assert_eq!(loaded[4].sequence, 4);
+
+        // One line per record, which is what makes the thousandth append cost
+        // what the first did.
+        let path = store
+            .meeting_dir("meeting-d")
+            .unwrap()
+            .join(SEGMENT_DIAGNOSTICS_FILE);
+        let raw = fs::read_to_string(path).unwrap();
+        assert_eq!(raw.lines().filter(|l| !l.trim().is_empty()).count(), 5);
+    }
+
+    #[test]
+    fn a_torn_final_line_costs_that_record_and_not_the_log() {
+        // The usual reason a diagnostics file is truncated is the crash whose
+        // diagnostics somebody is trying to read.
+        use std::io::Write;
+        let store = MeetingStore::new(temp_vault("diag-torn"));
+        store
+            .create(&Meeting::new("meeting-t".into(), "Torn".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .append_segment_diagnostics("meeting-t", &diagnostic(0))
+            .unwrap();
+
+        let path = store
+            .meeting_dir("meeting-t")
+            .unwrap()
+            .join(SEGMENT_DIAGNOSTICS_FILE);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"version\":1,\"sequence\":1,\"sta").unwrap();
+        drop(file);
+
+        let loaded = store.load_segment_diagnostics("meeting-t").unwrap();
+        assert_eq!(loaded.len(), 1, "the complete record must survive");
+        assert_eq!(loaded[0].sequence, 0);
+    }
+
+    #[test]
+    fn diagnostics_for_a_meeting_that_has_none_read_as_absent_not_as_an_error() {
+        let store = MeetingStore::new(temp_vault("diag-missing"));
+        store
+            .create(&Meeting::new("meeting-n".into(), "None".into(), MeetingSource::Recorded))
+            .unwrap();
+        assert!(store.load_diagnostics("meeting-n").unwrap().is_none());
+        assert!(store.load_segment_diagnostics("meeting-n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_rollup_round_trips_through_the_store() {
+        use crate::meetings::telemetry::{CaptureHealth, MeetingDiagnostics, StopFacts};
+        let store = MeetingStore::new(temp_vault("diag-rollup"));
+        store
+            .create(&Meeting::new("meeting-r".into(), "Roll".into(), MeetingSource::Recorded))
+            .unwrap();
+
+        let rollup = MeetingDiagnostics::summarize(
+            "meeting-r",
+            &[diagnostic(0), diagnostic(1)],
+            CaptureHealth {
+                recording_seconds: 120.0,
+                microphone_opened: true,
+                microphone_heard: true,
+                ..CaptureHealth::default()
+            },
+            StopFacts {
+                model: "ggml-small.bin".into(),
+                drain_seconds: 3.0,
+                drain_completed: true,
+                ..StopFacts::default()
+            },
+        );
+        store.save_diagnostics(&rollup).unwrap();
+        assert_eq!(store.load_diagnostics("meeting-r").unwrap(), Some(rollup));
+    }
+
+    #[test]
+    fn deleting_a_meeting_takes_its_diagnostics_with_it() {
+        // A diagnostics file names models, timings and segment boundaries of a
+        // conversation. Deleting the meeting has to delete it too.
+        let store = MeetingStore::new(temp_vault("diag-delete"));
+        store
+            .create(&Meeting::new("meeting-x".into(), "Gone".into(), MeetingSource::Recorded))
+            .unwrap();
+        store
+            .append_segment_diagnostics("meeting-x", &diagnostic(0))
+            .unwrap();
+        let dir = store.meeting_dir("meeting-x").unwrap();
+        assert!(dir.join(SEGMENT_DIAGNOSTICS_FILE).exists());
+
+        store.delete_meeting("meeting-x").unwrap();
+        assert!(!dir.exists());
     }
 }
