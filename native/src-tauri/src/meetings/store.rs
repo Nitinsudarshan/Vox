@@ -60,6 +60,15 @@ const AUDIO_DIR: &str = "audio";
 /// Where the recurring-meeting records live, beside the meetings themselves.
 const SERIES_FILE: &str = "series.json";
 
+/// Transcripts held in the parse cache at once.
+///
+/// Small on purpose. The cache exists so the meeting being recorded does not
+/// re-parse its own file on every append — one transcript, plus a little room
+/// for a detail view open beside it. Anything larger is a vault browsed, not a
+/// meeting recorded, and holding every transcript opened since launch is a
+/// leak wearing a cache's clothes.
+const MAX_CACHED_TRANSCRIPTS: usize = 4;
+
 /// Characters in the preview shown on a meeting list row.
 const PREVIEW_CHARS: usize = 200;
 
@@ -255,14 +264,28 @@ impl MeetingStore {
         fs::create_dir_all(&dir)?;
         let path = dir.join(TRANSCRIPT_FILE);
         write_atomic(&path, &serde_json::to_vec_pretty(segments)?)?;
-        self.transcripts.lock_or_recover().insert(
-            id.to_string(),
-            CachedTranscript {
-                modified: modified_time(&path),
-                segments: segments.to_vec(),
-            },
-        );
+        self.remember_transcript(id, modified_time(&path), segments.to_vec());
         Ok(())
+    }
+
+    /// Puts a parsed transcript in the cache, within its bound.
+    ///
+    /// One place, because there are two ways in — a write and a read — and a
+    /// bound applied to only one of them is not a bound. Past the cap the
+    /// cheapest correct thing is to start again: tracking recency would mean
+    /// an ordering the rest of the store has no use for, to choose between
+    /// entries that are all cheap to rebuild.
+    fn remember_transcript(
+        &self,
+        id: &str,
+        modified: Option<std::time::SystemTime>,
+        segments: Vec<TranscriptSegment>,
+    ) {
+        let mut cache = self.transcripts.lock_or_recover();
+        if cache.len() >= MAX_CACHED_TRANSCRIPTS && !cache.contains_key(id) {
+            cache.clear();
+        }
+        cache.insert(id.to_string(), CachedTranscript { modified, segments });
     }
 
     /// A meeting's transcript, ordered by sequence.
@@ -291,13 +314,7 @@ impl MeetingStore {
         let mut segments: Vec<TranscriptSegment> = serde_json::from_slice(&fs::read(&path)?)?;
         segments.sort_by_key(|segment| segment.sequence);
         segments.dedup_by_key(|segment| segment.sequence);
-        self.transcripts.lock_or_recover().insert(
-            id.to_string(),
-            CachedTranscript {
-                modified,
-                segments: segments.clone(),
-            },
-        );
+        self.remember_transcript(id, modified, segments.clone());
         Ok(segments)
     }
 
@@ -895,6 +912,35 @@ mod tests {
         assert_eq!(loaded.title, "Weekly");
         assert_eq!(loaded.state, MeetingState::Recording);
         assert!(store.audio_dir("meeting-a").unwrap().exists());
+    }
+
+    #[test]
+    fn the_transcript_cache_does_not_grow_with_the_vault() {
+        // The cache is for the meeting being recorded, which re-reads its own
+        // file on every append. Browsing a vault must not turn it into a
+        // resident copy of every transcript opened since launch.
+        let vault = temp_vault("cache-bound");
+        let store = MeetingStore::new(&vault);
+        for index in 0..(MAX_CACHED_TRANSCRIPTS * 3) {
+            let id = format!("meeting-{index}");
+            let meeting = Meeting::new(id.clone(), "Sync".into(), MeetingSource::Recorded);
+            store.create(&meeting).expect("create");
+            store
+                .append_segments(&id, &[segment(1, "something was said")])
+                .expect("append");
+            store.load_transcript(&id).expect("load");
+        }
+
+        assert!(
+            store.transcripts.lock_or_recover().len() <= MAX_CACHED_TRANSCRIPTS,
+            "the cache held {} transcripts",
+            store.transcripts.lock_or_recover().len()
+        );
+
+        // Still a cache, not a disabled one: the meeting just read is served
+        // from memory rather than parsed again.
+        let last = format!("meeting-{}", MAX_CACHED_TRANSCRIPTS * 3 - 1);
+        assert!(store.transcripts.lock_or_recover().contains_key(&last));
     }
 
     #[test]

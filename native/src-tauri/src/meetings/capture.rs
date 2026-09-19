@@ -425,6 +425,11 @@ fn run_capture_loop(
     let mut last_level_emit = Instant::now();
     let mut was_paused = false;
     let mut pending_discontinuity = false;
+    // The device callbacks discard a FIFO's oldest samples if the mixer has
+    // stopped draining it. They cannot reach `pending_discontinuity` from
+    // there, so the mixer notices the counter moving instead — a loss nobody
+    // marks is a sentence stitched across a hole.
+    let mut fifo_dropped_seen = 0u64;
 
     loop {
         let stopping = stop_rx.try_recv().is_ok();
@@ -470,6 +475,13 @@ fn run_capture_loop(
             (mixed, mic, sys, mic_sq, sys_sq)
         };
 
+        if loss_marks_discontinuity(
+            ctx.losses.fifo_samples_dropped.load(Ordering::SeqCst),
+            &mut fifo_dropped_seen,
+        ) {
+            pending_discontinuity = true;
+        }
+
         let drained = mixed.len();
         if drained > 0 {
             mark_heard(&ctx.mic_heard, mic_sum_sq, drained);
@@ -489,13 +501,18 @@ fn run_capture_loop(
             pending_discontinuity = false;
             match audio_tx.try_send(block) {
                 Ok(()) => {}
-                Err(std_mpsc::TrySendError::Full(block)) => {
+                Err(std_mpsc::TrySendError::Full(_)) => {
                     // The pump has not drained for ten seconds. Blocking here
-                    // would push the backlog into the device FIFOs instead,
-                    // so the block is shed and counted — and the
-                    // discontinuity flag it was carrying is handed to the next
-                    // block, because the join it marks is still real.
-                    pending_discontinuity = block.discontinuity;
+                    // would push the backlog into the device FIFOs instead, so
+                    // the block is shed and counted.
+                    //
+                    // Shedding *is* a discontinuity: the audio on either side
+                    // of the hole does not join, so the next block must carry
+                    // the flag or the segmenter stitches a sentence across
+                    // missing speech and the transcript reads as continuous
+                    // over a gap. This subsumes any flag the shed block was
+                    // already carrying.
+                    pending_discontinuity = true;
                     let shed = ctx.losses.blocks_shed.fetch_add(1, Ordering::SeqCst) + 1;
                     if shed == 1 {
                         emit_recording_warning(
@@ -745,6 +762,22 @@ fn enqueue_frames<T: Copy>(
     }
 }
 
+/// Whether a loss counter has moved since the mixer last looked.
+///
+/// Extracted so the rule can be tested without a device. The device callbacks
+/// discard a FIFO's oldest samples when the mixer has stopped draining it, and
+/// they have no way to reach the mixer's discontinuity flag from there — so
+/// the mixer watches the counter instead. Audio that was discarded is a hole,
+/// and the block after a hole does not continue the block before it.
+fn loss_marks_discontinuity(dropped_now: u64, seen: &mut u64) -> bool {
+    if dropped_now > *seen {
+        *seen = dropped_now;
+        true
+    } else {
+        false
+    }
+}
+
 /// Decides how many samples to consume from each FIFO this tick.
 ///
 /// See the module docs: lockstep while both streams are delivering, and a
@@ -981,6 +1014,29 @@ mod tests {
             .store(SEGMENT_SAMPLE_RATE as u64 / 2, Ordering::SeqCst);
         assert!(losses.any());
         assert!((losses.lost_seconds(320) - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dropped_audio_marks_the_join_once_per_loss_and_not_every_tick() {
+        // The mixer asks this every tick. A loss has to raise the flag
+        // exactly once: raising it forever would flush the segmenter on every
+        // block after the first hole and cut the meeting into single blocks,
+        // and never raising it stitches a sentence across missing speech.
+        let mut seen = 0u64;
+        assert!(!loss_marks_discontinuity(0, &mut seen));
+
+        assert!(loss_marks_discontinuity(320, &mut seen));
+        assert_eq!(seen, 320);
+        assert!(
+            !loss_marks_discontinuity(320, &mut seen),
+            "the same loss must not re-mark on the next tick"
+        );
+
+        assert!(
+            loss_marks_discontinuity(640, &mut seen),
+            "a second loss is a second hole"
+        );
+        assert_eq!(seen, 640);
     }
 
     #[test]

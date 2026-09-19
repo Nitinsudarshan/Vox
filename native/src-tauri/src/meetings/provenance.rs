@@ -22,6 +22,26 @@
 //! evidence is reported as a claim with no evidence, not attached to whichever
 //! line was most similar. An approximate provenance is worse than none: it
 //! reads exactly like a real one, and the whole point is to be checkable.
+//!
+//! ## Nothing calls this yet
+//!
+//! The types and the matcher exist and are tested; **no shipped path produces
+//! an [`Attributed<T>`]**. A report's action items, decisions and questions
+//! come back from the model as plain text and are stored as plain text, so
+//! today a user still cannot ask a claim where it came from.
+//!
+//! What a report *does* record is the transcript it was written from — which
+//! pass produced it, how many lines, how many segments of recorded speech were
+//! missing (`summary.json`, D-037). That is provenance for the report as a
+//! whole, and it is live. Per-claim provenance is this module, and it is not.
+//!
+//! The remaining work is in the summary pipeline, not here: the structured
+//! output would have to carry the quoted span each claim rests on, and
+//! `MeetingSummary` would have to store the `Attributed` wrapper instead of
+//! the bare claim.
+//!
+//! TODO(provenance): wire `Evidence::locate` into `summary::service` so that
+//! the claims in a report carry evidence, and say which ones have none.
 
 use serde::{Deserialize, Serialize};
 

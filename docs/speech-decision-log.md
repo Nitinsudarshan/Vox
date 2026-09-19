@@ -936,10 +936,67 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-042 — Lost audio marks the join it leaves behind
+
+- **Context**: D-019 made a bounded loss beat an unbounded one and made both
+  causes counted. A check across the whole speech stack found the half it
+  missed: the *count* was right and the *seam* was not.
+- **The defect**: when the mixer shed a block it handed the next block
+  `block.discontinuity` — the flag the shed block happened to be carrying,
+  normally `false` — and when a device callback discarded a FIFO's oldest
+  samples it set no flag at all. `discontinuity` is what makes the engine
+  flush the segmenter, so both losses left the speech either side of the hole
+  to be stitched into one span and decoded as a single sentence.
+- **Why that is the worst shape for a loss**: the user was warned that audio
+  was being lost, the counter was right, and the transcript still read as a
+  continuous record across the gap. A loss that is reported and then papered
+  over downstream is harder to trust than one that is simply reported.
+- **Decision**: shedding sets the flag unconditionally, and the mixer watches
+  `fifo_samples_dropped` for movement each tick, because the device callback
+  has no way to reach the flag from where it runs.
+- **Marked once per loss, not once per tick**: a flag left raised would flush
+  the segmenter on every block after the first hole and cut the rest of the
+  meeting into single blocks. `loss_marks_discontinuity` is extracted so that
+  rule is tested without a device.
+
+---
+
+### D-043 — Scoring a meeting is linear in memory, because a matrix is not
+
+- **Context**: D-015 made long-form recordings the primary accuracy benchmark.
+  The scorer it reused — `capture::evaluation::calculate_accuracy`, written
+  for 35 dictation clips of a few seconds each — aligns with a full
+  Levenshtein matrix of `reference × hypothesis` cells.
+- **Measured, not reasoned about**: the shortest case that clears the
+  thirty-minute floor is about 4,900 words and 21,000 characters. Scoring it
+  took **3.3 GB of peak resident memory and 31 seconds**, nearly all of it
+  allocating and faulting. A two-hour case is sixteen times both, which no
+  machine has — so the category the benchmark exists for could not be scored
+  at all, and nothing said so because every test fixture was a short string.
+- **Decision**: carry each cell's operation counts forward and keep two rows,
+  instead of storing every cell and walking back through it. Memory becomes
+  linear in the hypothesis.
+- **Result, same inputs**: thirty minutes went to **46 MB and 16 s**; two
+  hours, which could not run, to **50 MB and 4.4 minutes**. The word and
+  character error rates are unchanged — the tie-break preserves the same
+  optimal alignment, so a corpus scores the same before and after.
+- **What is left is time, and it is CER**: two hours is ~84,000 characters
+  against ~20,000 words, so the character pass costs roughly eighteen times
+  the word pass. Left alone deliberately: it is small beside decoding two
+  hours of audio, and it is now bounded rather than fatal. Recorded here so
+  the next person optimizes the pass that actually costs.
+- **Not asserted by a test**: `VmHWM` is a process-wide high-water mark and
+  the suite runs in parallel, so a memory assertion measures whatever the
+  endurance tests were doing — 293 MB of other tests' allocation, on the run
+  that proved it. The test pins the counts; the measurement lives in the
+  function's doc comment, taken with the suite quiet.
+
+---
+
 ## Reserved, not yet decided
 
 Nothing. Every id the staged plan reserved has landed with the stage that
-implemented it, D-001 through D-041 above. New proposals belong in
+implemented it, D-001 through D-043 above. New proposals belong in
 [speech-architecture-audit.md](speech-architecture-audit.md) §13 until the
 work that justifies them exists — a decision recorded before its measurement
 is a preference.

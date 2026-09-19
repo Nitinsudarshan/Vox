@@ -332,33 +332,42 @@ fn normalize_word(word: &str) -> String {
         .to_lowercase()
 }
 
+/// Most missing sequence numbers one gap will list.
+///
+/// Not a limit anything real reaches: a meeting emits a segment every few
+/// seconds, so a hundred thousand missing ones is days of silence and means
+/// the file is damaged, not that the recording has a hole. The cap is there so
+/// a damaged file costs a truncated gap rather than an allocation the size of
+/// whatever number it contains.
+const MAX_GAP_SEQUENCES: u64 = 100_000;
+
 /// Sequence numbers that were assigned and never produced a line.
 ///
 /// A gap is speech the recording has and the transcript does not. Reporting it
 /// is the difference between "this part is missing" and a transcript that
 /// reads as a complete record of a meeting where nobody spoke.
 fn find_gaps(ordered: &[&TranscriptSegment], segments: &[CanonicalSegment]) -> Vec<TranscriptGap> {
-    if ordered.is_empty() {
-        return Vec::new();
-    }
     let present: std::collections::BTreeSet<u64> =
         ordered.iter().map(|segment| segment.sequence).collect();
-    let first = *present.iter().next().expect("non-empty");
-    let last = *present.iter().next_back().expect("non-empty");
 
     let mut gaps = Vec::new();
-    let mut run: Vec<u64> = Vec::new();
-    for sequence in first..=last {
-        if present.contains(&sequence) {
-            if !run.is_empty() {
-                gaps.push(gap_for(std::mem::take(&mut run), segments));
+    let mut previous: Option<u64> = None;
+    // Walks the sequences that exist, not the range they span. The difference
+    // only shows on a `transcript.json` that has been corrupted or edited by
+    // hand — but there the range is whatever number is in the file, and
+    // counting up to it would hang the load of a meeting instead of reporting
+    // a damaged one.
+    for sequence in present {
+        if let Some(last) = previous {
+            let length = sequence - last - 1;
+            if length > 0 {
+                let run: Vec<u64> = (last + 1..sequence)
+                    .take(MAX_GAP_SEQUENCES.min(length) as usize)
+                    .collect();
+                gaps.push(gap_for(run, segments));
             }
-        } else {
-            run.push(sequence);
         }
-    }
-    if !run.is_empty() {
-        gaps.push(gap_for(run, segments));
+        previous = Some(sequence);
     }
     gaps
 }
@@ -474,6 +483,37 @@ fn format_timestamp(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_damaged_sequence_range_is_reported_rather_than_counted_through() {
+        // `transcript.json` is a file on disk that a user can edit and a
+        // crash can truncate. Walking from the first sequence to the last
+        // would count to whatever number is in it — here a billion — and hang
+        // opening the meeting instead of reporting a damaged one.
+        let first = raw(1, "we should ship on thursday", 0.0, 3.0);
+        let second = raw(1_000_000_001, "and send the deck first", 4.0, 7.0);
+
+        let started = std::time::Instant::now();
+        let transcript = assemble(
+            "meeting-damaged",
+            &[first, second],
+            &SpeakerAttribution::default(),
+            &[],
+            None,
+            &AssemblyOptions::default(),
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "assembling must not count through the range"
+        );
+
+        assert_eq!(transcript.gaps.len(), 1, "the hole is still reported");
+        assert_eq!(
+            transcript.gaps[0].missing_sequences.len(),
+            MAX_GAP_SEQUENCES as usize,
+            "and it is reported truncated rather than allocated in full"
+        );
+    }
 
     fn raw(sequence: u64, text: &str, start: f64, end: f64) -> TranscriptSegment {
         TranscriptSegment {

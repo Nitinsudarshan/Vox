@@ -855,61 +855,114 @@ pub fn calculate_accuracy(reference: &str, hypothesis: &str) -> AccuracyMetrics 
     }
 }
 
-/// Computes Levenshtein edit distance alignment operations (Substitutions, Deletions, Insertions).
+/// One cell of an alignment: the edit distance to here, and how it was
+/// reached.
+///
+/// Counts are carried forward rather than reconstructed by walking a stored
+/// matrix, which is the whole trick that lets the alignment run in two rows.
+#[derive(Clone, Copy, Default)]
+struct AlignOps {
+    distance: u32,
+    subs: u32,
+    dels: u32,
+    inss: u32,
+}
+
+impl AlignOps {
+    fn substitute(self, cost: u32) -> Self {
+        Self {
+            distance: self.distance + cost,
+            subs: self.subs + cost,
+            ..self
+        }
+    }
+
+    fn delete(self) -> Self {
+        Self {
+            distance: self.distance + 1,
+            dels: self.dels + 1,
+            ..self
+        }
+    }
+
+    fn insert(self) -> Self {
+        Self {
+            distance: self.distance + 1,
+            inss: self.inss + 1,
+            ..self
+        }
+    }
+}
+
+/// Counts the substitutions, deletions and insertions of an optimal alignment.
+///
+/// **Two rows, not a full matrix.** The obvious implementation keeps every
+/// cell and walks back through it, which costs `reference × hypothesis` cells.
+/// That is fine for the dictation clips this was written for — a few hundred
+/// characters — and fatal for the meeting benchmark's long categories, which
+/// reuse it: a thirty-minute case is about 21,000 characters, and a
+/// character-level matrix over that measured **3.3 GB and 31 seconds**, almost
+/// all of it allocating and faulting rather than comparing. A two-hour case is
+/// sixteen times both, which no machine has.
+///
+/// So each cell carries its own operation counts forward instead of leaving
+/// them to be reconstructed, and only the previous row is kept. Memory is
+/// linear in the hypothesis. The result is an optimal alignment chosen with
+/// the same substitution-then-deletion-then-insertion preference the
+/// backtracking version used, so the distance is identical and the breakdown
+/// is the same optimal one — the same corpus scores the same.
+///
+/// Measured over the same inputs, before and after: a thirty-minute case went
+/// from 3.3 GB and 31 s to **46 MB and 16 s**, and a two-hour case, which
+/// could not run at all, to **50 MB and 4.4 minutes**.
+///
+/// What is left is time, and it is the character-level pass that spends it:
+/// two hours of speech is about 84,000 characters against 20,000 words, so CER
+/// costs roughly eighteen times what WER does. That is worth knowing before
+/// optimizing the wrong one, and it is small beside decoding two hours of
+/// audio in the first place, so it is left alone.
 fn compute_alignment_ops<T: PartialEq>(ref_seq: &[T], hyp_seq: &[T]) -> (usize, usize, usize) {
     let m = ref_seq.len();
     let n = hyp_seq.len();
 
-    let mut d = vec![vec![0usize; n + 1]; m + 1];
-
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, cell) in d[0].iter_mut().enumerate() {
-        *cell = j;
-    }
+    // Row zero: the hypothesis matched against nothing is all insertions.
+    let mut previous: Vec<AlignOps> = (0..=n)
+        .map(|j| AlignOps {
+            distance: j as u32,
+            inss: j as u32,
+            ..Default::default()
+        })
+        .collect();
+    let mut current: Vec<AlignOps> = vec![AlignOps::default(); n + 1];
 
     for i in 1..=m {
+        // Column zero: the reference matched against nothing is all deletions.
+        current[0] = AlignOps {
+            distance: i as u32,
+            dels: i as u32,
+            ..Default::default()
+        };
         for j in 1..=n {
-            let cost = if ref_seq[i - 1] == hyp_seq[j - 1] { 0 } else { 1 };
-            let sub = d[i - 1][j - 1] + cost;
-            let del = d[i - 1][j] + 1;
-            let ins = d[i][j - 1] + 1;
-            d[i][j] = sub.min(del).min(ins);
-        }
-    }
-
-    // Backtrack to count operations
-    let mut i = m;
-    let mut j = n;
-    let mut subs = 0;
-    let mut dels = 0;
-    let mut inss = 0;
-
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 {
-            let cost = if ref_seq[i - 1] == hyp_seq[j - 1] { 0 } else { 1 };
-            if d[i][j] == d[i - 1][j - 1] + cost {
-                if cost > 0 {
-                    subs += 1;
-                }
-                i -= 1;
-                j -= 1;
-                continue;
+            let cost = u32::from(ref_seq[i - 1] != hyp_seq[j - 1]);
+            // Substitution first, then deletion, then insertion, and only on a
+            // strictly better distance — which is the preference order the
+            // backtracking version resolved ties with.
+            let mut best = previous[j - 1].substitute(cost);
+            let deletion = previous[j].delete();
+            if deletion.distance < best.distance {
+                best = deletion;
             }
+            let insertion = current[j - 1].insert();
+            if insertion.distance < best.distance {
+                best = insertion;
+            }
+            current[j] = best;
         }
-        if i > 0 && d[i][j] == d[i - 1][j] + 1 {
-            dels += 1;
-            i -= 1;
-        } else if j > 0 && d[i][j] == d[i][j - 1] + 1 {
-            inss += 1;
-            j -= 1;
-        } else {
-            break;
-        }
+        std::mem::swap(&mut previous, &mut current);
     }
 
-    (subs, dels, inss)
+    let end = previous[n];
+    (end.subs as usize, end.dels as usize, end.inss as usize)
 }
 
 /// Normalizes text for evaluation: strips punctuation and normalizes whitespace,
@@ -1410,6 +1463,45 @@ pub mod tests {
         let hyp_ins = "Relay always uses Tauri and Rust"; // always inserted (1 ins)
         let acc_ins = calculate_accuracy(ref_text, hyp_ins);
         assert_eq!(acc_ins.insertions, 1);
+    }
+
+    #[test]
+    fn a_long_case_is_scored_without_a_matrix_the_size_of_the_transcript() {
+        // The meeting benchmark's long categories score through here, and the
+        // full-matrix implementation this replaced needed reference ×
+        // hypothesis cells: 3.3 GB and 31 seconds for the shortest case that
+        // clears the thirty-minute floor, and sixteen times both for two
+        // hours, which no machine has.
+        //
+        // The memory itself is not asserted here. `VmHWM` is a process-wide
+        // high-water mark and this suite runs in parallel, so the number it
+        // returns is whatever the endurance tests were doing at the time —
+        // measured at 293 MB of other tests' allocation on the run that
+        // proved it. The before-and-after measurement lives in
+        // `compute_alignment_ops`' doc comment, taken with the suite quiet.
+        //
+        // What is asserted is the part a cheap alignment gets wrong: an
+        // implementation that is fast and small and miscounts is worse than
+        // the one that used all the memory.
+        let reference =
+            "we should ship the release on thursday and send the deck first ".repeat(160);
+        let hypothesis =
+            "we should ship the release on tuesday and send the deck first ".repeat(160);
+        let characters = reference.chars().filter(|c| !c.is_whitespace()).count();
+        assert!(
+            characters > 7_000,
+            "the case has to be long enough to matter: {characters}"
+        );
+
+        let accuracy = calculate_accuracy(&reference, &hypothesis);
+
+        // One substituted word per repetition — thursday for tuesday — and
+        // nothing else.
+        assert_eq!(accuracy.substitutions, 160);
+        assert_eq!(accuracy.deletions, 0);
+        assert_eq!(accuracy.insertions, 0);
+        assert!((accuracy.wer - 1.0 / 12.0).abs() < 1e-6, "{}", accuracy.wer);
+        assert!(accuracy.cer > 0.0 && accuracy.cer < 0.1, "{}", accuracy.cer);
     }
 
     #[test]

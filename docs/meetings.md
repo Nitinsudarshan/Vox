@@ -385,6 +385,13 @@ approximate provenance reads exactly like a real one, and the point is to be
 checkable. Punctuation is ignored, because a model quoting a transcript
 reproduces the words and rarely the commas.
 
+**Nothing produces one yet.** The types and the matcher are tested; no shipped
+path wraps a claim in an `Attributed<T>`. A report's decisions, actions and
+questions come back from the model as text and are stored as text, so today a
+user still cannot ask a claim where it came from. The remaining work is in the
+summary pipeline — the structured output has to carry the quoted span each
+claim rests on — and there is a `TODO(provenance):` on the module saying so.
+
 Reports carry their own provenance too. `summary.json` records the transcript
 it was written from — which model, which pass, how many lines, and how many
 segments of recorded speech were *missing* from them. That is a different
