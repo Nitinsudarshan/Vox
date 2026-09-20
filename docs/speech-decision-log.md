@@ -1217,10 +1217,123 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-051 — corpus-v1 is 1-bit distortion, and every accuracy number from it is void
+
+- **Context**: the audio gate written for the shootout (D-053) was run over the
+  corpus before any model was, which is the order it exists to enforce. All
+  eight cases came back between 89% and 99% clipped: RMS ≈ 0.95 against a full
+  scale of 1.0, peak exactly 1.0, and the adaptive VAD reporting **0% voiced**
+  because the signal and the noise floor are the same value.
+- **Cause**, one line in `tests/transcription/generator/generate_corpus.py`:
+  `miniaudio.decode` returns signed 16-bit integers by default, and the writer
+  treated `decoded.samples` as floats in `[-1.0, 1.0]`. Its
+  `max(-1.0, min(1.0, s))` therefore clamped every non-zero sample to ±1 before
+  multiplying by 32767. The corpus is the *sign* of the waveform — a square
+  wave — and the `add_noise` case, clamped twice, is 99.9%.
+- **Why nothing caught it**: the files are valid 16 kHz mono WAVs of the right
+  duration, they play as recognisable speech, and Whisper transcribed them at
+  15.17% word error rate. A number in that range reads as a model result. This
+  is the failure mode the whole reassessment is about — a plausible number from
+  a broken measurement is worse than no number.
+- **Decision**: fix the conversion explicitly (`audio_guard.to_float_samples`,
+  which handles every format `miniaudio` can return and *refuses* one it does
+  not recognise rather than assuming floats), and refuse at generation time to
+  write a case that fails the gate. `TRANSCRIPTION_BENCHMARK_V1.md` carries a
+  banner above its numbers saying they measure the recording.
+- **What is void and what is not**: every WER and CER from this corpus is void.
+  The throughput numbers are *suspect*, not void — decode cost tracks
+  transcript length and segment count, and distortion moves both — so 3.03 RTF
+  describes a real run that should not have happened.
+- **Not regenerated here**: the TTS endpoint is unreachable from the
+  environment this was written in. The generator is fixed and the corpus is
+  not.
+
+---
+
+### D-052 — A benchmark states its configuration, or it is not a benchmark
+
+- **Context**: `src/bin/benchmark.rs` built `WhisperDecodingConfig::baseline()`
+  — greedy, `best_of = 1`, `trim_audio_context` **off**. A live meeting builds
+  `for_meetings`, which is beam search at 3 with the encoder clamped to each
+  segment's own audio. So the committed baseline measured a configuration Vox
+  does not ship, and paid a full thirty-second encoder window for every
+  segment. Nothing in the output said which configuration it was.
+- **Decision**: every knob that changes the answer is a flag, every flag is
+  recorded in the output as a `RunStamp`, and the defaults are production —
+  `--preset balanced --decode-path live --segmentation vox --context previous
+  --trim-audio-ctx on`. An unrecognised flag or an unparseable value is an
+  error rather than a default, because the failure being prevented is a run
+  that silently measured something other than what it was asked for.
+- **Also recorded**: the Vox commit, from the orchestrator rather than the
+  binary. Stage 1 of the reassessment is "freeze the current baseline", and a
+  baseline that cannot name its commit is not frozen — particularly on a branch
+  that changed the decode path in the commit before this one.
+- **Consequence for the existing number**: 3.029 RTF was greedy decoding with
+  the encoder clamp off, not the Balanced beam search the pipeline ships. It is
+  not the production baseline and was never comparable to one.
+
+---
+
+### D-053 — The audio is checked before the models are
+
+- **Context**: §21 of the ASR reassessment asks for a raw audio quality gate,
+  on the argument that improving a model cannot fix a clipped recording.
+- **Decision**: `benchmark --audio-stats-only` measures a recording with no
+  model loaded and reports RMS, peak, near-clipping share, voiced ratio, an SNR
+  estimate and a list of concerns. The shootout runs it over every case first
+  and **refuses** to score a case that raises one, unless `--force-bad-audio`
+  is passed — in which case every row carries the concern and the taxonomy
+  ranks `AUDIO` above every model conclusion.
+- **Built on `capture::AudioStats` rather than beside it**, so "near clipping"
+  means the same thing to the corpus audit, to the benchmark and to a live
+  meeting's per-segment diagnostics. Three definitions of one threshold is how
+  they drift.
+- **Thresholds, and why they are strict**: 1% of samples at or beyond 98% of
+  full scale is called clipped. Speech that has not been limited reaches that
+  on a handful of vowel peaks; a whole percent is a gain stage pinned to its
+  ceiling, flattening exactly the formant peaks an acoustic model reads.
+- **It earned its place immediately**: see D-051.
+
+---
+
+### D-054 — The shootout compares configurations, and names which variable moved
+
+- **Context**: "improve transcription" is not actionable, because a bad
+  transcript can come from the recording, the segmenter, the prompt, the model,
+  the inference engine or the machine, and those are fixed in different places.
+  Changing the model and looking at the transcript cannot distinguish them.
+- **Decision**: `tests/transcription/runner/shootout.py` runs a matrix of
+  engine *configurations* over one corpus through one evaluator, and classifies
+  each row by comparing it against its peers. The matrix lives in
+  `tests/transcription/shootout/engines.json`, ordered so consecutive rows
+  differ in exactly one thing.
+- **The taxonomy is comparative on purpose.** A single run can only ever reach
+  `AUDIO`, `THROUGHPUT` or `HALLUCINATION` — everything else needs a peer that
+  holds the other variables fixed. `SEGMENTATION` needs the same engine and
+  model at `whole-file`; `CONTEXT` needs the same everything at a different
+  `--context`; `INFERENCE_ENGINE` needs the same model family under another
+  engine. `MODEL` is the conclusion of last resort, reached only when no peer
+  isolates anything else.
+- **Model identity is normalized** (`model_family`): `ggml-small.bin`, `small`
+  and `Systran/faster-whisper-small` are the same weights, and the whole
+  engine-versus-model experiment depends on noticing that. `.en` variants keep
+  their suffix, because comparing one against its multilingual sibling is
+  comparing two models. Both facts are tests — the first one caught a real bug
+  in the classifier.
+- **An engine that cannot run says why.** Missing model file, package not
+  installed, feature not compiled — reported as `skipped` with the remedy, not
+  omitted. A comparison missing its fastest entrant still reads as a
+  comparison.
+- **What this does not decide**: which stack Vox should ship. That needs the
+  corpus regenerated (D-051), the models downloaded, and a run on a real
+  machine. The harness exists so the answer is a table rather than an opinion.
+
+---
+
 ## Reserved, not yet decided
 
 Nothing. Every id the staged plan reserved has landed with the stage that
-implemented it, D-001 through D-050 above. New proposals belong in
+implemented it, D-001 through D-054 above. New proposals belong in
 [speech-architecture-audit.md](speech-architecture-audit.md) §13 until the
 work that justifies them exists — a decision recorded before its measurement
 is a preference.

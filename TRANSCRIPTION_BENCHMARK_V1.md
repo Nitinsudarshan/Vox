@@ -2,8 +2,12 @@
 **Date:** 2026-09-18T11:14:11.592489+00:00
 **Corpus:** corpus-v1 (5.7 min audio, 811 words)
 **Pipeline Version:** 0.1.0 (Production Segmenter + Dynamic Domain Vocabulary + Quality Gate + Recovery)
-**Model:** ggml-small.bin (`D:\Projects\Vox\native\src-tauri\.vox\config\models\ggml-small.bin`)
+**Model:** ggml-small.bin (`ggml-small.bin`)
 **Cases:** 1 of 8 in the manifest — **not run:** `en_fast_standup`, `en_tech_domain`, `hi_clean_review`, `hi_meeting_dialogue`, `hinglish_clean_sync`, `hinglish_tech_names`, `hinglish_noisy_ops`
+
+> ## ⚠ These results do not measure a model
+>
+> The audio gate failed on `en_clean_sprint`. A recording whose samples sit at full scale has had its formant peaks flattened, so the word error rates below are a measurement of the recording and not of the engine that transcribed it. Regenerate the corpus (`scripts/generate_transcription_corpus.py`) and run again.
 
 ## Executive Summary
 | Metric | English | Hindi | Hinglish | Overall |

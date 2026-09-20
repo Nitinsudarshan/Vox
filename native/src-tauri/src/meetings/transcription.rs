@@ -410,6 +410,65 @@ impl TranscriptionStats {
     }
 }
 
+/// What may condition a segment's decode, beyond the audio itself.
+///
+/// A knob rather than a constant because prompt conditioning is not obviously
+/// good and has never been measured here. Whisper's `initial_prompt` biases
+/// the decoder, which is the point — and the same mechanism is how a
+/// misrecognition becomes the prompt for the next segment, which recognises
+/// something similar, which becomes the prompt after that. Vox already
+/// quarantines the text of a *rejected* segment; what it has never established
+/// is whether the context it does carry earns its place at all.
+///
+/// [`Self::Previous`] is production. The other two exist so a benchmark can
+/// run the same corpus three ways and answer that with a number.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PromptContext {
+    /// Nothing at all. Whisper decodes the audio and only the audio — no
+    /// vocabulary, no configured prompt, no preceding text.
+    None,
+    /// Vocabulary and the user's configured prompt, but nothing carried from
+    /// the segment before. Isolates "do the domain terms help" from "does
+    /// conversational continuity help", which a single on/off switch cannot.
+    Static,
+    /// Both. What a meeting decodes with.
+    #[default]
+    Previous,
+}
+
+impl PromptContext {
+    /// Parses a benchmark's `--context` argument, rejecting rather than
+    /// defaulting: a run that silently measured production when it was asked
+    /// for `none` is a result nobody can use.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "static" => Some(Self::Static),
+            "previous" | "prev" => Some(Self::Previous),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Static => "static",
+            Self::Previous => "previous",
+        }
+    }
+
+    /// Whether a prompt is built for the decode at all.
+    fn builds_prompt(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// Whether the previous kept segment's text is carried into the next
+    /// decode.
+    fn carries_previous(self) -> bool {
+        matches!(self, Self::Previous)
+    }
+}
+
 /// Everything the worker needs that does not change during a meeting.
 pub struct WorkerConfig {
     pub meeting_id: String,
@@ -436,6 +495,9 @@ pub struct WorkerConfig {
     pub glossary: Vec<String>,
     /// Domain vocabulary engine with prioritized global, meeting, and user terms.
     pub vocabulary: crate::capture::vocabulary::DomainVocabulary,
+    /// What may condition each decode. [`PromptContext::Previous`] in every
+    /// production path; a benchmark sets the others.
+    pub prompt_context: PromptContext,
 }
 
 /// Starts the decoder.
@@ -539,7 +601,10 @@ fn run_worker(
         // Only a kept segment counts. One screened as a hallucination says
         // nothing about which language is being spoken.
         if let DecodeOutcome::Kept(segment) = &outcome {
-            prev_kept_text = Some(segment.text.clone());
+            prev_kept_text = config
+                .prompt_context
+                .carries_previous()
+                .then(|| segment.text.clone());
             if script.observe(&segment.text) {
                 let now_expensive = script.is_expensive();
                 tracing::info!(
@@ -1058,18 +1123,25 @@ fn decode_segment(
     };
 
     let mut decoding = base_decoding.clone();
-    // The prompt the user configured in settings is an *input* here, not
-    // something to replace: it used to be assembled by
-    // `WhisperDecodingConfig::from_settings_defaulting` and then overwritten
-    // one line later, so a meeting silently decoded without it while dictation
-    // decoded with it.
-    if let Some(prompt) = config.vocabulary.build_prompt(
-        base_decoding.initial_prompt.as_deref(),
-        prev_context,
-        job.segment.forced_split(),
-        crate::capture::vocabulary::PROMPT_BUDGET_CHARS,
-    ) {
-        decoding.initial_prompt = Some(prompt);
+    if config.prompt_context.builds_prompt() {
+        // The prompt the user configured in settings is an *input* here, not
+        // something to replace: it used to be assembled by
+        // `WhisperDecodingConfig::from_settings_defaulting` and then
+        // overwritten one line later, so a meeting silently decoded without it
+        // while dictation decoded with it.
+        if let Some(prompt) = config.vocabulary.build_prompt(
+            base_decoding.initial_prompt.as_deref(),
+            prev_context,
+            job.segment.forced_split(),
+            crate::capture::vocabulary::PROMPT_BUDGET_CHARS,
+        ) {
+            decoding.initial_prompt = Some(prompt);
+        }
+    } else {
+        // `PromptContext::None` means nothing conditions the decode, and that
+        // has to include whatever the settings resolver put there — otherwise
+        // the "no context" arm of the experiment is measuring a prompt.
+        decoding.initial_prompt = None;
     }
 
     let mut timing = SegmentTiming {
@@ -1692,6 +1764,7 @@ mod tests {
             decoding_cheap: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
+                prompt_context: PromptContext::Previous,
             },
             SttEngine::new(),
             Arc::new(crate::meetings::MeetingStore::new(

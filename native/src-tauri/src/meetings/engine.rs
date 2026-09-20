@@ -51,7 +51,7 @@ use super::model::{Meeting, MeetingSource, MeetingState, TranscriptProvenance, T
 use super::segmenter::Segmenter;
 use super::store::{MeetingStore, MeetingStoreError};
 use super::telemetry;
-use super::transcription::{self, TranscriptionQueue, WorkerConfig};
+use super::transcription::{self, PromptContext, TranscriptionQueue, WorkerConfig};
 
 /// Recording lifecycle, for every surface that shows recording state.
 pub const MEETING_STATE_EVENT: &str = "meeting-state-changed";
@@ -342,6 +342,7 @@ impl MeetingEngine {
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new()
                     .with_user_terms(&settings.dictionary)
                     .with_meeting_terms(std::slice::from_ref(&title)),
+                prompt_context: PromptContext::Previous,
             },
             stt,
             Arc::clone(&self.store),
@@ -942,6 +943,7 @@ mod tests {
                 decoding_cheap: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
+                prompt_context: PromptContext::Previous,
             },
             SttEngine::new(),
             Arc::clone(store),
@@ -1148,6 +1150,7 @@ mod tests {
             decoding_cheap: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
+                prompt_context: PromptContext::Previous,
             },
             SttEngine::new(),
             Arc::new(MeetingStore::new(std::env::temp_dir().join("vox-engine-drain"))),

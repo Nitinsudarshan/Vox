@@ -1,0 +1,108 @@
+{
+  "_comment": [
+    "The engine matrix for tests/transcription/runner/shootout.py.",
+    "",
+    "Edit this file, not the runner. Every entry is one row of the comparison, and a row",
+    "is only worth having if it differs from another row in exactly one thing — that is",
+    "what makes a difference between them attributable. The entries below are ordered so",
+    "that each consecutive pair does.",
+    "",
+    "`model` for the vox adapter is a path to a ggml file on this machine. Nothing is",
+    "bundled: download from https://huggingface.co/ggerganov/whisper.cpp and point at it.",
+    "An entry whose model is missing is reported as skipped with that reason, so leaving",
+    "the ones you have not downloaded enabled costs nothing but a line in the report.",
+    "",
+    "`quantization` is recorded, never verified. Say what the file is; nothing checks."
+  ],
+  "engines": [
+    {
+      "id": "vox-small-baseline",
+      "adapter": "vox",
+      "enabled": true,
+      "model": "native/src-tauri/.vox/config/models/ggml-small.bin",
+      "quantization": "f16",
+      "preset": "balanced",
+      "decode_path": "live",
+      "segmentation": "vox",
+      "context": "previous",
+      "trim_audio_ctx": true,
+      "_why": "The control. Production settings, production pipeline — what a meeting does today."
+    },
+    {
+      "id": "vox-small-whole-file",
+      "adapter": "vox",
+      "enabled": true,
+      "model": "native/src-tauri/.vox/config/models/ggml-small.bin",
+      "quantization": "f16",
+      "preset": "balanced",
+      "decode_path": "live",
+      "segmentation": "whole-file",
+      "context": "previous",
+      "trim_audio_ctx": true,
+      "_why": "Same model, same decode settings, no Vox segmenter. The difference from the control is the segmenter, and nothing else."
+    },
+    {
+      "id": "vox-small-no-context",
+      "adapter": "vox",
+      "enabled": true,
+      "model": "native/src-tauri/.vox/config/models/ggml-small.bin",
+      "quantization": "f16",
+      "preset": "balanced",
+      "decode_path": "live",
+      "segmentation": "vox",
+      "context": "none",
+      "trim_audio_ctx": true,
+      "_why": "No prompt at all. Against the control this says whether conditioning earns its place; against the next row it separates vocabulary from continuity."
+    },
+    {
+      "id": "vox-small-static-context",
+      "adapter": "vox",
+      "enabled": true,
+      "model": "native/src-tauri/.vox/config/models/ggml-small.bin",
+      "quantization": "f16",
+      "preset": "balanced",
+      "decode_path": "live",
+      "segmentation": "vox",
+      "context": "static",
+      "trim_audio_ctx": true,
+      "_why": "Domain vocabulary, no carry-over from the previous segment."
+    },
+    {
+      "id": "vox-base",
+      "adapter": "vox",
+      "enabled": true,
+      "model": "native/src-tauri/.vox/config/models/ggml-base.bin",
+      "quantization": "f16",
+      "preset": "balanced",
+      "decode_path": "live",
+      "segmentation": "vox",
+      "context": "previous",
+      "trim_audio_ctx": true,
+      "_why": "Is Small simply too expensive for a live clock? Not assumed to be less accurate — measured."
+    },
+    {
+      "id": "vox-large-v3-turbo",
+      "adapter": "vox",
+      "enabled": true,
+      "model": "native/src-tauri/.vox/config/models/ggml-large-v3-turbo.bin",
+      "quantization": "f16",
+      "preset": "quality",
+      "decode_path": "batch",
+      "segmentation": "vox",
+      "context": "previous",
+      "trim_audio_ctx": false,
+      "_why": "The accuracy ceiling, on the batch profile. A candidate for a final pass, not for the live one."
+    },
+    {
+      "id": "faster-whisper-small",
+      "adapter": "faster-whisper",
+      "enabled": true,
+      "model": "small",
+      "quantization": "int8",
+      "device": "cpu",
+      "beam_size": 5,
+      "language": "auto",
+      "_why": "The same model family through CTranslate2. Compare its RTF against vox-small-whole-file: same model, same absence of Vox's pipeline, different inference engine."
+    }
+  ]
+}

@@ -23,6 +23,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from audio_guard import assert_usable_audio, to_float_samples
 from corpus_definitions import CORPUS_VERSION, TEST_CASES, validate_corpus
 
 CORPUS_DIR = REPO_ROOT / "tests" / "transcription" / CORPUS_VERSION
@@ -97,17 +98,25 @@ async def synthesize_case(case: dict) -> dict:
     if not raw_mp3:
         raise RuntimeError(f"Failed to synthesize audio for {case_id}: empty buffer received!")
         
-    # 3. Decode to 16 kHz mono float/pcm
-    decoded = miniaudio.decode(raw_mp3, nchannels=1, sample_rate=16000)
-    samples = list(decoded.samples)
-    
+    # 3. Decode to 16 kHz mono, then normalize to floats explicitly.
+    #    FLOAT32 is requested rather than assumed: see `to_float_samples`.
+    decoded = miniaudio.decode(
+        raw_mp3,
+        output_format=miniaudio.SampleFormat.FLOAT32,
+        nchannels=1,
+        sample_rate=16000,
+    )
+    samples = to_float_samples(decoded)
+    assert_usable_audio(samples, case_id)
+
     # 4. Optional background noise
     if case.get("add_noise", False):
         print(f"  Adding moderate ambient room noise (SNR=22dB) to {case_id}...")
         samples = add_ambient_noise(samples, snr_db=22.0)
-        
+        assert_usable_audio(samples, case_id)
+
     duration_sec = len(samples) / 16000.0
-    
+
     # 5. Write 16-bit PCM WAV using standard library wave + array
     int16_arr = array.array('h', (int(max(-1.0, min(1.0, s)) * 32767.0) for s in samples))
     with wave.open(str(wav_path), "wb") as wf:

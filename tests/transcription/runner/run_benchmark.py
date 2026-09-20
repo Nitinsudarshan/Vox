@@ -27,6 +27,12 @@ from metrics import (
     classify_transcription_failure,
 )
 
+# The audio gate lives with the shootout and is imported rather than copied: a
+# second definition of "near clipping" is how two reports come to disagree
+# about the same recording.
+sys.path.insert(0, str(SCRIPT_DIR))
+from shootout import audit_case_audio, find_vox_binary  # noqa: E402
+
 DEFAULT_CORPUS_MANIFEST = REPO_ROOT / "tests" / "transcription" / "corpus-v1" / "manifest.json"
 DEFAULT_MODEL_PATH = REPO_ROOT / "native" / "src-tauri" / ".vox" / "config" / "models" / "ggml-small.bin"
 REPORTS_DIR = REPO_ROOT / "tests" / "transcription" / "reports"
@@ -186,6 +192,24 @@ def generate_markdown_report(report_data: dict) -> str:
         line += f" — **not run:** {', '.join(f'`{s}`' for s in skipped)}"
     md.append(line + "\n")
 
+    unusable = sorted(
+        case_id
+        for case_id, audit in (report_data.get("audio_audit") or {}).items()
+        if audit.get("concerns")
+    )
+    if unusable:
+        # Above every number, because every number below it is void. A word
+        # error rate over a clipped recording measures the recording.
+        md.append(
+            "> ## ⚠ These results do not measure a model\n>\n"
+            "> The audio gate failed on "
+            + ", ".join(f"`{c}`" for c in unusable)
+            + ". A recording whose samples sit at full scale has had its formant "
+            "peaks flattened, so the word error rates below are a measurement of "
+            "the recording and not of the engine that transcribed it. Regenerate "
+            "the corpus (`scripts/generate_transcription_corpus.py`) and run again.\n"
+        )
+
     md.append("## Executive Summary")
     md.append("| Metric | English | Hindi | Hinglish | Overall |")
     md.append("|---|---|---|---|---|")
@@ -256,6 +280,17 @@ def generate_markdown_report(report_data: dict) -> str:
 
     return "\n".join(md)
 
+def basename_either_separator(value: str) -> str:
+    """The filename out of a path written on any platform.
+
+    `Path(...).name` is resolved by the *host*, so a Windows path re-rendered
+    on Linux comes back whole — backslashes are ordinary characters there. The
+    path this strips was recorded on Windows and the report is being fixed on
+    Linux, which is exactly that case.
+    """
+    return value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def write_markdown(report_payload: dict, out_dir: Path) -> None:
     """Writes the Markdown report to the reports directory and the repo root."""
     md_content = generate_markdown_report(report_payload)
@@ -287,6 +322,10 @@ def render_from(json_path: Path, corpus_path: Path, out_dir: Path) -> None:
 
     # Backfilled rather than assumed: a report written before the runner
     # recorded what it skipped still knows which cases it holds.
+    # A report written before that rule existed still carries the full path.
+    # Re-rendering is the moment to drop it.
+    payload["model_path"] = basename_either_separator(payload.get("model_path", ""))
+
     ran_ids = {c["id"] for c in payload.get("cases", [])}
     payload.setdefault("cases_in_manifest", len(manifest["cases"]))
     payload.setdefault("cases_run", len(ran_ids))
@@ -298,6 +337,27 @@ def render_from(json_path: Path, corpus_path: Path, out_dir: Path) -> None:
         payload.get("overall_summary", {})
     ]:
         summary.setdefault("count", 0)
+
+    # A report written before the gate existed still has to answer to it: the
+    # recordings are on disk and the question is about them, not about the run.
+    if "audio_audit" not in payload:
+        binary = find_vox_binary()
+        audit = {}
+        if binary is not None:
+            for case in payload.get("cases", []):
+                wav = Path(case.get("audio_file", ""))
+                if not wav.is_absolute():
+                    wav = (
+                        REPO_ROOT
+                        / "tests"
+                        / "transcription"
+                        / payload["corpus_version"]
+                        / case["language"]
+                        / f"{case['id']}.wav"
+                    )
+                if wav.is_file():
+                    audit[case["id"]] = audit_case_audio(binary, wav)
+        payload["audio_audit"] = audit
 
     write_markdown(payload, out_dir)
 
@@ -351,6 +411,7 @@ def main():
     print(f"Running benchmark on {len(cases_to_run)} test cases...")
 
     results = []
+    audio_audit = {}
     for c in cases_to_run:
         lang = c["language"]
         case_id = c["id"]
@@ -364,6 +425,7 @@ def main():
             print(f"Warning: Reference file {ref_path} missing, skipping.")
             continue
 
+        audio_audit[case_id] = audit_case_audio(bin_path, wav_path)
         res = run_single_case(bin_path, model_path, c, wav_path, ref_path)
         results.append(res)
 
@@ -403,7 +465,9 @@ def main():
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "corpus_version": manifest["version"],
         "model_name": model_path.name,
-        "model_path": str(model_path),
+        # The filename, never the path — the same rule the segment diagnostics
+        # follow, and for the same reason: a report gets shared.
+        "model_path": model_path.name,
         "total_audio_minutes": round(total_audio_sec / 60.0, 2),
         "total_words": total_words,
         # Carried into the report so a partial run cannot be read as a full
@@ -411,6 +475,7 @@ def main():
         "cases_in_manifest": len(manifest["cases"]),
         "cases_run": len(results),
         "cases_not_run": [c["id"] for c in manifest["cases"] if c["id"] not in ran_ids],
+        "audio_audit": audio_audit,
         "overall_summary": overall_summary,
         "language_summary": lang_summary,
         "cases": results
