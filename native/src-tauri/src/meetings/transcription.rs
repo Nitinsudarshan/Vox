@@ -66,6 +66,67 @@ pub const TRANSCRIPTION_WARNING_EVENT: &str = "meeting-transcription-warning";
 /// slower than real time fails visibly instead of consuming the machine.
 pub const MAX_QUEUED_SEGMENTS: usize = 64;
 
+/// Queue depth at which the decoder stops paying for the careful profile.
+///
+/// Well below [`MAX_QUEUED_SEGMENTS`], because the point is to act while there
+/// is still runway. At the queue's own ceiling the only remaining move is to
+/// refuse speech, and by then the backlog has been growing for minutes.
+const SHED_PROFILE_AT_DEPTH: u64 = 8;
+
+/// Depth the backlog has to come back down to before the careful profile
+/// returns. Hysteresis, for the same reason [`crate::capture::stt::ScriptTracker`]
+/// has it: a single threshold on a queue that hovers around it would switch
+/// profile every other segment, and a transcript whose decode settings
+/// alternate line by line is harder to read than either setting alone.
+const RESTORE_PROFILE_AT_DEPTH: u64 = 2;
+
+/// Whether the decoder is far enough behind to trade beam width for speed.
+///
+/// The queue already has an answer for a decoder that cannot keep up: refuse
+/// the segment, count it, and tell the user. That is the right *last* resort
+/// and a poor first one — the speech is gone, and what bought its loss was a
+/// beam search the machine could not afford. This is the move in between.
+/// Under pressure the worker decodes on the cheaper profile, which is less
+/// accurate on exactly the audio whose accuracy is already weakest, and that
+/// is still strictly better than the alternative: a worse line is a line, and
+/// a dropped segment is silence in the transcript where someone was talking.
+///
+/// Note what this is *not* keyed on: not the model, not the language, not a
+/// setting. It is keyed on the one measurement that says the decoder is losing
+/// — how much work is waiting — so a machine fast enough for the careful
+/// profile never leaves it, and a machine that is not gets a transcript rather
+/// than a gap.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BacklogTracker {
+    shedding: bool,
+}
+
+impl BacklogTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the next segment should use the cheaper profile.
+    pub fn is_shedding(self) -> bool {
+        self.shedding
+    }
+
+    /// Records the queue depth left behind by a finished segment, returning
+    /// `true` when that changed which profile the next one gets.
+    pub fn observe(&mut self, in_queue: u64) -> bool {
+        let next = if self.shedding {
+            in_queue > RESTORE_PROFILE_AT_DEPTH
+        } else {
+            in_queue >= SHED_PROFILE_AT_DEPTH
+        };
+        if next == self.shedding {
+            return false;
+        }
+        self.shedding = next;
+        true
+    }
+}
+
 /// One segment waiting to be decoded.
 #[derive(Debug)]
 pub struct DecodeJob {
@@ -211,7 +272,7 @@ impl TranscriptionQueue {
 /// evicted, and a long `decode` is the model itself being too slow for the
 /// machine. A single total cannot distinguish "the model is slow" from
 /// "something else was using it", which is exactly the question worth asking.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct SegmentTiming {
     audio_seconds: f64,
     /// Seconds of the span that cleared the voiced threshold, and the span's
@@ -234,9 +295,26 @@ struct SegmentTiming {
     /// The encoder clamp this segment decoded against, `None` for whisper's
     /// full thirty-second window.
     audio_ctx: Option<i32>,
-    /// Whether this segment decoded with the cheaper profile kept for scripts
-    /// whisper writes expensively.
+    /// Whether this segment decoded with the cheaper profile because of the
+    /// script it was written in.
     expensive_script: bool,
+    /// Whether it decoded with the cheaper profile because the queue was
+    /// backed up. Separate from [`Self::expensive_script`] rather than folded
+    /// into one "cheap profile" flag: the two are answers to different
+    /// questions, and a run where the second is set is a machine report rather
+    /// than a language one.
+    shedding_backlog: bool,
+    /// The language whisper decoded under, as whisper reports it — the pinned
+    /// one where the meeting pinned a language, and the one it detected for
+    /// itself otherwise.
+    ///
+    /// Not the same question as `WorkerConfig::language`, which is what was
+    /// *asked for*. A long-form meeting deliberately asks for nothing so
+    /// whisper can follow a bilingual room, and the answer it gives is then
+    /// the only record of why a line came out the way it did: a span decoded
+    /// under the wrong language returns fluent text in that language rather
+    /// than an error, so the transcript itself never looks broken.
+    detected_language: Option<String>,
 }
 
 impl SegmentTiming {
@@ -295,6 +373,16 @@ pub struct TranscriptionStats {
     /// switch point could not describe it.
     pub switches: Vec<(u64, bool)>,
     pub segments_on_cheap_profile: u64,
+
+    /// Every time the queue depth moved the profile, as (first segment on the
+    /// new profile, whether that profile is the cheaper one).
+    ///
+    /// Empty on a machine that kept up, which is the outcome worth aiming for.
+    /// A non-empty list is the honest form of "your machine cannot decode this
+    /// meeting at the quality you asked for" — and the segments it covers are
+    /// the ones that would otherwise have been refused outright.
+    pub backlog_switches: Vec<(u64, bool)>,
+    pub segments_shed_by_backlog: u64,
 }
 
 impl TranscriptionStats {
@@ -328,15 +416,22 @@ pub struct WorkerConfig {
     pub model_path: String,
     pub language: SttLanguageConfig,
     pub decoding: WhisperDecodingConfig,
-    /// The same configuration wound back for a script whisper writes
-    /// expensively — see [`WhisperDecodingConfig::for_expensive_script`].
+    /// The same configuration wound back to what a machine under pressure can
+    /// afford — see [`WhisperDecodingConfig::for_expensive_script`].
     ///
     /// Held alongside rather than replacing it, because which one a segment
     /// wants is not known until the meeting is under way: the careful profile
     /// costs an English meeting almost nothing and is worth keeping, and the
     /// cheap one is worth its accuracy only where the cost it avoids is
     /// actually being paid.
-    pub decoding_expensive_script: WhisperDecodingConfig,
+    ///
+    /// Two things reach for it, and they are different questions. A run of
+    /// segments in a script whisper writes expensively moves
+    /// [`crate::capture::stt::ScriptTracker`], which is about what is being
+    /// spoken. A growing queue moves [`BacklogTracker`], which is about
+    /// whether this machine is keeping up with it. Either one is enough; the
+    /// diagnostics record which.
+    pub decoding_cheap: WhisperDecodingConfig,
     /// Words the user has told Vox about, applied to every decoded segment.
     pub glossary: Vec<String>,
     /// Domain vocabulary engine with prioritized global, meeting, and user terms.
@@ -413,6 +508,10 @@ fn run_worker(
     // segments in another script moves it, and a run back moves it back.
     let mut script = crate::capture::stt::ScriptTracker::new();
 
+    // And starts careful and stays there on a machine that keeps up. This one
+    // reads the queue rather than the transcript.
+    let mut backlog = BacklogTracker::new();
+
     let mut prev_kept_text: Option<String> = None;
 
     for job in rx {
@@ -427,6 +526,7 @@ fn run_worker(
             &config,
             &job,
             script.is_expensive(),
+            backlog.is_shedding(),
             prev_kept_text.as_deref(),
         );
 
@@ -525,6 +625,21 @@ fn run_worker(
             let (queued, completed, _) = counts_of(&counters);
             queued.saturating_sub(completed)
         };
+        if backlog.observe(in_queue) {
+            let now_shedding = backlog.is_shedding();
+            tracing::info!(
+                "meeting {}: decode queue is {} segments deep — {} from segment {}",
+                config.meeting_id,
+                in_queue,
+                if now_shedding {
+                    "dropping to the faster decode profile to stop the backlog growing"
+                } else {
+                    "caught up, returning to the careful decode profile"
+                },
+                sequence + 1
+            );
+            stats.backlog_switches.push((sequence + 1, now_shedding));
+        }
         accumulate(&mut stats, &timing);
         if timing.decode_rtf() > stats.slowest_rtf {
             stats.slowest_rtf = timing.decode_rtf();
@@ -609,7 +724,9 @@ fn build_diagnostics(
         // path names a machine and usually a person.
         model: model_name(&config.model_path),
         language: config.language.whisper_language.clone(),
+        detected_language: timing.detected_language.clone(),
         expensive_script_profile: timing.expensive_script,
+        backlog_shedding: timing.shedding_backlog,
         audio_ctx: timing.audio_ctx,
         status,
         rejection,
@@ -630,6 +747,9 @@ pub fn model_name(model_path: &str) -> String {
 fn accumulate(stats: &mut TranscriptionStats, timing: &SegmentTiming) {
     if timing.expensive_script {
         stats.segments_on_cheap_profile += 1;
+    }
+    if timing.shedding_backlog {
+        stats.segments_shed_by_backlog += 1;
     }
     stats.speech_seconds += timing.audio_seconds;
     stats.decode_ms += timing.decode_ms;
@@ -695,10 +815,11 @@ fn print_segment_trace(
     );
     println!(
         "decode profile       : {}",
-        if timing.expensive_script {
-            "fast (non-Latin script: greedy, no fallback)"
-        } else {
-            "careful (beam search)"
+        match (timing.expensive_script, timing.shedding_backlog) {
+            (true, true) => "fast (non-Latin script, and behind: greedy, no fallback)",
+            (true, false) => "fast (non-Latin script: greedy, no fallback)",
+            (false, true) => "fast (decode queue backed up: greedy, no fallback)",
+            (false, false) => "careful (beam search)",
         }
     );
     println!("decode               : {} ms", timing.decode_ms);
@@ -774,6 +895,27 @@ pub fn print_meeting_summary(
             )
         }
     );
+    println!(
+        "backlog shedding     : {}",
+        if stats.backlog_switches.is_empty() {
+            "never (the decoder kept up with the queue)".to_string()
+        } else {
+            let path = stats
+                .backlog_switches
+                .iter()
+                .map(|(seq, shedding)| {
+                    format!(
+                        " -> {} @seq {seq}",
+                        if *shedding { "fast" } else { "careful" }
+                    )
+                })
+                .collect::<String>();
+            format!(
+                "careful{path}   ({} of {} segments decoded cheaply to stay ahead)",
+                stats.segments_shed_by_backlog, stats.decoded
+            )
+        }
+    );
     println!("language             : {}", stats.language);
     println!("threads              : {}", stats.threads);
     println!();
@@ -842,24 +984,91 @@ enum DecodeOutcome {
     Failed(String),
 }
 
+/// The alternate decode a suspicious segment is retried with.
+///
+/// Everything that can condition a decode into repeating itself comes out: the
+/// prompt that may have suggested the loop, the beam that may have been
+/// exploring it, and the temperature fallback that re-decodes a segment
+/// whisper is unsure of up to six times over.
+///
+/// A function rather than four lines inline so the worker can ask the question
+/// that decides whether to pay for it — whether this differs from the decode
+/// that just ran. On the profile kept for scripts whisper writes expensively it
+/// frequently does not: that profile is already greedy with no fallback, so on
+/// a segment that carried no prompt the "alternate" decode is the same decode.
+fn recovery_config(base: &WhisperDecodingConfig) -> WhisperDecodingConfig {
+    let mut cfg = base.clone();
+    cfg.initial_prompt = None;
+    cfg.strategy = SttSamplingStrategy::Greedy { best_of: 1 };
+    cfg.temperature = 0.0;
+    cfg.temperature_inc = 0.0;
+    cfg
+}
+
+/// Why a suspicious segment is *not* being re-decoded, or `None` to go ahead.
+///
+/// The recovery pass buys one segment a second chance at the price of a second
+/// full decode. Both reasons to decline it are about that price.
+///
+/// - **It would change nothing.** The alternate configuration is compared with
+///   the one that produced the suspicion. Greedy at temperature zero with no
+///   fallback is deterministic, so an identical configuration over identical
+///   audio returns identical text: a second copy of the same suspicion, for a
+///   second decode's cost. This is the case where no prompt was built — with
+///   whisper's `prompt_past` off, an empty prompt is the only conditioning
+///   there is to remove.
+/// - **The meeting cannot afford it.** When the queue is backed up enough that
+///   the worker has already given up beam width to keep pace
+///   ([`BacklogTracker`]), a second decode of one segment is paid for by
+///   whichever later segment the queue then refuses. Recovery is an investment
+///   in one line's quality; a dropped segment is another line missing
+///   entirely, and the trade does not come close.
+fn skip_recovery(
+    recovery: &WhisperDecodingConfig,
+    used: &WhisperDecodingConfig,
+    shedding_backlog: bool,
+) -> Option<&'static str> {
+    if recovery == used {
+        return Some("the alternate decode is the decode that produced it");
+    }
+    if shedding_backlog {
+        return Some("the decode queue is backed up and a second pass costs later speech");
+    }
+    None
+}
+
 fn decode_segment(
     engine: &SttEngine,
     config: &WorkerConfig,
     job: &DecodeJob,
     expensive_script: bool,
+    shedding_backlog: bool,
     prev_context: Option<&str>,
 ) -> (DecodeOutcome, SegmentTiming) {
     let samples = &job.segment.samples;
 
-    let base_decoding = if expensive_script {
-        &config.decoding_expensive_script
+    // Either reason is enough on its own, and they are recorded separately —
+    // the decode does not care which of them asked for the cheaper profile,
+    // and the person reading the diagnostics afterwards very much does.
+    let cheap_profile = expensive_script || shedding_backlog;
+    let base_decoding = if cheap_profile {
+        &config.decoding_cheap
     } else {
         &config.decoding
     };
 
     let mut decoding = base_decoding.clone();
-    // Build context-aware prompt using domain vocabulary and preceding segment context
-    if let Some(prompt) = config.vocabulary.build_prompt(prev_context, job.segment.forced_split(), 220) {
+    // The prompt the user configured in settings is an *input* here, not
+    // something to replace: it used to be assembled by
+    // `WhisperDecodingConfig::from_settings_defaulting` and then overwritten
+    // one line later, so a meeting silently decoded without it while dictation
+    // decoded with it.
+    if let Some(prompt) = config.vocabulary.build_prompt(
+        base_decoding.initial_prompt.as_deref(),
+        prev_context,
+        job.segment.forced_split(),
+        crate::capture::vocabulary::PROMPT_BUDGET_CHARS,
+    ) {
         decoding.initial_prompt = Some(prompt);
     }
 
@@ -867,6 +1076,7 @@ fn decode_segment(
         audio_seconds: job.segment.duration_seconds(),
         queue_wait_ms: job.submitted_at.elapsed().as_millis(),
         expensive_script,
+        shedding_backlog,
         ..SegmentTiming::default()
     };
 
@@ -893,6 +1103,13 @@ fn decode_segment(
             timing.model_load_ms = diagnostics.model_load_ms;
             timing.model_reloaded = diagnostics.model_reloaded;
             timing.audio_ctx = diagnostics.audio_ctx;
+            timing.detected_language = diagnostics.detected_language.clone();
+            // Building whisper's decode state is outside the engine's own
+            // decode timer, so a run that pays it per segment would otherwise
+            // report a real-time factor that leaves the cost out. It is zero
+            // on every decode that reused the resident state, which is every
+            // decode but the first after a model load.
+            timing.model_load_ms += diagnostics.state_create_ms;
             utterances
         }
         Err(err) => return (DecodeOutcome::Failed(err.to_string()), timing),
@@ -927,27 +1144,38 @@ fn decode_segment(
             (text, mean_no_speech_prob, compression_ratio, "good".to_string(), 0)
         }
         speech_health::SegmentQualityStatus::Suspicious(ref reason) => {
-            tracing::info!(
-                "meeting {}: segment {} suspicious ({}) — attempting deterministic recovery pass",
-                config.meeting_id,
-                job.sequence,
-                reason
-            );
             // Alternate decode configuration: greedy decode, zero temperature increment, clear initial prompt
-            let mut recovery_decoding = base_decoding.clone();
-            recovery_decoding.initial_prompt = None;
-            recovery_decoding.strategy = SttSamplingStrategy::Greedy { best_of: 1 };
-            recovery_decoding.temperature = 0.0;
-            recovery_decoding.temperature_inc = 0.0;
+            let recovery_decoding = recovery_config(base_decoding);
 
-            let recovery_res = engine.transcribe_utterances_with_config(
-                Some(&config.model_path),
-                samples,
-                &config.language,
-                &recovery_decoding,
-            );
-
-            if let Ok((rec_utterances, rec_diag)) = recovery_res {
+            if let Some(why) = skip_recovery(&recovery_decoding, &decoding, shedding_backlog) {
+                tracing::debug!(
+                    "meeting {}: segment {} suspicious ({}) — not attempting recovery: {}",
+                    config.meeting_id,
+                    job.sequence,
+                    reason,
+                    why
+                );
+                (
+                    text,
+                    mean_no_speech_prob,
+                    compression_ratio,
+                    "suspicious".to_string(),
+                    0,
+                )
+            } else if let Ok((rec_utterances, rec_diag)) = {
+                tracing::info!(
+                    "meeting {}: segment {} suspicious ({}) — attempting deterministic recovery pass",
+                    config.meeting_id,
+                    job.sequence,
+                    reason
+                );
+                engine.transcribe_utterances_with_config(
+                    Some(&config.model_path),
+                    samples,
+                    &config.language,
+                    &recovery_decoding,
+                )
+            } {
                 timing.decode_ms += rec_diag.transcription_latency_ms;
                 let rec_text = join_utterance_text(&rec_utterances);
                 let rec_no_speech = if rec_utterances.is_empty() {
@@ -1032,10 +1260,13 @@ fn decode_segment(
         duration_seconds: job.segment.duration_seconds(),
         speech_seconds: profile.voiced_seconds,
         channel: job.segment.channel,
-        detected_language: config.language.whisper_language.clone(),
+        // What whisper decided, and what it was asked. They differ exactly
+        // when the meeting pinned nothing, which is the long-form default —
+        // and that is the case where knowing is worth the most.
+        detected_language: timing.detected_language.clone(),
         decode_language: config.language.whisper_language.clone(),
         model: config.model_path.clone(),
-        decode_profile: if expensive_script { "fast".to_string() } else { "careful".to_string() },
+        decode_profile: if cheap_profile { "fast".to_string() } else { "careful".to_string() },
         decode_ms: timing.decode_ms,
         rtf: timing.decode_rtf() as f32,
         queue_wait_ms: timing.queue_wait_ms,
@@ -1193,6 +1424,127 @@ pub fn format_timestamp(seconds: f64) -> String {
 mod tests {
     use super::*;
     use super::super::model::SegmentChannel;
+    use crate::capture::stt::SttPreset;
+    use crate::settings::SttSettings;
+
+    /// A machine that keeps up never leaves the careful profile, which is the
+    /// case this must not disturb.
+    #[test]
+    fn a_decoder_that_keeps_up_never_shifts_profile() {
+        let mut backlog = BacklogTracker::new();
+        for depth in [0, 1, 0, 2, 1, 0, 1] {
+            assert!(!backlog.observe(depth));
+            assert!(!backlog.is_shedding());
+        }
+    }
+
+    /// And one that falls behind gives up the beam before it gives up speech.
+    #[test]
+    fn a_growing_queue_moves_to_the_cheaper_profile() {
+        let mut backlog = BacklogTracker::new();
+        for depth in 0..SHED_PROFILE_AT_DEPTH {
+            assert!(!backlog.observe(depth));
+        }
+        assert!(
+            backlog.observe(SHED_PROFILE_AT_DEPTH),
+            "the switch is reported on the segment that crossed the line"
+        );
+        assert!(backlog.is_shedding());
+    }
+
+    /// Coming back is not the mirror of going: the queue has to drain well
+    /// past the threshold that triggered the switch, or a queue hovering at it
+    /// would change decode settings every other line.
+    #[test]
+    fn the_careful_profile_returns_only_once_the_queue_has_really_drained() {
+        let mut backlog = BacklogTracker::new();
+        backlog.observe(SHED_PROFILE_AT_DEPTH);
+        assert!(backlog.is_shedding());
+
+        // Still above the restore mark, and still below the shed mark: the
+        // band where a single threshold would oscillate.
+        for depth in (RESTORE_PROFILE_AT_DEPTH + 1)..SHED_PROFILE_AT_DEPTH {
+            assert!(!backlog.observe(depth), "depth {depth} must not restore");
+            assert!(backlog.is_shedding());
+        }
+
+        assert!(backlog.observe(RESTORE_PROFILE_AT_DEPTH));
+        assert!(!backlog.is_shedding());
+    }
+
+    /// The whole argument for this existing: the queue's own answer to a slow
+    /// decoder is to refuse speech, and shedding acts long before that.
+    #[test]
+    fn shedding_starts_with_the_queue_still_mostly_empty() {
+        // Read into locals so the assertion is over values rather than over
+        // constants, and so a failure prints the numbers that broke it.
+        let shed = SHED_PROFILE_AT_DEPTH;
+        let restore = RESTORE_PROFILE_AT_DEPTH;
+        let ceiling = MAX_QUEUED_SEGMENTS as u64;
+
+        assert!(
+            shed < ceiling / 4,
+            "shedding at {shed} of a {ceiling}-deep queue would act after the damage"
+        );
+        assert!(restore < shed, "restore {restore} must sit below shed {shed}");
+    }
+
+    /// The recovery pass exists to break a decode out of whatever conditioned
+    /// it into repeating itself. On the careful profile there is something to
+    /// break: a beam, a temperature schedule, and a prompt.
+    #[test]
+    fn recovery_differs_from_the_careful_profile_it_retries() {
+        let settings = SttSettings::default();
+        let mut careful = WhisperDecodingConfig::for_meetings(&settings, SttPreset::Balanced);
+        careful.initial_prompt = Some("NavGurukul, SOSC".to_string());
+
+        assert_ne!(recovery_config(&careful), careful);
+        assert!(skip_recovery(&recovery_config(&careful), &careful, false).is_none());
+    }
+
+    /// And a segment that would genuinely benefit from one still does not get
+    /// it while the queue is backed up: the second decode is paid for by
+    /// whichever later segment the queue then refuses.
+    #[test]
+    fn recovery_is_declined_while_the_decoder_is_behind() {
+        let settings = SttSettings::default();
+        let mut careful = WhisperDecodingConfig::for_meetings(&settings, SttPreset::Balanced);
+        careful.initial_prompt = Some("NavGurukul, SOSC".to_string());
+
+        assert!(skip_recovery(&recovery_config(&careful), &careful, true).is_some());
+    }
+
+    /// And on the profile kept for scripts whisper writes expensively there is
+    /// not: it is already greedy with no fallback, so on a segment that
+    /// carried no prompt the "alternate" decode is the decode that just ran.
+    /// Paying for it twice is what the worker checks for.
+    #[test]
+    fn recovery_is_the_same_decode_on_the_cheap_profile_without_a_prompt() {
+        let settings = SttSettings::default();
+        let cheap = WhisperDecodingConfig::for_meetings(&settings, SttPreset::Balanced)
+            .for_expensive_script();
+
+        assert!(cheap.initial_prompt.is_none());
+        assert_eq!(
+            recovery_config(&cheap),
+            cheap,
+            "a retry of this configuration would return the same text for a second decode's cost"
+        );
+        assert!(skip_recovery(&recovery_config(&cheap), &cheap, false).is_some());
+    }
+
+    /// The same profile *with* a prompt is a real alternate: dropping the
+    /// prompt is exactly the conditioning the retry is there to remove.
+    #[test]
+    fn recovery_still_differs_on_the_cheap_profile_when_a_prompt_was_used() {
+        let settings = SttSettings::default();
+        let mut cheap = WhisperDecodingConfig::for_meetings(&settings, SttPreset::Balanced)
+            .for_expensive_script();
+        cheap.initial_prompt = Some("we were talking about the migration".to_string());
+
+        assert_ne!(recovery_config(&cheap), cheap);
+        assert!(skip_recovery(&recovery_config(&cheap), &cheap, false).is_none());
+    }
 
     /// The whole reason the summary reports `pipeline_RTF` rather than only
     /// the decode speed: a decoder can be slower than real time against the
@@ -1337,7 +1689,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
+            decoding_cheap: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
             },

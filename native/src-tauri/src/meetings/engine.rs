@@ -333,7 +333,7 @@ impl MeetingEngine {
                 // read later, so it can afford the wider beam that dictation
                 // cannot. An explicit user preset still wins.
                 decoding: WhisperDecodingConfig::for_meetings(&settings.stt, SttPreset::Balanced),
-                decoding_expensive_script: WhisperDecodingConfig::for_meetings(
+                decoding_cheap: WhisperDecodingConfig::for_meetings(
                     &settings.stt,
                     SttPreset::Balanced,
                 )
@@ -939,7 +939,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-                decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
+                decoding_cheap: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
             },
@@ -1145,7 +1145,7 @@ mod tests {
                     translate: false,
                 },
                 decoding: WhisperDecodingConfig::default(),
-            decoding_expensive_script: WhisperDecodingConfig::default().for_expensive_script(),
+            decoding_cheap: WhisperDecodingConfig::default().for_expensive_script(),
                 glossary: Vec::new(),
                 vocabulary: crate::capture::vocabulary::DomainVocabulary::new(),
             },

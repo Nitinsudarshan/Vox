@@ -3,19 +3,21 @@
 **Corpus:** corpus-v1 (5.7 min audio, 811 words)
 **Pipeline Version:** 0.1.0 (Production Segmenter + Dynamic Domain Vocabulary + Quality Gate + Recovery)
 **Model:** ggml-small.bin (`D:\Projects\Vox\native\src-tauri\.vox\config\models\ggml-small.bin`)
+**Cases:** 1 of 8 in the manifest — **not run:** `en_fast_standup`, `en_tech_domain`, `hi_clean_review`, `hi_meeting_dialogue`, `hinglish_clean_sync`, `hinglish_tech_names`, `hinglish_noisy_ops`
 
 ## Executive Summary
 | Metric | English | Hindi | Hinglish | Overall |
 |---|---|---|---|---|
-| **Average WER** | 15.17% | 0.00% | 0.00% | **15.17%** |
-| **Average CER** | 8.03% | 0.00% | 0.00% | **8.03%** |
-| **Average RTF** | 3.029 | 0.000 | 0.000 | **3.029** |
-| **Total Speech** | 323.1s | 0.0s | 0.0s | **323.1s** |
+| **Cases** | 1 | 0 | 0 | **1** |
+| **Average WER** | 15.17% | not run | not run | **15.17%** |
+| **Average CER** | 8.03% | not run | not run | **8.03%** |
+| **Average RTF** | 3.029 | not run | not run | **3.029** |
+| **Total Speech** | 323.1s | not run | not run | **323.1s** |
 
 ## Detailed Per-Test Results
-| Test ID | Lang | Category | Words | Audio (s) | WER | CER | Subs | Dels | Inss | RTF | Status |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `en_clean_sprint` | en | A_clean | 811 | 340.7s | 15.17% | 8.03% | 86 | 26 | 11 | 3.029 | DECODING |
+| Test ID | Lang | Decoded as | Category | Words | Audio (s) | WER | CER | Subs | Dels | Inss | RTF | Status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `en_clean_sprint` | en | en ×43 | A_clean | 811 | 340.7s | 15.17% | 8.03% | 86 | 26 | 11 | 3.029 | DECODING |
 
 ## Code-Switching & Domain Vocabulary Analysis (Hinglish & Tech)
 | Test ID | Hindi Retention | English Retention | Monitored Domain Terms | Domain Accuracy |

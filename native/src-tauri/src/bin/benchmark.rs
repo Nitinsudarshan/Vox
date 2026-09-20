@@ -195,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_path: model_file.to_string_lossy().to_string(),
         language: lang_config.clone(),
         decoding: decoding_cfg,
-        decoding_expensive_script: decoding_expensive,
+        decoding_cheap: decoding_expensive,
         glossary: Vec::new(),
         vocabulary,
     };

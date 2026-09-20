@@ -36,14 +36,16 @@ System Loopback Stream (CPAL)
          ▼
 [ 4. Dynamic Context & Vocabulary Conditioning (DomainVocabulary) ]
   • Multi-tier vocabulary: Global domain terms + Meeting metadata + User custom dictionary
-  • Syntactic tail extraction from previous valid segment (`prev_kept_text`)
+  • Syntactic tail extraction from previous valid segment (`prev_kept_text`), placed last
   • Hallucination quarantine: context cleared on rejected/discarded segments
          │
          ▼
 [ 5. Serial ASR Decoding (Whisper Engine) ]
   • Model: ggml-small.bin (production baseline)
   • Explicit decoding configuration: greedy / temperature fallback, entropy & logprob thresholds
-  • Dual-profile decoding: careful baseline vs expensive-script profile for non-Latin scripts
+  • Dual-profile decoding: careful baseline vs cheaper profile, chosen by
+    script *and* by queue depth (see 6b)
+  • One Whisper state, built with the model and reused by every decode
          │
          ▼
 [ 6. Transcript Quality Gate & Telemetry ]
@@ -55,6 +57,8 @@ System Loopback Stream (CPAL)
          ▼
 [ 7. Deterministic Recovery (For Suspicious Segments) ]
   • Strip conditioning prompt & reset temperature to 0.0
+  • Skipped when the alternate decode is the decode that just ran, and
+    while the queue is backed up (a second pass costs later speech)
   • Alternate greedy decode attempt
   • Re-screen through quality gate; accept if recovered, discard if still defective
          │
@@ -108,8 +112,22 @@ Whisper's decoder is heavily influenced by preceding prompt tokens. The `DomainV
 3. **Tier 3 — User Custom Dictionary:**
    - Maintained by individual users for specialized project code-names.
 4. **Context Propagation & Hallucination Quarantine:**
-   - On clean segments (`quality_status = Good`), the clean tail of the transcribed text is stored as `prev_kept_text` and prepended to the prompt for the next segment.
+   - On clean segments (`quality_status = Good`), the clean tail of the transcribed text is stored as `prev_kept_text` and **appended** to the prompt for the next segment.
    - If a segment is flagged as `Suspicious`, `Rejected`, or `Discarded`, `prev_kept_text` is immediately cleared to prevent hallucination loops from infecting subsequent speech.
+
+5. **Order inside the prompt:** `<configured prompt>. <vocabulary>. <what was just said>`.
+   Whisper reads `initial_prompt` as text that preceded the audio, so what sits
+   at its end is what the decoder treats as most recent. A keyword list in that
+   position asserts that the last thing spoken was a run of proper nouns, which
+   is how priming for a term turns into emitting it over audio that never
+   contained it. The same order is what whisper's own truncation wants: the
+   prompt is capped at `n_text_ctx/2 - 1` tokens and the **last** ones are kept,
+   so an over-long prompt loses vocabulary and keeps context.
+
+6. **The user's configured prompt is composed, not replaced.** `SttSettings::custom_initial_prompt`
+   leads the prompt; the vocabulary and the preceding tail follow it within the
+   same budget. The worker previously overwrote it, so a prompt the user typed
+   applied to dictation and silently did not apply to meetings.
 
 ---
 
@@ -137,7 +155,8 @@ Every `TranscriptSegment` contains:
   "detected_language": "hi",
   "decode_language": "hi",
   "model": "ggml-small.bin",
-  "decode_profile": "expensive_script",
+  "decode_profile": "fast",
+  "detected_language": "hi",
   "decode_ms": 1420,
   "real_time_factor": 0.111,
   "queue_wait_ms": 45,
@@ -161,6 +180,42 @@ When a segment is flagged as `Suspicious`:
 2. Clamps decoding temperature to `0.0` (pure greedy search).
 3. Re-runs inference.
 4. If the recovery output passes the quality gate and achieves lower no-speech probability, it is accepted with `quality_status = "recovered"`. Otherwise, it is discarded with `quality_status = "rejected"`.
+
+**The pass is skipped on two grounds** (`skip_recovery`), both about its price —
+a second full decode of the segment:
+
+- **It would change nothing.** The recovery configuration is compared with the
+  one that produced the suspicion. On the cheaper profile — already greedy,
+  already without temperature fallback — a segment that carried no prompt has
+  nothing left to wind back, so the "alternate" decode is the decode that just
+  ran.
+- **The meeting cannot afford it.** While `BacklogTracker` is shedding (6b), the
+  second decode is paid for by whichever later segment the queue then refuses.
+  One line's better chance is not worth another line's absence.
+
+Skipped segments keep the first result with `quality_status = "suspicious"` and
+`retry_count = 0`.
+
+---
+
+## 6b. Decode Profiles and When Each Is Used
+
+Two profiles are held for the whole meeting: the careful one (beam search) and
+the cheaper one (`WhisperDecodingConfig::for_expensive_script` — greedy, no
+temperature fallback). Two independent signals reach for the cheaper one, and
+the diagnostics record which:
+
+| Signal | Reads | Recorded as |
+|---|---|---|
+| `ScriptTracker` | consecutive decoded segments in a script Whisper writes expensively | `expensive_script_profile` |
+| `BacklogTracker` | the decode queue's depth after each segment | `backlog_shedding` |
+
+`BacklogTracker` exists because the queue's own answer to a decoder that cannot
+keep up is to refuse segments — speech lost outright, bought by a beam search
+the machine could not afford. It switches to the cheaper profile at a depth of
+8 and back at 2 (hysteresis, so a queue hovering at one threshold does not
+alternate the decode settings line by line), against a queue that holds 64. A
+machine that keeps up never leaves the careful profile.
 
 ---
 
