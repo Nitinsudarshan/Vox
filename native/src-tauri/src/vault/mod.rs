@@ -82,6 +82,10 @@ pub struct VaultNote {
     pub tags: Vec<String>,
     pub source_audio: Option<String>,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_style: Option<String>,
     pub merged_from: Option<Vec<String>>,
 }
 
@@ -134,8 +138,22 @@ impl VaultNote {
             tags: Vec::new(),
             source_audio: None,
             content: transcript.to_string(),
+            raw_content: None,
+            cleanup_style: None,
             merged_from: None,
         }
+    }
+
+    /// Builds a Voice Note retaining both the cleaned transcript and the verbatim raw transcript.
+    pub fn new_voice_note_with_raw(
+        transcript: &str,
+        raw_content: Option<String>,
+        cleanup_style: Option<String>,
+    ) -> Self {
+        let mut note = Self::new_voice_note(transcript);
+        note.raw_content = raw_content;
+        note.cleanup_style = cleanup_style;
+        note
     }
 }
 
@@ -206,9 +224,17 @@ impl VaultManager {
             Some(ids) => format!("{:?}", ids),
             None => "None".to_string(),
         };
+        let raw_content_str = match &note.raw_content {
+            Some(raw) => format!("Some({:?})", raw),
+            None => "None".to_string(),
+        };
+        let cleanup_style_str = match &note.cleanup_style {
+            Some(style) => format!("Some({:?})", style),
+            None => "None".to_string(),
+        };
         let frontmatter = format!(
-            "---\nid: \"{}\"\ntitle: \"{}\"\ntype: \"{}\"\ncreated_at: \"{}\"\nupdated_at: \"{}\"\ntags: {:?}\nsource_audio: {:?}\nmerged_from: {}\n---\n\n{}",
-            note.id, note.title, note.note_type, note.created_at, note.updated_at, note.tags, note.source_audio, merged_from_str, note.content
+            "---\nid: \"{}\"\ntitle: \"{}\"\ntype: \"{}\"\ncreated_at: \"{}\"\nupdated_at: \"{}\"\ntags: {:?}\nsource_audio: {:?}\nraw_content: {}\ncleanup_style: {}\nmerged_from: {}\n---\n\n{}",
+            note.id, note.title, note.note_type, note.created_at, note.updated_at, note.tags, note.source_audio, raw_content_str, cleanup_style_str, merged_from_str, note.content
         );
 
         fs::write(&file_path, frontmatter)?;
@@ -718,6 +744,8 @@ impl VaultManager {
         let mut updated_at = String::new();
         let mut tags = Vec::new();
         let mut source_audio = None;
+        let mut raw_content = None;
+        let mut cleanup_style = None;
         let mut merged_from = None;
 
         for line in frontmatter.lines() {
@@ -746,6 +774,26 @@ impl VaultManager {
                             .to_string(),
                     )
                 };
+            } else if let Some(v) = line.strip_prefix("raw_content:") {
+                let v = v.trim();
+                raw_content = if v == "None" || v.is_empty() {
+                    None
+                } else if v.starts_with("Some(") && v.ends_with(')') {
+                    let inner = &v[5..v.len() - 1];
+                    serde_json::from_str::<String>(inner).ok().or_else(|| Some(inner.trim_matches('"').to_string()))
+                } else {
+                    Some(v.trim_matches('"').to_string())
+                };
+            } else if let Some(v) = line.strip_prefix("cleanup_style:") {
+                let v = v.trim();
+                cleanup_style = if v == "None" || v.is_empty() {
+                    None
+                } else if v.starts_with("Some(") && v.ends_with(')') {
+                    let inner = &v[5..v.len() - 1];
+                    serde_json::from_str::<String>(inner).ok().or_else(|| Some(inner.trim_matches('"').to_string()))
+                } else {
+                    Some(v.trim_matches('"').to_string())
+                };
             } else if let Some(v) = line.strip_prefix("merged_from:") {
                 let v = v.trim();
                 merged_from = if v == "None" || v.is_empty() {
@@ -769,6 +817,8 @@ impl VaultManager {
             tags,
             source_audio,
             content: body,
+            raw_content,
+            cleanup_style,
             merged_from,
         })
     }
@@ -2367,6 +2417,8 @@ mod tests {
             tags: vec![],
             source_audio: None,
             content: "Some LLM-cleaned content".to_string(),
+            raw_content: None,
+            cleanup_style: None,
             merged_from: None,
         };
         manager.save_note(&scribble_note).unwrap();
@@ -2665,6 +2717,8 @@ mod tests {
             content:
                 "Relay's backend uses cpal for audio capture and whisper-rs for transcription."
                     .to_string(),
+            raw_content: None,
+            cleanup_style: None,
             merged_from: None,
         };
         manager.save_note(&note).unwrap();

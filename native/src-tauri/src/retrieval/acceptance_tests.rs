@@ -322,6 +322,8 @@ Run dozens of coding tasks simultaneously with automated git branching and valid
             tags: vec!["chronos".to_string(), "planning".to_string()],
             source_audio: None,
             content: format!("Discussed rollout schedule for {}. Alpha release planned for October.", project_name),
+            raw_content: None,
+            cleanup_style: None,
             merged_from: None,
         };
         vault.save_note(&note).unwrap();

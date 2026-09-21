@@ -648,6 +648,40 @@ fn stop_dictation_session(
             };
             let t_snippet_complete = std::time::Instant::now();
 
+            let raw_text = final_text.clone();
+            let (provider, cleanup_style) = {
+                let s = state.settings.lock_or_recover();
+                (
+                    s.provider.clone(),
+                    crate::capture::rewrite::CleanupStyle::from_setting(&s.stt.cleanup_style),
+                )
+            };
+
+            let (final_text, cleanup_style_recorded) = if cleanup_style != crate::capture::rewrite::CleanupStyle::Raw {
+                emit_capture_status_event(
+                    &app,
+                    false,
+                    Some(captured.mode.clone()),
+                    "REFINING",
+                    Some("Polishing...".to_string()),
+                );
+
+                let client = crate::providers::LLMClient::new(provider);
+                let rewrite_fut = crate::capture::rewrite::propose(&client, &final_text, cleanup_style);
+                match tokio::time::timeout(std::time::Duration::from_secs(5), rewrite_fut).await {
+                    Ok(proposal) if proposal.changed => {
+                        (proposal.rewritten, Some(cleanup_style.as_str().to_string()))
+                    }
+                    Ok(_) => (final_text, None),
+                    Err(_) => {
+                        tracing::warn!("Dictation rewrite timed out after 5s; falling back to raw text");
+                        (final_text, None)
+                    }
+                }
+            } else {
+                (final_text, None)
+            };
+
             let (auto_paste, copy_to_clipboard, injection_method) = {
                 let s = state.settings.lock_or_recover();
                 (
@@ -823,7 +857,14 @@ fn stop_dictation_session(
 
             // 3. Persist voice note in vault after injection so vault disk I/O does not delay paste
             let t_vault_start = std::time::Instant::now();
-            let _ = crate::commands::save_voice_note(&app, &state.vault, &final_text);
+            let raw_opt = if raw_text != final_text { Some(raw_text.as_str()) } else { None };
+            let _ = crate::commands::save_voice_note(
+                &app,
+                &state.vault,
+                &final_text,
+                raw_opt,
+                cleanup_style_recorded.as_deref(),
+            );
             let t_vault_complete = std::time::Instant::now();
 
             let metrics = captured.timing_metrics.clone().unwrap_or_default();

@@ -34,6 +34,8 @@ use crate::pipeline::analysis::PromptId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupStyle {
+    /// Verbatim transcript. Skips any LLM pass completely.
+    Raw,
     /// Disfluencies and false starts only. The default, and the only style
     /// that cannot change what was meant.
     #[default]
@@ -50,8 +52,9 @@ pub enum CleanupStyle {
 impl CleanupStyle {
     pub fn from_setting(raw: &str) -> Self {
         match raw.trim().to_lowercase().as_str() {
+            "raw" => Self::Raw,
             "clean" => Self::Clean,
-            "professional" => Self::Professional,
+            "professional" | "polished" => Self::Professional,
             "concise" => Self::Concise,
             _ => Self::Faithful,
         }
@@ -59,9 +62,10 @@ impl CleanupStyle {
 
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Raw => "raw",
             Self::Faithful => "faithful",
             Self::Clean => "clean",
-            Self::Professional => "professional",
+            Self::Professional => "polished",
             Self::Concise => "concise",
         }
     }
@@ -69,6 +73,7 @@ impl CleanupStyle {
     /// What this style is allowed to change, as the model is told it.
     fn latitude(&self) -> &'static str {
         match self {
+            Self::Raw => "",
             Self::Faithful => {
                 "Remove filler words, false starts and repeated words. Change nothing else. \
 Do not reorder, do not merge sentences, do not choose a better word."
@@ -276,7 +281,7 @@ pub async fn propose(
     text: &str,
     style: CleanupStyle,
 ) -> RewriteProposal {
-    if text.trim().is_empty() {
+    if style == CleanupStyle::Raw || text.trim().is_empty() {
         return RewriteProposal::unchanged(text.to_string());
     }
 
@@ -506,5 +511,16 @@ mod tests {
         let (left, right) = rendered(&spans);
         assert_eq!(left, "मैं कल आऊंगा");
         assert_eq!(right, "मैं कल आऊँगा");
+    }
+
+    #[test]
+    fn cleanup_style_from_setting_handles_all_variants() {
+        assert_eq!(CleanupStyle::from_setting("raw"), CleanupStyle::Raw);
+        assert_eq!(CleanupStyle::from_setting("faithful"), CleanupStyle::Faithful);
+        assert_eq!(CleanupStyle::from_setting("clean"), CleanupStyle::Clean);
+        assert_eq!(CleanupStyle::from_setting("professional"), CleanupStyle::Professional);
+        assert_eq!(CleanupStyle::from_setting("polished"), CleanupStyle::Professional);
+        assert_eq!(CleanupStyle::from_setting("concise"), CleanupStyle::Concise);
+        assert_eq!(CleanupStyle::from_setting("unknown"), CleanupStyle::Faithful);
     }
 }

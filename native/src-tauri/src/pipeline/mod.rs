@@ -84,6 +84,8 @@ Include:
             tags: vec!["scribble".to_string(), "structured".to_string()],
             source_audio: None,
             content: response.text.clone(),
+            raw_content: None,
+            cleanup_style: None,
             merged_from: None,
         };
 

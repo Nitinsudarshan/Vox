@@ -476,8 +476,18 @@ pub const VOICE_NOTE_SAVED_EVENT: &str = "voice-note-saved";
 /// Returns the new note's id, so a caller that derives something from this
 /// recording — a todo, say — can point at the note rather than at nothing.
 /// `None` means the write failed, which is logged and never fatal.
-pub fn save_voice_note(app: &AppHandle, vault: &VaultManager, transcript: &str) -> Option<String> {
-    let note = VaultNote::new_voice_note(transcript);
+pub fn save_voice_note(
+    app: &AppHandle,
+    vault: &VaultManager,
+    transcript: &str,
+    raw_transcript: Option<&str>,
+    cleanup_style: Option<&str>,
+) -> Option<String> {
+    let note = VaultNote::new_voice_note_with_raw(
+        transcript,
+        raw_transcript.map(str::to_string),
+        cleanup_style.map(str::to_string),
+    );
     match vault.save_note(&note) {
         Ok(_) => {
             let _ = app.emit(VOICE_NOTE_SAVED_EVENT, &note);
@@ -668,10 +678,37 @@ async fn process_captured_audio(
         crate::capture::romanize::project(&transcript, script).into_owned()
     };
 
+    let raw_text = transcript.clone();
+    let cleanup_style = crate::capture::rewrite::CleanupStyle::from_setting(&settings.stt.cleanup_style);
+
+    let (transcript, cleanup_style_recorded) = if captured.mode != TODO_CAPTURE_MODE && captured.mode != "scribble" && cleanup_style != crate::capture::rewrite::CleanupStyle::Raw {
+        let client = crate::providers::LLMClient::new(settings.provider.clone());
+        let rewrite_fut = crate::capture::rewrite::propose(&client, &transcript, cleanup_style);
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rewrite_fut).await {
+            Ok(proposal) if proposal.changed => {
+                (proposal.rewritten, Some(cleanup_style.as_str().to_string()))
+            }
+            Ok(_) => (transcript, None),
+            Err(_) => {
+                tracing::warn!("Dictation rewrite timed out after 5s; falling back to raw text");
+                (transcript, None)
+            }
+        }
+    } else {
+        (transcript, None)
+    };
+
     // Every successful, non-empty transcript becomes a Voice Note — this
     // must not depend on which mode-specific pipeline runs next, or on
     // whether it succeeds.
-    let voice_note_id = save_voice_note(app, &state.vault, &transcript);
+    let raw_opt = if raw_text != transcript { Some(raw_text.as_str()) } else { None };
+    let voice_note_id = save_voice_note(
+        app,
+        &state.vault,
+        &transcript,
+        raw_opt,
+        cleanup_style_recorded.as_deref(),
+    );
 
     match captured.mode.as_str() {
         // Press-and-hold on the TODOs page. Reuses this whole path —
