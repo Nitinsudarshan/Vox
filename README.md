@@ -86,11 +86,14 @@ flowchart TD
 ## Tests
 
 ```bash
-# Rust backend — 665 tests
+# Rust backend — 1,205 tests
 cd native/src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
 
-# Native frontend — 370 tests
+# Native frontend — 705 tests
 cd native && npm test && npm run typecheck
+
+# Transcription harness — 28 tests, no model or corpus required
+npm run test:transcription
 ```
 
 CI runs all of these on every push and pull request

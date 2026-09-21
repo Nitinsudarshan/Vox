@@ -1031,10 +1031,309 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-045 — The engine builds whisper's decode state once, and shares it
+
+- **Context**: `SttEngine::transcribe_utterances_with_config` called
+  `ctx.create_state()` on every decode. `StreamingTranscriber`'s own doc
+  comment has said since it was written that `create_state` allocates the KV
+  caches and compute buffers — roughly 330 MB for `ggml-small` — and is "far
+  more expensive than the inference itself" on a short window, which is why
+  *that* type holds one for the life of its stream. The engine every other
+  surface uses did the opposite: a meeting paid the allocation once per
+  segment, several hundred times an hour.
+- **It was also invisible**: the engine's `transcription_latency_ms` starts at
+  `whisper_full`, so the cost sat outside `decode_ms`, outside `decode_rtf`,
+  and outside `pipeline_rtf`. Every real-time factor the pipeline has ever
+  reported left it out.
+- **Decision**: the model slot holds `LoadedWhisper { path, state }`. The state
+  is built with the model and reused until a different model evicts it. A new
+  `state_create_ms` on `SttSessionDiagnostics` — folded into the meeting's
+  `model_load_ms` rather than into `decode_ms`, because it is setup and not
+  decoding — reports what it cost, and reads zero on every decode after the
+  first. A run where it is non-zero per segment is the model slot thrashing,
+  which is a different fault with a different fix.
+- **What this required deciding**: `WhisperDecodingConfig::no_context`. A
+  shared state carries whisper's `prompt_past` from one call to the next, and
+  the engine's slot is shared by dictation, meetings and imports — so
+  honouring `no_context: false` there would mean a dictated phrase priming a
+  meeting segment, or a hallucination priming its successor. `SttEngine` now
+  always sets `no_context`. That is the behaviour that was already in force:
+  with a fresh state per decode, nothing was ever carried, so the field's
+  promise that "a chunked recording wants the opposite" described an intent
+  the engine never implemented. `StreamingTranscriber`, which owns a private
+  context and state per stream, still honours it.
+- **What it costs**: the state is now resident for as long as the model is,
+  so Vox holds roughly 330 MB more between decodes than it did — the same peak
+  it already reached *during* every decode, held rather than churned. There is
+  no whisper unload path, so the model's own weights were already resident for
+  the life of the process; this raises that figure rather than introducing it.
+  Worth the trade because the alternative was paying the allocation per
+  segment, and worth writing down because it is the reason someone might one
+  day want an idle-eviction path.
+- **Not measured here**: the size of the win. This repository has no model
+  checked in and no route to one from the environment this was written in, so
+  the claim rests on the allocation being real and on the module's own prior
+  measurement, not on a before/after run. `state_create_ms` exists so the next
+  person can settle it from a real meeting rather than re-derive it.
+
+---
+
+### D-046 — A recovery decode that cannot differ is not run
+
+- **Context**: a segment the quality gate calls `Suspicious` is re-decoded with
+  the prompt removed, greedy sampling and no temperature fallback. On the
+  careful profile that is a genuine alternate: there is a beam to drop, a
+  temperature schedule to flatten and a prompt to withdraw.
+- **The case it got wrong**: the cheaper profile is *already* greedy with
+  `temperature_inc = 0`. On a segment that carried no prompt, the "alternate"
+  configuration is byte-identical to the one that just ran — same parameters,
+  same audio, temperature zero — so whisper returns the same text, and the
+  meeting pays a second full decode for a second copy of its own suspicion.
+  That profile is selected precisely when the machine could not afford the
+  first decode.
+- **Decision**: `skip_recovery` decides before the decode, on two grounds.
+  Build the recovery configuration, compare it with the one used, and skip when
+  they are equal. The segment keeps its first result with
+  `quality_status = "suspicious"` and `retry_count = 0` — zero because no retry
+  happened, which is what the field means.
+- **Honest about how often that first ground fires**: rarely on the live path.
+  Every meeting worker is built with `DomainVocabulary::new()`, which carries
+  global terms, so a prompt is essentially always present and the recovery
+  configuration essentially always differs by having dropped it. The equality
+  check is a guard against paying for a decode that cannot differ, not a
+  throughput change.
+- **The second ground is the one that fires**: recovery is declined while
+  `BacklogTracker` is shedding (D-047). A second full decode of one segment,
+  taken while the queue is deep enough that the worker has already given up
+  beam width, is paid for by whichever later segment the queue then refuses.
+  Recovery buys one line a better chance; the refusal costs another line
+  entirely. It is not close.
+- **Held by tests**: five, over `recovery_config` and `skip_recovery` — the
+  careful profile differs and proceeds, the cheap profile without a prompt does
+  not and is skipped, the cheap profile *with* one differs and proceeds, and a
+  configuration that would otherwise proceed is declined under backlog.
+
+---
+
+### D-047 — The decoder gives up beam width before it gives up speech
+
+- **Context**: the bounded queue's answer to a decoder that cannot keep up is
+  to refuse segments — counted, reported, and gone. That is the correct last
+  resort. It was also the only one: nothing between "decode everything at beam
+  3" and "lose this speech". The corpus run in `tests/transcription/reports/`
+  measured a decode real-time factor of **3.03** for `ggml-small` on the
+  Balanced preset, which is a pipeline that falls three seconds behind for
+  every second of speech and eventually drops it.
+- **Decision**: `BacklogTracker` watches the queue depth left behind by each
+  finished segment and moves the worker to the cheaper profile at a depth of 8,
+  back at 2. Hysteresis for the same reason `ScriptTracker` has it: a queue
+  hovering at a single threshold would alternate decode settings line by line.
+  Both thresholds sit far below the queue's 64, so the trade happens while
+  there is still runway — acting at the ceiling is acting after the damage.
+- **Reason**: a worse line is a line. The cheaper profile is less accurate on
+  exactly the audio whose accuracy is already weakest, and that is still
+  strictly better than silence in the transcript where someone was talking.
+- **Keyed on the queue, not on a setting**: not the model, not the language,
+  not a preference — the one measurement that says the decoder is losing. A
+  machine fast enough for the careful profile never leaves it, and
+  `backlog_switches` is empty on its summary.
+- **Recorded separately from the script switch**: `SegmentDiagnostics` carries
+  `expensive_script_profile` and `backlog_shedding` as two fields rather than
+  one "cheap profile" flag. A run of the first describes the meeting; a run of
+  the second describes the machine, and reading one as the other sends the next
+  person to the wrong place.
+
+---
+
+### D-048 — What the prompt says last, and whose prompt it is
+
+- **Context**: the meeting worker assembled an `initial_prompt` per segment
+  from the domain vocabulary and the previous segment's text, and assigned it
+  over `decoding.initial_prompt` — the field
+  `WhisperDecodingConfig::from_settings_defaulting` had just filled from
+  `SttSettings::custom_initial_prompt`. A prompt the user typed in settings
+  therefore applied to dictation and was silently discarded by meetings.
+- **Decision (whose)**: the configured prompt is an input to
+  `DomainVocabulary::build_prompt`, not something it replaces. It leads the
+  prompt; vocabulary and context follow within the same budget.
+- **Decision (order)**: the prompt now reads
+  `<configured prompt>. <vocabulary>. <what was just said>`. It used to put the
+  preceding speech first and the keyword list last.
+- **Reason, twice over**: whisper reads `initial_prompt` as text that came
+  before the audio, so its *end* is what the decoder treats as most recent — a
+  comma-separated run of proper nouns in that position asserts that the last
+  thing said was a list of names, which is how priming for `NavGurukul` turns
+  into emitting it over audio that never contained it. And whisper.cpp caps the
+  prompt at `n_text_ctx/2 - 1` tokens keeping the **last** ones
+  (`whisper_full_with_state`), so an over-budget prompt now loses vocabulary and
+  keeps context, where before it lost context and kept vocabulary.
+- **The budget is a proxy and says so**: the real limit is tokens, and the
+  character-to-token ratio differs by an order of magnitude between Latin and
+  Devanagari — the same asymmetry `for_expensive_script` exists for. The tail
+  is costed against the budget first, so a long vocabulary list cannot crowd
+  out the sentence a forced split is continuing.
+
+---
+
+### D-049 — The transcript records which language whisper decoded under
+
+- **Context**: `SegmentTelemetry` has carried `detected_language` and
+  `decode_language` since it was written, and the worker set **both** from
+  `WorkerConfig::language` — the language that was *asked for*. A long-form
+  meeting deliberately asks for nothing so a bilingual room can be followed, so
+  in the case the field exists for, both read `None`.
+- **Why it matters more than an ordinary missing field**: the audit already
+  names language re-detection drift as an accuracy bottleneck, and the failure
+  is silent by construction. A span decoded under the wrong language does not
+  error — it returns fluent text in that language, so nothing about the
+  transcript looks broken and the only symptom is the words being wrong.
+- **Decision**: `SttSessionDiagnostics` carries `detected_language`, read from
+  `whisper_full_lang_id_from_state`, which whisper sets on every decode — to
+  the pin where one was given and to its own choice otherwise. The worker
+  records it on the segment and in `diagnostics.jsonl` next to the request, not
+  in place of it: the interesting record is the pair. The benchmark runner
+  prints the languages a case was decoded under beside its word error rate.
+- **Deliberately not done**: pinning the language after N agreeing detections,
+  the obvious next move. Vox's own meetings are Hinglish, and pinning either
+  language on code-switched audio is how a transcript stops code-switching.
+  That decision wants the measurement this field makes possible, and does not
+  belong ahead of it.
+
+---
+
+### D-050 — A benchmark may not report a language it never ran as 0.00%
+
+- **Context**: `tests/transcription/runner/run_benchmark.py` computed each
+  language's averages over its cases and returned zeros for an empty set. The
+  committed report's headline therefore read `Hindi 0.00% WER, Hinglish 0.00%
+  WER` for a run of one English case — a perfect score, meaning "not run".
+- **Decision**: an empty subset carries `count: 0` and no numbers, and the
+  report renders `not run`. The header states how many of the manifest's cases
+  ran and names the ones that did not, above every number that follows.
+- **And a way to fix a report without re-running it**: `--render-from` renders
+  the Markdown from a stored `benchmark_report.json`. Changing how a result is
+  presented should not cost a re-decode, and the alternative — hand-editing a
+  generated file — leaves the generator and its output disagreeing.
+
+---
+
+### D-051 — corpus-v1 is 1-bit distortion, and every accuracy number from it is void
+
+- **Context**: the audio gate written for the shootout (D-053) was run over the
+  corpus before any model was, which is the order it exists to enforce. All
+  eight cases came back between 89% and 99% clipped: RMS ≈ 0.95 against a full
+  scale of 1.0, peak exactly 1.0, and the adaptive VAD reporting **0% voiced**
+  because the signal and the noise floor are the same value.
+- **Cause**, one line in `tests/transcription/generator/generate_corpus.py`:
+  `miniaudio.decode` returns signed 16-bit integers by default, and the writer
+  treated `decoded.samples` as floats in `[-1.0, 1.0]`. Its
+  `max(-1.0, min(1.0, s))` therefore clamped every non-zero sample to ±1 before
+  multiplying by 32767. The corpus is the *sign* of the waveform — a square
+  wave — and the `add_noise` case, clamped twice, is 99.9%.
+- **Why nothing caught it**: the files are valid 16 kHz mono WAVs of the right
+  duration, they play as recognisable speech, and Whisper transcribed them at
+  15.17% word error rate. A number in that range reads as a model result. This
+  is the failure mode the whole reassessment is about — a plausible number from
+  a broken measurement is worse than no number.
+- **Decision**: fix the conversion explicitly (`audio_guard.to_float_samples`,
+  which handles every format `miniaudio` can return and *refuses* one it does
+  not recognise rather than assuming floats), and refuse at generation time to
+  write a case that fails the gate. `TRANSCRIPTION_BENCHMARK_V1.md` carries a
+  banner above its numbers saying they measure the recording.
+- **What is void and what is not**: every WER and CER from this corpus is void.
+  The throughput numbers are *suspect*, not void — decode cost tracks
+  transcript length and segment count, and distortion moves both — so 3.03 RTF
+  describes a real run that should not have happened.
+- **Not regenerated here**: the TTS endpoint is unreachable from the
+  environment this was written in. The generator is fixed and the corpus is
+  not.
+
+---
+
+### D-052 — A benchmark states its configuration, or it is not a benchmark
+
+- **Context**: `src/bin/benchmark.rs` built `WhisperDecodingConfig::baseline()`
+  — greedy, `best_of = 1`, `trim_audio_context` **off**. A live meeting builds
+  `for_meetings`, which is beam search at 3 with the encoder clamped to each
+  segment's own audio. So the committed baseline measured a configuration Vox
+  does not ship, and paid a full thirty-second encoder window for every
+  segment. Nothing in the output said which configuration it was.
+- **Decision**: every knob that changes the answer is a flag, every flag is
+  recorded in the output as a `RunStamp`, and the defaults are production —
+  `--preset balanced --decode-path live --segmentation vox --context previous
+  --trim-audio-ctx on`. An unrecognised flag or an unparseable value is an
+  error rather than a default, because the failure being prevented is a run
+  that silently measured something other than what it was asked for.
+- **Also recorded**: the Vox commit, from the orchestrator rather than the
+  binary. Stage 1 of the reassessment is "freeze the current baseline", and a
+  baseline that cannot name its commit is not frozen — particularly on a branch
+  that changed the decode path in the commit before this one.
+- **Consequence for the existing number**: 3.029 RTF was greedy decoding with
+  the encoder clamp off, not the Balanced beam search the pipeline ships. It is
+  not the production baseline and was never comparable to one.
+
+---
+
+### D-053 — The audio is checked before the models are
+
+- **Context**: §21 of the ASR reassessment asks for a raw audio quality gate,
+  on the argument that improving a model cannot fix a clipped recording.
+- **Decision**: `benchmark --audio-stats-only` measures a recording with no
+  model loaded and reports RMS, peak, near-clipping share, voiced ratio, an SNR
+  estimate and a list of concerns. The shootout runs it over every case first
+  and **refuses** to score a case that raises one, unless `--force-bad-audio`
+  is passed — in which case every row carries the concern and the taxonomy
+  ranks `AUDIO` above every model conclusion.
+- **Built on `capture::AudioStats` rather than beside it**, so "near clipping"
+  means the same thing to the corpus audit, to the benchmark and to a live
+  meeting's per-segment diagnostics. Three definitions of one threshold is how
+  they drift.
+- **Thresholds, and why they are strict**: 1% of samples at or beyond 98% of
+  full scale is called clipped. Speech that has not been limited reaches that
+  on a handful of vowel peaks; a whole percent is a gain stage pinned to its
+  ceiling, flattening exactly the formant peaks an acoustic model reads.
+- **It earned its place immediately**: see D-051.
+
+---
+
+### D-054 — The shootout compares configurations, and names which variable moved
+
+- **Context**: "improve transcription" is not actionable, because a bad
+  transcript can come from the recording, the segmenter, the prompt, the model,
+  the inference engine or the machine, and those are fixed in different places.
+  Changing the model and looking at the transcript cannot distinguish them.
+- **Decision**: `tests/transcription/runner/shootout.py` runs a matrix of
+  engine *configurations* over one corpus through one evaluator, and classifies
+  each row by comparing it against its peers. The matrix lives in
+  `tests/transcription/shootout/engines.json`, ordered so consecutive rows
+  differ in exactly one thing.
+- **The taxonomy is comparative on purpose.** A single run can only ever reach
+  `AUDIO`, `THROUGHPUT` or `HALLUCINATION` — everything else needs a peer that
+  holds the other variables fixed. `SEGMENTATION` needs the same engine and
+  model at `whole-file`; `CONTEXT` needs the same everything at a different
+  `--context`; `INFERENCE_ENGINE` needs the same model family under another
+  engine. `MODEL` is the conclusion of last resort, reached only when no peer
+  isolates anything else.
+- **Model identity is normalized** (`model_family`): `ggml-small.bin`, `small`
+  and `Systran/faster-whisper-small` are the same weights, and the whole
+  engine-versus-model experiment depends on noticing that. `.en` variants keep
+  their suffix, because comparing one against its multilingual sibling is
+  comparing two models. Both facts are tests — the first one caught a real bug
+  in the classifier.
+- **An engine that cannot run says why.** Missing model file, package not
+  installed, feature not compiled — reported as `skipped` with the remedy, not
+  omitted. A comparison missing its fastest entrant still reads as a
+  comparison.
+- **What this does not decide**: which stack Vox should ship. That needs the
+  corpus regenerated (D-051), the models downloaded, and a run on a real
+  machine. The harness exists so the answer is a table rather than an opinion.
+
+---
+
 ## Reserved, not yet decided
 
 Nothing. Every id the staged plan reserved has landed with the stage that
-implemented it, D-001 through D-044 above. New proposals belong in
+implemented it, D-001 through D-054 above. New proposals belong in
 [speech-architecture-audit.md](speech-architecture-audit.md) §13 until the
 work that justifies them exists — a decision recorded before its measurement
 is a preference.

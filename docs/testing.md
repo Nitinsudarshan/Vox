@@ -324,10 +324,32 @@ cd native && Vox_UPDATE_CAPTURE_FIXTURES=1 npm test
   highest-value of these, since it owns the capture state machine.
 - No end-to-end test drives a real recording through capture, STT, and
   processing. The eval fixtures cover the processing half of that.
-- **The speech benchmark has no corpus in this repository.** The harness is
-  tested; what it measures depends entirely on recordings the user supplies,
-  and until they do, every accuracy claim about Vox's transcription is an
-  impression rather than a number.
+- **`corpus-v1`'s audio is broken, and every accuracy number from it is void.**
+  All eight cases are 89–99% clipped: the generator read `miniaudio`'s signed
+  16-bit samples as if they were floats, so every non-zero sample was clamped
+  to full scale. The corpus is the sign of the waveform. `docs/asr-shootout.md`
+  §6 has the detail; the generator is fixed and now refuses to write a case
+  that fails the gate, and regenerating needs network access to the TTS
+  endpoint. Until it is regenerated, `TRANSCRIPTION_BENCHMARK_V1.md` carries a
+  banner saying its numbers measure the recording.
+- **Even once regenerated, the corpus is synthesized, not recorded.**
+  Text-to-speech produces clean articulation, no overlap, no room and no accent
+  variation, so a word error rate from it is a floor rather than an estimate.
+  Treat a *change* in the number as evidence and the number itself as
+  provisional until someone supplies recordings.
+- **Two benchmark harnesses exist, measuring different things.**
+  `meetings::benchmark` (§1b) runs a corpus through the production pieces
+  behind Tauri commands, declares each engine's capabilities, and is the only
+  one that measures first-transcript latency and queue backlog under real-time
+  pacing. `src/bin/benchmark.rs` plus `tests/transcription/runner/shootout.py`
+  compares engine *configurations* over one corpus through one evaluator
+  (`docs/asr-shootout.md`). Neither is redundant and neither knows about the
+  other; the Parakeet adapter and first-token latency are the two places where
+  the shootout wants what the Rust harness already has.
+- **Only one of the eight corpus cases has been run.** The committed report
+  says so on its own first page, which is the fix that was available here; the
+  Hindi and Hinglish rows are the ones that would actually test the
+  code-switching this pipeline is built for.
 - **No browser-level test drives web capture in a real browser.** The
   extraction layer is covered by jsdom fixtures and the wire format by the
   contract tests above, but a fixture cannot tell you that ChatGPT changed its

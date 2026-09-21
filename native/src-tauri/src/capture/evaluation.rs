@@ -1634,8 +1634,10 @@ pub mod tests {
             transcript_char_count: 18,
             lock_wait_ms: 0,
             model_load_ms: 0,
+            state_create_ms: 0,
             model_reloaded: false,
             audio_ctx: None,
+            detected_language: None,
         };
 
         let snapshot = build_diagnostic_snapshot(

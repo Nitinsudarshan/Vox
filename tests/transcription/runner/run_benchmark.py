@@ -27,6 +27,12 @@ from metrics import (
     classify_transcription_failure,
 )
 
+# The audio gate lives with the shootout and is imported rather than copied: a
+# second definition of "near clipping" is how two reports come to disagree
+# about the same recording.
+sys.path.insert(0, str(SCRIPT_DIR))
+from shootout import audit_case_audio, find_vox_binary  # noqa: E402
+
 DEFAULT_CORPUS_MANIFEST = REPO_ROOT / "tests" / "transcription" / "corpus-v1" / "manifest.json"
 DEFAULT_MODEL_PATH = REPO_ROOT / "native" / "src-tauri" / ".vox" / "config" / "models" / "ggml-small.bin"
 REPORTS_DIR = REPO_ROOT / "tests" / "transcription" / "reports"
@@ -131,13 +137,78 @@ def run_single_case(
         "segments": pipeline_data.get("segments", [])
     }
 
+def decoded_languages(case: dict) -> str:
+    """Which languages Whisper actually decoded this case's segments under.
+
+    A Hinglish case pinned to `auto` is decoded language by language, and a span
+    decoded under the wrong one comes back as fluent text in that language
+    rather than as an error — so the transcript never looks broken and the WER
+    is the only symptom. Naming the languages turns "this case scores badly"
+    into "these segments were decoded as Nepali".
+    """
+    seen = {}
+    for segment in case.get("segments", []):
+        telemetry = segment.get("telemetry") or {}
+        lang = telemetry.get("detected_language")
+        if lang:
+            seen[lang] = seen.get(lang, 0) + 1
+    if not seen:
+        return "unrecorded"
+    ordered = sorted(seen.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ", ".join(f"{lang} ×{count}" for lang, count in ordered)
+
+
+# What a cell says when the number behind it does not exist. A benchmark that
+# renders "not run" as a number is worse than one that renders nothing.
+NOT_RUN = "not run"
+
+
+def _metric(stats: dict, key: str, fmt: str, unit: str = "") -> str:
+    """One summary cell, or `not run` when the subset was empty.
+
+    The unit belongs inside the cell and not after it: a cell that renders
+    `not run%` is a worse lie than the `0.00%` it replaced.
+    """
+    if not stats.get("count"):
+        return NOT_RUN
+    return format(stats[key], fmt) + unit
+
+
 def generate_markdown_report(report_data: dict) -> str:
     md = []
     md.append(f"# VOX TRANSCRIPTION BENCHMARK REPORT")
     md.append(f"**Date:** {report_data['timestamp']}")
     md.append(f"**Corpus:** {report_data['corpus_version']} ({report_data['total_audio_minutes']:.1f} min audio, {report_data['total_words']} words)")
     md.append(f"**Pipeline Version:** 0.1.0 (Production Segmenter + Dynamic Domain Vocabulary + Quality Gate + Recovery)")
-    md.append(f"**Model:** {report_data['model_name']} (`{report_data['model_path']}`)\n")
+    md.append(f"**Model:** {report_data['model_name']} (`{report_data['model_path']}`)")
+
+    # Stated before any number, because every number below is an average over
+    # exactly these cases and no others.
+    ran = report_data.get("cases_run", len(report_data["cases"]))
+    total = report_data.get("cases_in_manifest", ran)
+    line = f"**Cases:** {ran} of {total} in the manifest"
+    skipped = report_data.get("cases_not_run") or []
+    if skipped:
+        line += f" — **not run:** {', '.join(f'`{s}`' for s in skipped)}"
+    md.append(line + "\n")
+
+    unusable = sorted(
+        case_id
+        for case_id, audit in (report_data.get("audio_audit") or {}).items()
+        if audit.get("concerns")
+    )
+    if unusable:
+        # Above every number, because every number below it is void. A word
+        # error rate over a clipped recording measures the recording.
+        md.append(
+            "> ## ⚠ These results do not measure a model\n>\n"
+            "> The audio gate failed on "
+            + ", ".join(f"`{c}`" for c in unusable)
+            + ". A recording whose samples sit at full scale has had its formant "
+            "peaks flattened, so the word error rates below are a measurement of "
+            "the recording and not of the engine that transcribed it. Regenerate "
+            "the corpus (`scripts/generate_transcription_corpus.py`) and run again.\n"
+        )
 
     md.append("## Executive Summary")
     md.append("| Metric | English | Hindi | Hinglish | Overall |")
@@ -149,20 +220,28 @@ def generate_markdown_report(report_data: dict) -> str:
     hing = by_lang.get("hinglish", {})
     ov = report_data["overall_summary"]
 
-    md.append(f"| **Average WER** | {en.get('avg_wer', 0.0):.2f}% | {hi.get('avg_wer', 0.0):.2f}% | {hing.get('avg_wer', 0.0):.2f}% | **{ov.get('avg_wer', 0.0):.2f}%** |")
-    md.append(f"| **Average CER** | {en.get('avg_cer', 0.0):.2f}% | {hi.get('avg_cer', 0.0):.2f}% | {hing.get('avg_cer', 0.0):.2f}% | **{ov.get('avg_cer', 0.0):.2f}%** |")
-    md.append(f"| **Average RTF** | {en.get('avg_rtf', 0.0):.3f} | {hi.get('avg_rtf', 0.0):.3f} | {hing.get('avg_rtf', 0.0):.3f} | **{ov.get('avg_rtf', 0.0):.3f}** |")
-    md.append(f"| **Total Speech** | {en.get('total_speech_sec', 0.0):.1f}s | {hi.get('total_speech_sec', 0.0):.1f}s | {hing.get('total_speech_sec', 0.0):.1f}s | **{ov.get('total_speech_sec', 0.0):.1f}s** |\n")
+    md.append(f"| **Cases** | {en.get('count', 0)} | {hi.get('count', 0)} | {hing.get('count', 0)} | **{ov.get('count', 0)}** |")
+    for label, key, fmt, unit in (
+        ("Average WER", "avg_wer", ".2f", "%"),
+        ("Average CER", "avg_cer", ".2f", "%"),
+        ("Average RTF", "avg_rtf", ".3f", ""),
+        ("Total Speech", "total_speech_sec", ".1f", "s"),
+    ):
+        md.append(
+            f"| **{label}** | {_metric(en, key, fmt, unit)} | {_metric(hi, key, fmt, unit)} | "
+            f"{_metric(hing, key, fmt, unit)} | **{_metric(ov, key, fmt, unit)}** |"
+        )
+    md.append("")
 
     md.append("## Detailed Per-Test Results")
-    md.append("| Test ID | Lang | Category | Words | Audio (s) | WER | CER | Subs | Dels | Inss | RTF | Status |")
-    md.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    md.append("| Test ID | Lang | Decoded as | Category | Words | Audio (s) | WER | CER | Subs | Dels | Inss | RTF | Status |")
+    md.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
     for c in report_data["cases"]:
         w = c["wer"]
         k = c["cer"]
         md.append(
-            f"| `{c['id']}` | {c['language']} | {c['category']} | {w['ref_words']} | "
+            f"| `{c['id']}` | {c['language']} | {decoded_languages(c)} | {c['category']} | {w['ref_words']} | "
             f"{c['duration_seconds']:.1f}s | {w['wer_percent']:.2f}% | {k['cer_percent']:.2f}% | "
             f"{w['substitutions']} | {w['deletions']} | {w['insertions']} | "
             f"{c['decode_rtf']:.3f} | {c['failure_diagnosis']['primary_category']} |"
@@ -201,12 +280,101 @@ def generate_markdown_report(report_data: dict) -> str:
 
     return "\n".join(md)
 
+def basename_either_separator(value: str) -> str:
+    """The filename out of a path written on any platform.
+
+    `Path(...).name` is resolved by the *host*, so a Windows path re-rendered
+    on Linux comes back whole — backslashes are ordinary characters there. The
+    path this strips was recorded on Windows and the report is being fixed on
+    Linux, which is exactly that case.
+    """
+    return value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def write_markdown(report_payload: dict, out_dir: Path) -> None:
+    """Writes the Markdown report to the reports directory and the repo root."""
+    md_content = generate_markdown_report(report_payload)
+    md_path = out_dir / "TRANSCRIPTION_BENCHMARK_V1.md"
+    root_md_path = REPO_ROOT / "TRANSCRIPTION_BENCHMARK_V1.md"
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(md_content)
+    with open(root_md_path, "w", encoding="utf-8") as f:
+        f.write(md_content)
+    print(f"[REPORT] Markdown saved to {root_md_path}")
+
+
+def render_from(json_path: Path, corpus_path: Path, out_dir: Path) -> None:
+    """Re-renders a stored run without decoding it again.
+
+    Changing how a result is *reported* should not cost six minutes of Whisper
+    and a model nobody has on this machine. It also means an already-committed
+    report can be corrected from the data it was generated from, rather than
+    hand-edited into agreeing with a generator it no longer matches.
+    """
+    if not json_path.is_file():
+        print(f"Error: report JSON not found at {json_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    with open(corpus_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    # Backfilled rather than assumed: a report written before the runner
+    # recorded what it skipped still knows which cases it holds.
+    # A report written before that rule existed still carries the full path.
+    # Re-rendering is the moment to drop it.
+    payload["model_path"] = basename_either_separator(payload.get("model_path", ""))
+
+    ran_ids = {c["id"] for c in payload.get("cases", [])}
+    payload.setdefault("cases_in_manifest", len(manifest["cases"]))
+    payload.setdefault("cases_run", len(ran_ids))
+    payload.setdefault(
+        "cases_not_run",
+        [c["id"] for c in manifest["cases"] if c["id"] not in ran_ids],
+    )
+    for summary in list(payload.get("language_summary", {}).values()) + [
+        payload.get("overall_summary", {})
+    ]:
+        summary.setdefault("count", 0)
+
+    # A report written before the gate existed still has to answer to it: the
+    # recordings are on disk and the question is about them, not about the run.
+    if "audio_audit" not in payload:
+        binary = find_vox_binary()
+        audit = {}
+        if binary is not None:
+            for case in payload.get("cases", []):
+                wav = Path(case.get("audio_file", ""))
+                if not wav.is_absolute():
+                    wav = (
+                        REPO_ROOT
+                        / "tests"
+                        / "transcription"
+                        / payload["corpus_version"]
+                        / case["language"]
+                        / f"{case['id']}.wav"
+                    )
+                if wav.is_file():
+                    audit[case["id"]] = audit_case_audio(binary, wav)
+        payload["audio_audit"] = audit
+
+    write_markdown(payload, out_dir)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Vox Automated Meeting Transcription Benchmark Runner")
     parser.add_argument("--corpus", type=str, default=str(DEFAULT_CORPUS_MANIFEST), help="Path to corpus manifest.json")
     parser.add_argument("--model", type=str, default=str(DEFAULT_MODEL_PATH), help="Path to Whisper model (.bin)")
     parser.add_argument("--cases", type=str, default=None, help="Comma-separated subset of case IDs to run")
     parser.add_argument("--out-dir", type=str, default=str(REPORTS_DIR), help="Output directory for reports")
+    parser.add_argument(
+        "--render-from",
+        type=str,
+        default=None,
+        help="Re-render the Markdown report from a saved benchmark_report.json without decoding "
+             "anything. For fixing how a run is presented without paying to run it again.",
+    )
     args = parser.parse_args()
 
     corpus_path = Path(args.corpus)
@@ -217,6 +385,11 @@ def main():
     if not corpus_path.is_file():
         print(f"Error: Corpus manifest not found at {corpus_path}", file=sys.stderr)
         sys.exit(1)
+
+    if args.render_from:
+        render_from(Path(args.render_from), corpus_path, out_dir)
+        return
+
     if not model_path.is_file():
         print(f"Error: Model not found at {model_path}", file=sys.stderr)
         sys.exit(1)
@@ -238,6 +411,7 @@ def main():
     print(f"Running benchmark on {len(cases_to_run)} test cases...")
 
     results = []
+    audio_audit = {}
     for c in cases_to_run:
         lang = c["language"]
         case_id = c["id"]
@@ -251,13 +425,18 @@ def main():
             print(f"Warning: Reference file {ref_path} missing, skipping.")
             continue
 
+        audio_audit[case_id] = audit_case_audio(bin_path, wav_path)
         res = run_single_case(bin_path, model_path, c, wav_path, ref_path)
         results.append(res)
 
     # Compute summaries
     def compute_stats(cases_subset):
+        # `count: 0` and no numbers, rather than zeros. A language with no
+        # cases scored 0.00% WER in the old report, which reads as a perfect
+        # transcript and means "never run" — the report's own headline was the
+        # least trustworthy line in it.
         if not cases_subset:
-            return {"avg_wer": 0.0, "avg_cer": 0.0, "avg_rtf": 0.0, "total_speech_sec": 0.0}
+            return {"count": 0}
         total_w = sum(x["wer"]["wer_percent"] for x in cases_subset)
         total_c = sum(x["cer"]["cer_percent"] for x in cases_subset)
         total_r = sum(x["decode_rtf"] for x in cases_subset)
@@ -281,13 +460,22 @@ def main():
     total_words = sum(r["wer"]["ref_words"] for r in results)
     total_audio_sec = sum(r["duration_seconds"] for r in results)
 
+    ran_ids = {r["id"] for r in results}
     report_payload = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "corpus_version": manifest["version"],
         "model_name": model_path.name,
-        "model_path": str(model_path),
+        # The filename, never the path — the same rule the segment diagnostics
+        # follow, and for the same reason: a report gets shared.
+        "model_path": model_path.name,
         "total_audio_minutes": round(total_audio_sec / 60.0, 2),
         "total_words": total_words,
+        # Carried into the report so a partial run cannot be read as a full
+        # one. `--cases` and a missing wav both land here.
+        "cases_in_manifest": len(manifest["cases"]),
+        "cases_run": len(results),
+        "cases_not_run": [c["id"] for c in manifest["cases"] if c["id"] not in ran_ids],
+        "audio_audit": audio_audit,
         "overall_summary": overall_summary,
         "language_summary": lang_summary,
         "cases": results
@@ -323,14 +511,7 @@ def main():
     print(f"[REPORT] CSV saved to {csv_path}")
 
     # 3. Write Markdown Report
-    md_content = generate_markdown_report(report_payload)
-    md_path = out_dir / "TRANSCRIPTION_BENCHMARK_V1.md"
-    root_md_path = REPO_ROOT / "TRANSCRIPTION_BENCHMARK_V1.md"
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(md_content)
-    with open(root_md_path, "w", encoding="utf-8") as f:
-        f.write(md_content)
-    print(f"[REPORT] Markdown saved to {root_md_path}")
+    write_markdown(report_payload, out_dir)
 
 if __name__ == "__main__":
     main()

@@ -899,8 +899,19 @@ pub struct WhisperDecodingConfig {
     pub single_segment: bool,
     /// Discard decoder state between decodes.
     ///
-    /// Set for independent live windows. A chunked recording wants the
-    /// opposite, so its cross-boundary context survives.
+    /// Set for independent live windows, and honoured by
+    /// [`StreamingTranscriber`], which owns a private context and state for
+    /// one stream.
+    ///
+    /// **[`SttEngine`] ignores it and always discards.** Its single slot is
+    /// shared by dictation, meetings and imports, so whisper's own
+    /// `prompt_past` there is not "this recording's previous chunk" — it is
+    /// whichever surface decoded last. The clause this field used to carry,
+    /// that "a chunked recording wants the opposite", described an intent the
+    /// engine never implemented: it built a fresh state per decode, so nothing
+    /// was ever carried. Cross-segment context on that path is explicit
+    /// instead — an `initial_prompt` assembled from text the quality gate
+    /// kept, which can be withdrawn the moment a segment is rejected.
     #[serde(default)]
     pub no_context: bool,
     /// Maximum allowable zlib compression ratio before hallucination screening rejects.
@@ -1218,6 +1229,19 @@ pub struct SttSessionDiagnostics {
     /// resident, which is the normal case.
     #[serde(default)]
     pub model_load_ms: u128,
+    /// Time spent building whisper's decode state — its KV caches and compute
+    /// buffers. Zero on every decode that reused the resident one, which is
+    /// every decode but the first after a model load.
+    ///
+    /// Reported rather than folded into [`Self::model_load_ms`] because the
+    /// two answer different questions: a non-zero load means the model was not
+    /// in memory, and a non-zero state build on a call that did *not* load
+    /// means the slot is being rebuilt under something that should be reusing
+    /// it. It is also outside [`Self::transcription_latency_ms`], which starts
+    /// at `whisper_full` — so before this field existed the cost was paid and
+    /// then left out of every real-time factor the pipeline reports.
+    #[serde(default)]
+    pub state_create_ms: u128,
     /// Whether a *different* model had to be evicted to run this call. True
     /// here is the model-thrash signal: meetings and dictation are fighting
     /// over the engine's single model slot.
@@ -1229,13 +1253,47 @@ pub struct SttSessionDiagnostics {
     /// seconds — and because a decode that loses its tail will name it.
     #[serde(default)]
     pub audio_ctx: Option<i32>,
+    /// The language whisper decoded under, as it reports it back — the pinned
+    /// one where the caller pinned it, and the auto-detected one otherwise.
+    /// `None` for an engine that does not report a language.
+    #[serde(default)]
+    pub detected_language: Option<String>,
+}
+
+/// What the engine's single model slot holds: a path, and the decode state
+/// that was built for the model at it.
+///
+/// The state is *kept* rather than built per decode, which is the whole point
+/// of this type existing. `whisper_init_state` allocates the KV caches and the
+/// compute buffers — roughly 330 MB for `ggml-small`, as
+/// [`StreamingTranscriber`] has said in its own doc comment since it was
+/// written — so on a short segment that allocation costs more than the
+/// inference it is for. A meeting pays it once per segment, several hundred
+/// times an hour, and none of it appeared in `decode_ms`: the worker's timer
+/// starts at `whisper_full`, so the cost was not only paid but invisible to
+/// every number the pipeline reports.
+///
+/// The context itself is not held alongside: `WhisperState` owns an `Arc` to
+/// it, so the state keeps the model alive on its own. Replacing the slot drops
+/// both together, which is what makes a model switch a switch of both.
+///
+/// What it costs: that allocation is now resident between decodes rather than
+/// churned, so Vox holds it for as long as it holds the model. It is the same
+/// peak the process already reached during every decode, and the model's own
+/// weights were already resident for the life of the process — there is no
+/// whisper unload path. Said plainly here because it is the reason someone
+/// might later want one.
+#[cfg(feature = "whisper-local")]
+struct LoadedWhisper {
+    path: String,
+    state: whisper_rs::WhisperState,
 }
 
 /// Local, zero-cost speech-to-text via whisper.cpp (through whisper-rs) or NVIDIA Parakeet TDT.
 #[derive(Clone)]
 pub struct SttEngine {
     #[cfg(feature = "whisper-local")]
-    loaded: Arc<Mutex<Option<(String, WhisperContext)>>>,
+    loaded: Arc<Mutex<Option<LoadedWhisper>>>,
     #[cfg(feature = "parakeet")]
     parakeet_loaded: Arc<Mutex<Option<crate::capture::parakeet::ParakeetEngine>>>,
 }
@@ -1324,8 +1382,13 @@ impl SttEngine {
                 transcript_char_count: result.text.chars().count(),
                 lock_wait_ms: 0,
                 model_load_ms: 0,
+                state_create_ms: 0,
                 model_reloaded: false,
                 audio_ctx: None,
+                // Parakeet is English-only and says so through its
+                // capabilities; echoing that here would dress a fixed
+                // property up as a detection.
+                detected_language: None,
             };
 
             Ok((result.text, diag))
@@ -1413,8 +1476,10 @@ impl SttEngine {
                     transcript_char_count: 0,
                     lock_wait_ms: 0,
                     model_load_ms: 0,
+                    state_create_ms: 0,
                     model_reloaded: false,
                     audio_ctx: None,
+                    detected_language: None,
                 };
                 return Ok((Vec::new(), diag));
             }
@@ -1432,14 +1497,15 @@ impl SttEngine {
             let lock_wait_ms = t_lock_start.elapsed().as_millis();
 
             let needs_reload = match guard.as_ref() {
-                Some((loaded_path, _)) => loaded_path != model_path,
+                Some(loaded) => loaded.path != model_path,
                 None => true,
             };
             // A first load is not thrash; evicting a *different* model is.
             let evicted_other_model =
-                matches!(guard.as_ref(), Some((loaded_path, _)) if loaded_path != model_path);
+                matches!(guard.as_ref(), Some(loaded) if loaded.path != model_path);
 
             let mut model_load_ms = 0u128;
+            let mut state_create_ms = 0u128;
             if needs_reload {
                 tracing::info!("Loading Whisper model from {}", model_path);
                 let t_load_start = std::time::Instant::now();
@@ -1449,20 +1515,28 @@ impl SttEngine {
                             path: model_path.to_string(),
                             message: e.to_string(),
                         })?;
-                *guard = Some((model_path.to_string(), ctx));
                 model_load_ms = t_load_start.elapsed().as_millis();
+
+                // Built once, with the model, and kept for every decode after
+                // it — see [`LoadedWhisper`]. Non-zero here and zero on every
+                // subsequent call is what a reader should see; a run where it
+                // is non-zero per segment is the model slot thrashing.
+                let t_state_start = std::time::Instant::now();
+                let state = ctx
+                    .create_state()
+                    .map_err(|e| SttError::TranscriptionFailed(e.to_string()))?;
+                state_create_ms = t_state_start.elapsed().as_millis();
+
+                *guard = Some(LoadedWhisper {
+                    path: model_path.to_string(),
+                    state,
+                });
             }
 
-            let (_, ctx) = guard
-                .as_ref()
-                .expect("model was just loaded or already present");
-
-            // TEMP: whisper internal latency diagnostics (create_state)
-            let t_create_state_start = std::time::Instant::now();
-            let mut state = ctx
-                .create_state()
-                .map_err(|e| SttError::TranscriptionFailed(e.to_string()))?;
-            let t_create_state_end = std::time::Instant::now();
+            let state = &mut guard
+                .as_mut()
+                .expect("model was just loaded or already present")
+                .state;
 
             let strategy = decoding_config.strategy.to_whisper();
 
@@ -1484,7 +1558,19 @@ impl SttEngine {
             }
             params.set_n_threads(decoding_config.n_threads.unwrap_or_else(num_cpus));
             params.set_single_segment(decoding_config.single_segment);
-            params.set_no_context(decoding_config.no_context);
+            // Always, whatever the caller asked for — and this is the one
+            // place [`WhisperDecodingConfig::no_context`] is not honoured.
+            // The slot's state is shared by every surface, so whisper's own
+            // `prompt_past` would carry one caller's decode into the next
+            // one's: a dictated phrase priming a meeting segment, or the
+            // hallucination a segment was just rejected for priming its
+            // successor. It also carried nothing before, because each decode
+            // built a fresh state, so this is the behaviour that was already
+            // in force rather than a new restriction. Cross-segment context
+            // that is *wanted* travels as an explicit `initial_prompt`, built
+            // by [`crate::capture::vocabulary`] out of text the quality gate
+            // kept — which is context Vox can name, screen and withdraw.
+            params.set_no_context(true);
 
             // Whisper decodes a thirty-second window whatever it is given, so a
             // shorter segment pays for silence it does not contain. An explicit
@@ -1508,6 +1594,15 @@ impl SttEngine {
             let t_state_full_end = std::time::Instant::now();
 
             let elapsed_ms = t_state_full_end.duration_since(t_state_full_start).as_millis();
+
+            // What whisper decided it was listening to. Set whether or not the
+            // caller pinned a language: on a pinned decode it echoes the pin,
+            // and on an auto-detecting one it is the only record of a choice
+            // that changes every word of the output. A chunk decoded under the
+            // wrong language does not fail — it returns fluent text in the
+            // wrong one — so without this a transcript cannot be asked why.
+            let detected_language =
+                whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string);
 
             let mut utterances: Vec<SttUtterance> = Vec::new();
             let mut segment_count = 0;
@@ -1555,16 +1650,17 @@ impl SttEngine {
                 transcript_char_count: trimmed_text.chars().count(),
                 lock_wait_ms,
                 model_load_ms,
+                state_create_ms,
                 model_reloaded: evicted_other_model,
                 audio_ctx: effective_audio_ctx,
+                detected_language,
             };
 
             // TEMP: whisper internal latency diagnostics (timing summary)
             let t_whisper_end = std::time::Instant::now();
-            let create_state_ms = t_create_state_end.duration_since(t_create_state_start).as_millis();
             let state_full_ms = t_state_full_end.duration_since(t_state_full_start).as_millis();
             let whisper_total_ms = t_whisper_end.duration_since(t_whisper_start).as_millis();
-            let other_ms = whisper_total_ms.saturating_sub(create_state_ms + state_full_ms);
+            let other_ms = whisper_total_ms.saturating_sub(state_create_ms + state_full_ms);
 
             // At `debug`, not on stdout. This is one record per decode, which
             // is fine for a dictation phrase and is 500 of them for an hour of
@@ -1573,7 +1669,7 @@ impl SttEngine {
             // `rules/rust-backend.md` asks for `tracing` for exactly this
             // reason.
             tracing::debug!(
-                create_state_ms,
+                state_create_ms,
                 state_full_ms,
                 other_ms,
                 whisper_total_ms,

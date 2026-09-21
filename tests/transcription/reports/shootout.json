@@ -1,0 +1,236 @@
+{
+  "generated_at": "2026-09-20T22:03:59.956214+00:00",
+  "corpus_version": "corpus-v1",
+  "vox_commit": "1305bac-dirty",
+  "host": {
+    "os": "Linux",
+    "os_release": "6.18.44-fc-v37",
+    "machine": "x86_64",
+    "processor": "x86_64",
+    "python": "3.11.15",
+    "logical_cores": 4,
+    "total_ram_gb": null
+  },
+  "binary": "benchmark",
+  "binary_profile": "debug",
+  "audio_audit": {
+    "en_clean_sprint": {
+      "duration_seconds": 340.68,
+      "rms": 0.9473406,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 89.7509,
+      "near_zero_percent": 10.249098,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.8177464,
+      "snr_db_estimate": 1.2777506,
+      "concerns": [
+        "89.8% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 1.3 dB leaves little room between speech and background"
+      ]
+    },
+    "en_fast_standup": {
+      "duration_seconds": 290.208,
+      "rms": 0.9675502,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 93.62106,
+      "near_zero_percent": 6.3789377,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.96336305,
+      "snr_db_estimate": 0.037670292,
+      "concerns": [
+        "93.6% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.0 dB leaves little room between speech and background"
+      ]
+    },
+    "en_tech_domain": {
+      "duration_seconds": 403.656,
+      "rms": 0.9641336,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 92.96104,
+      "near_zero_percent": 7.038961,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.92530954,
+      "snr_db_estimate": 0.35700408,
+      "concerns": [
+        "93.0% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.4 dB leaves little room between speech and background"
+      ]
+    },
+    "hi_clean_review": {
+      "duration_seconds": 406.848,
+      "rms": 0.96272945,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 92.69045,
+      "near_zero_percent": 7.309548,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.9134134,
+      "snr_db_estimate": 0.45673773,
+      "concerns": [
+        "92.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.5 dB leaves little room between speech and background"
+      ]
+    },
+    "hi_meeting_dialogue": {
+      "duration_seconds": 370.896,
+      "rms": 0.94188464,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 88.720085,
+      "near_zero_percent": 11.279914,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.63980466,
+      "snr_db_estimate": 3.359007,
+      "concerns": [
+        "88.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 3.4 dB leaves little room between speech and background"
+      ]
+    },
+    "hinglish_clean_sync": {
+      "duration_seconds": 391.944,
+      "rms": 0.9629201,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 92.72718,
+      "near_zero_percent": 7.272818,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.9286805,
+      "snr_db_estimate": 0.3144792,
+      "concerns": [
+        "92.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.3 dB leaves little room between speech and background"
+      ]
+    },
+    "hinglish_tech_names": {
+      "duration_seconds": 370.968,
+      "rms": 0.94654405,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 89.60003,
+      "near_zero_percent": 10.39997,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.6959493,
+      "snr_db_estimate": 2.6712642,
+      "concerns": [
+        "89.6% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 2.7 dB leaves little room between speech and background"
+      ]
+    },
+    "hinglish_noisy_ops": {
+      "duration_seconds": 376.512,
+      "rms": 0.9997096,
+      "peak_amplitude": 0.9999695,
+      "near_clipping_percent": 99.924126,
+      "near_zero_percent": 6.639895e-05,
+      "has_non_finite": false,
+      "voiced_seconds": 0.0,
+      "voiced_ratio": 0.0,
+      "noise_floor_rms": 0.9986614,
+      "snr_db_estimate": 0.009112257,
+      "concerns": [
+        "99.9% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.0 dB leaves little room between speech and background"
+      ]
+    }
+  },
+  "results": [
+    {
+      "case_id": "en_clean_sprint",
+      "language": "en",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "89.8% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 1.3 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "89.8% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 1.3 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "en_fast_standup",
+      "language": "en",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "93.6% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 0.0 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "93.6% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.0 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "en_tech_domain",
+      "language": "en",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "93.0% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 0.4 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "93.0% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.4 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "hi_clean_review",
+      "language": "hi",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "92.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 0.5 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "92.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.5 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "hi_meeting_dialogue",
+      "language": "hi",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "88.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 3.4 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "88.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 3.4 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "hinglish_clean_sync",
+      "language": "hinglish",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "92.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 0.3 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "92.7% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.3 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "hinglish_tech_names",
+      "language": "hinglish",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "89.6% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 2.7 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "89.6% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 2.7 dB leaves little room between speech and background"
+      ]
+    },
+    {
+      "case_id": "hinglish_noisy_ops",
+      "language": "hinglish",
+      "engine_id": "-",
+      "status": "refused",
+      "reason": "99.9% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault; estimated SNR 0.0 dB leaves little room between speech and background",
+      "audio_concerns": [
+        "99.9% of samples are at or beyond 98% of full scale — the recording is clipped, and distorted phonemes are not a model's fault",
+        "estimated SNR 0.0 dB leaves little room between speech and background"
+      ]
+    }
+  ]
+}

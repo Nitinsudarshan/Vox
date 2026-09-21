@@ -121,9 +121,32 @@ pub struct SegmentDiagnostics {
     /// The language the decode was pinned to, or `None` for auto-detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// Whether this segment used the cheaper profile kept for scripts Whisper
-    /// writes expensively.
+    /// The language whisper says it decoded under — the pinned one where
+    /// [`Self::language`] named one, and the detected one otherwise.
+    ///
+    /// Recorded next to the request rather than in place of it because the
+    /// interesting record is the pair. A long-form meeting deliberately pins
+    /// nothing so a bilingual room can be followed, and a span decoded under
+    /// the wrong language comes back as fluent text in that language rather
+    /// than as an error — so without this, "why did this line come out in
+    /// English" has no evidence behind it at all.
+    ///
+    /// `None` for a record written before this existed, and for an engine that
+    /// reports no language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_language: Option<String>,
+    /// Whether this segment used the cheaper profile because of the script it
+    /// was written in.
     pub expensive_script_profile: bool,
+    /// Whether it used the cheaper profile because the decode queue had backed
+    /// up far enough that the careful one was about to cost dropped speech.
+    ///
+    /// A separate field rather than a second reason folded into the one above,
+    /// because the two lead somewhere different: a run of `expensive_script`
+    /// describes the meeting, and a run of this describes the machine. `false`
+    /// for a record written before the decoder could make this trade.
+    #[serde(default)]
+    pub backlog_shedding: bool,
     /// The encoder clamp, or `None` for Whisper's full thirty-second window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_ctx: Option<i32>,
@@ -461,7 +484,9 @@ mod tests {
             persist_ms: 2,
             model: "ggml-small.bin".into(),
             language: Some("en".into()),
+            detected_language: Some("en".into()),
             expensive_script_profile: false,
+            backlog_shedding: false,
             audio_ctx: None,
             status,
             rejection: None,

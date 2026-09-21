@@ -36,6 +36,13 @@ jobs:
       - name: Test the release scripts
         run: npm run test:scripts
 
+      # The transcription harness is Python and had no failing direction in CI
+      # until it had one. These tests do not need a model or a corpus: they
+      # cover the audio gate that decides whether a corpus is usable, and the
+      # comparative taxonomy that decides what a shootout result means.
+      - name: Test the transcription harness
+        run: python3 -m unittest discover -s tests/transcription/tests -v
+
   rust:
     name: Rust backend
     runs-on: ubuntu-latest
