@@ -414,9 +414,15 @@ def main():
     audio_audit = {}
     for c in cases_to_run:
         lang = c["language"]
-        case_id = c["id"]
-        wav_path = REPO_ROOT / "tests" / "transcription" / manifest["version"] / lang / f"{case_id}.wav"
-        ref_path = REPO_ROOT / "tests" / "transcription" / "references" / f"{case_id}.txt"
+        if "audio" in c and (corpus_path.parent / c["audio"]).is_file():
+            wav_path = corpus_path.parent / c["audio"]
+        else:
+            wav_path = REPO_ROOT / "tests" / "transcription" / manifest["version"] / lang / f"{case_id}.wav"
+
+        if "reference" in c and (corpus_path.parent / c["reference"]).is_file():
+            ref_path = corpus_path.parent / c["reference"]
+        else:
+            ref_path = REPO_ROOT / "tests" / "transcription" / "references" / f"{case_id}.txt"
 
         if not wav_path.is_file():
             print(f"Warning: Audio file {wav_path} missing, skipping.")

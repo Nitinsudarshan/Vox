@@ -1396,4 +1396,72 @@ mod tests {
         store.delete_meeting("meeting-x").unwrap();
         assert!(!dir.exists());
     }
+
+    #[test]
+    fn test_investigate_append_segments_persistence() {
+        use std::time::Instant;
+
+        let tiers = [100, 500, 1000, 1500];
+        println!("\n=== TRANSCRIPT PERSISTENCE BENCHMARK (append_segments) ===");
+
+        for &n in &tiers {
+            let vault = temp_vault(&format!("persist-{n}"));
+            let store = MeetingStore::new(&vault);
+            let meeting_id = format!("bench-meeting-{n}");
+            store
+                .create(&Meeting::new(
+                    meeting_id.clone(),
+                    format!("Bench {n}"),
+                    MeetingSource::Recorded,
+                ))
+                .unwrap();
+
+            let mut durations_us = Vec::with_capacity(n);
+            let start_all = Instant::now();
+
+            for seq in 1..=n {
+                let seg = segment(
+                    seq as u64,
+                    "In our architecture discussion today, we reviewed the database persistence layer, transaction overhead, and serialization costs.",
+                );
+                let t0 = Instant::now();
+                store.append_segments(&meeting_id, &[seg]).unwrap();
+                durations_us.push(t0.elapsed().as_micros() as f64);
+            }
+
+            let total_elapsed = start_all.elapsed();
+            let total_dur_us: f64 = durations_us.iter().sum();
+            let avg_us = total_dur_us / n as f64;
+
+            let first_100_avg_us = if n >= 100 {
+                durations_us[0..100].iter().sum::<f64>() / 100.0
+            } else {
+                avg_us
+            };
+
+            let last_100_avg_us = if n >= 100 {
+                durations_us[(n - 100)..n].iter().sum::<f64>() / 100.0
+            } else {
+                avg_us
+            };
+
+            let mut sorted = durations_us.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let p50_us = sorted[(n as f64 * 0.50) as usize];
+            let p95_us = sorted[((n as f64 * 0.95) as usize).min(n - 1)];
+
+            println!(
+                "Segments: {:>4} | Total: {:>8.2}ms | Avg: {:>6.2}µs ({:>5.2}ms) | p50: {:>6.2}µs | p95: {:>6.2}µs | First 100 Avg: {:>6.2}µs | Last 100 Avg: {:>6.2}µs",
+                n,
+                total_elapsed.as_secs_f64() * 1000.0,
+                avg_us,
+                avg_us / 1000.0,
+                p50_us,
+                p95_us,
+                first_100_avg_us,
+                last_100_avg_us
+            );
+        }
+        println!("==========================================================\n");
+    }
 }

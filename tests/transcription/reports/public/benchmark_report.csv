@@ -1,0 +1,13 @@
+Manifest,Dataset,Language,Sample ID,Ref Words,Hyp Words,WER (%),CER (%),Substitutions,Deletions,Insertions,Decode RTF,Pipeline RTF,Inference (ms),Primary Failure
+commonvoice-en-spontaneous-v1.jsonl,common_voice,en,cv_en_spont_49101,20,19,10.00,10.19,1,1,0,2.507,2.307,22761,NONE
+commonvoice-en-v1.jsonl,common_voice,en,cv_en_3829104,10,10,0.00,0.00,0,0,0,5.171,4.367,23268,NONE
+fleurs-bn-v1.jsonl,fleurs,bn,fleurs_bn_01,12,15,125.00,108.22,12,0,3,7.539,6.599,47194,LANGUAGE
+fleurs-gu-v1.jsonl,fleurs,gu,fleurs_gu_01,13,13,100.00,113.64,13,0,0,6.677,4.276,45672,LANGUAGE
+fleurs-hi-v1.jsonl,fleurs,hi,fleurs_hi_01,16,15,100.00,105.97,15,1,0,4.808,4.007,31735,LANGUAGE
+fleurs-kn-v1.jsonl,fleurs,kn,fleurs_kn_01,11,11,100.00,119.48,11,0,0,9.592,8.402,55250,LANGUAGE
+fleurs-ml-v1.jsonl,fleurs,ml,fleurs_ml_01,12,15,125.00,102.97,12,0,3,7.567,6.708,47973,LANGUAGE
+fleurs-mr-v1.jsonl,fleurs,mr,fleurs_mr_01,12,16,133.33,117.86,12,0,4,6.724,6.033,47205,HALLUCINATION
+fleurs-pa-v1.jsonl,fleurs,pa,fleurs_pa_01,18,19,105.56,115.07,18,0,1,6.413,5.404,46688,LANGUAGE
+fleurs-ta-v1.jsonl,fleurs,ta,fleurs_ta_01,11,12,63.64,15.91,6,0,1,15.288,15.022,96622,LANGUAGE
+fleurs-te-v1.jsonl,fleurs,te,fleurs_te_01,11,18,163.64,112.90,11,0,7,9.151,8.829,64420,HALLUCINATION
+fleurs-ur-v1.jsonl,fleurs,ur,fleurs_ur_01,17,17,5.88,1.49,1,0,0,7.880,6.866,47125,NONE

@@ -1,0 +1,770 @@
+{
+  "timestamp": "2026-09-19T18:42:11.594966+00:00",
+  "recognizer": "whisper-small",
+  "model_path": "native\\src-tauri\\.vox\\config\\models\\ggml-small.bin",
+  "manifests_count": 12,
+  "manifest_summaries": [
+    {
+      "manifest": "commonvoice-en-spontaneous-v1.jsonl",
+      "dataset_name": "common_voice",
+      "language": "en",
+      "samples_evaluated": 1,
+      "total_ref_words": 20,
+      "total_ref_chars": 108,
+      "avg_wer": 10.0,
+      "avg_cer": 10.19,
+      "avg_rtf": 2.507,
+      "results": [
+        {
+          "sample_id": "cv_en_spont_49101",
+          "dataset_name": "common_voice",
+          "dataset_version": "cv-corpus-17.0-spontaneous",
+          "language": "en",
+          "split": "test",
+          "speaker_id": "spk_cv_spont_01",
+          "duration_seconds": 9.864,
+          "speech_seconds": 9.08,
+          "inference_ms": 22761,
+          "decode_rtf": 2.506718061674009,
+          "pipeline_rtf": 2.307481751824817,
+          "reference": "Well, honestly, we noticed some weird latency spikes whenever the background worker attempts to flush ten thousand events at once.",
+          "hypothesis": "Well, honestly, we noticed some weird latency spikes whenever the background worker attempts to flush 10,000 events at once.",
+          "wer": {
+            "wer": 0.1,
+            "wer_percent": 10.0,
+            "ref_words": 20,
+            "hyp_words": 19,
+            "substitutions": 1,
+            "deletions": 1,
+            "insertions": 0,
+            "total_errors": 2
+          },
+          "cer": {
+            "cer": 0.1019,
+            "cer_percent": 10.19,
+            "ref_chars": 108,
+            "hyp_chars": 102,
+            "substitutions": 5,
+            "deletions": 6,
+            "insertions": 0,
+            "total_errors": 11
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 0.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "NONE",
+            "reasons": [],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "commonvoice-en-v1.jsonl",
+      "dataset_name": "common_voice",
+      "language": "en",
+      "samples_evaluated": 1,
+      "total_ref_words": 10,
+      "total_ref_chars": 79,
+      "avg_wer": 0.0,
+      "avg_cer": 0.0,
+      "avg_rtf": 5.171,
+      "results": [
+        {
+          "sample_id": "cv_en_3829104",
+          "dataset_name": "common_voice",
+          "dataset_version": "cv-corpus-17.0-2024-03-15",
+          "language": "en",
+          "split": "test",
+          "speaker_id": "spk_cv_en_01",
+          "duration_seconds": 5.328,
+          "speech_seconds": 4.5,
+          "inference_ms": 23268,
+          "decode_rtf": 5.1706666666666665,
+          "pipeline_rtf": 4.367117117117117,
+          "reference": "The architectural committee approved the distributed storage roadmap yesterday afternoon.",
+          "hypothesis": "The architectural committee approved the distributed storage roadmap yesterday afternoon.",
+          "wer": {
+            "wer": 0.0,
+            "wer_percent": 0.0,
+            "ref_words": 10,
+            "hyp_words": 10,
+            "substitutions": 0,
+            "deletions": 0,
+            "insertions": 0,
+            "total_errors": 0
+          },
+          "cer": {
+            "cer": 0.0,
+            "cer_percent": 0.0,
+            "ref_chars": 79,
+            "hyp_chars": 79,
+            "substitutions": 0,
+            "deletions": 0,
+            "insertions": 0,
+            "total_errors": 0
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 0.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "NONE",
+            "reasons": [],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-bn-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "bn",
+      "samples_evaluated": 1,
+      "total_ref_words": 12,
+      "total_ref_chars": 73,
+      "avg_wer": 125.0,
+      "avg_cer": 108.22,
+      "avg_rtf": 7.539,
+      "results": [
+        {
+          "sample_id": "fleurs_bn_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "bn",
+          "split": "test",
+          "speaker_id": "spk_fleurs_bn_01",
+          "duration_seconds": 7.152,
+          "speech_seconds": 6.26,
+          "inference_ms": 47194,
+          "decode_rtf": 7.538977635782748,
+          "pipeline_rtf": 6.598713646532438,
+          "reference": "পশ্চিমবঙ্গে পর্যটন শিল্পের উন্নয়নের জন্য রাজ্য সরকার একাধিক নতুন উদ্যোগ গ্রহণ করেছে।",
+          "hypothesis": "POSSI_MONGUE_PORJATAN_SIR_PER_UN_NANANER_JONNO, RAJU_SHARKAR_AKADHIK_NOTUN_UDDO_BROHUN_KORATSE.",
+          "wer": {
+            "wer": 1.25,
+            "wer_percent": 125.0,
+            "ref_words": 12,
+            "hyp_words": 15,
+            "substitutions": 12,
+            "deletions": 0,
+            "insertions": 3,
+            "total_errors": 15
+          },
+          "cer": {
+            "cer": 1.0822,
+            "cer_percent": 108.22,
+            "ref_chars": 73,
+            "hyp_chars": 79,
+            "substitutions": 73,
+            "deletions": 0,
+            "insertions": 6,
+            "total_errors": 79
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 20.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'bn' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-gu-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "gu",
+      "samples_evaluated": 1,
+      "total_ref_words": 13,
+      "total_ref_chars": 66,
+      "avg_wer": 100.0,
+      "avg_cer": 113.64,
+      "avg_rtf": 6.677,
+      "results": [
+        {
+          "sample_id": "fleurs_gu_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "gu",
+          "split": "test",
+          "speaker_id": "spk_fleurs_gu_01",
+          "duration_seconds": 10.68,
+          "speech_seconds": 6.84,
+          "inference_ms": 45672,
+          "decode_rtf": 6.67719298245614,
+          "pipeline_rtf": 4.276404494382023,
+          "reference": "ગુજરાત સરકારે ખેડૂતો માટે આધુનિક સિંચાઈ યોજનાઓ અને સબસિડીની નવી જાહેરાત કરી છે.",
+          "hypothesis": "Gujarat SARKARE Kheruto Mata Adunik Sinchaay Yojnao ane subsidy ni Navi Jahirat kariche.",
+          "wer": {
+            "wer": 1.0,
+            "wer_percent": 100.0,
+            "ref_words": 13,
+            "hyp_words": 13,
+            "substitutions": 13,
+            "deletions": 0,
+            "insertions": 0,
+            "total_errors": 13
+          },
+          "cer": {
+            "cer": 1.1364,
+            "cer_percent": 113.64,
+            "ref_chars": 66,
+            "hyp_chars": 75,
+            "substitutions": 66,
+            "deletions": 0,
+            "insertions": 9,
+            "total_errors": 75
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 0.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'gu' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-hi-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "hi",
+      "samples_evaluated": 1,
+      "total_ref_words": 16,
+      "total_ref_chars": 67,
+      "avg_wer": 100.0,
+      "avg_cer": 105.97,
+      "avg_rtf": 4.808,
+      "results": [
+        {
+          "sample_id": "fleurs_hi_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "hi",
+          "split": "test",
+          "speaker_id": "spk_fleurs_hi_01",
+          "duration_seconds": 7.92,
+          "speech_seconds": 6.6,
+          "inference_ms": 31735,
+          "decode_rtf": 4.808333333333334,
+          "pipeline_rtf": 4.006944444444445,
+          "reference": "भारतीय मौसम विज्ञान विभाग ने अगले चौबीस घंटों में भारी वर्षा की चेतावनी जारी की है।",
+          "hypothesis": "India weather science department has made a heavy rain forecast for the next 24 hours.",
+          "wer": {
+            "wer": 1.0,
+            "wer_percent": 100.0,
+            "ref_words": 16,
+            "hyp_words": 15,
+            "substitutions": 15,
+            "deletions": 1,
+            "insertions": 0,
+            "total_errors": 16
+          },
+          "cer": {
+            "cer": 1.0597,
+            "cer_percent": 105.97,
+            "ref_chars": 67,
+            "hyp_chars": 71,
+            "substitutions": 67,
+            "deletions": 0,
+            "insertions": 4,
+            "total_errors": 71
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 0.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'hi' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-kn-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "kn",
+      "samples_evaluated": 1,
+      "total_ref_words": 11,
+      "total_ref_chars": 77,
+      "avg_wer": 100.0,
+      "avg_cer": 119.48,
+      "avg_rtf": 9.592,
+      "results": [
+        {
+          "sample_id": "fleurs_kn_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "kn",
+          "split": "test",
+          "speaker_id": "spk_fleurs_kn_01",
+          "duration_seconds": 6.576,
+          "speech_seconds": 5.76,
+          "inference_ms": 55250,
+          "decode_rtf": 9.59201388888889,
+          "pipeline_rtf": 8.401763990267641,
+          "reference": "ಕರ್ನಾಟಕ ರಾಜ್ಯದ ಕರಾವಳಿ ಪ್ರದೇಶಗಳಲ್ಲಿ ಮುಂಗಾರು ಮಳೆ ಚುರುಕುಗೊಂಡಿದೆ ಎಂದು ಹವಾಮಾನ ಇಲಾಖೆ ತಿಳಿಸಿದೆ.",
+          "hypothesis": "Karnataka Rajahtha, Karawali Pradeshagalali, Mungaru Malay Churukukundidey, ndu, Havaamanah Ilake Teliside.",
+          "wer": {
+            "wer": 1.0,
+            "wer_percent": 100.0,
+            "ref_words": 11,
+            "hyp_words": 11,
+            "substitutions": 11,
+            "deletions": 0,
+            "insertions": 0,
+            "total_errors": 11
+          },
+          "cer": {
+            "cer": 1.1948,
+            "cer_percent": 119.48,
+            "ref_chars": 77,
+            "hyp_chars": 92,
+            "substitutions": 77,
+            "deletions": 0,
+            "insertions": 15,
+            "total_errors": 92
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 0.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'kn' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-ml-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "ml",
+      "samples_evaluated": 1,
+      "total_ref_words": 12,
+      "total_ref_chars": 101,
+      "avg_wer": 125.0,
+      "avg_cer": 102.97,
+      "avg_rtf": 7.567,
+      "results": [
+        {
+          "sample_id": "fleurs_ml_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "ml",
+          "split": "test",
+          "speaker_id": "spk_fleurs_ml_01",
+          "duration_seconds": 7.152,
+          "speech_seconds": 6.34,
+          "inference_ms": 47973,
+          "decode_rtf": 7.5667192429022085,
+          "pipeline_rtf": 6.707634228187919,
+          "reference": "കേരളത്തിലെ വിവിധ ജില്ലകളിൽ ശക്തമായ കാറ്റും മഴയും ഉണ്ടാകാൻ സാധ്യതയുണ്ടെന്ന് കാലാവസ്ഥാ നിരീക്ഷണ കേന്ദ്രം അറിയിച്ചു.",
+          "hypothesis": "Kerala-thile-vivida-jillagal il shaktamaya kaatumalim undagaan saathide undana kaala wastha nirikshana kenthram arichu.",
+          "wer": {
+            "wer": 1.25,
+            "wer_percent": 125.0,
+            "ref_words": 12,
+            "hyp_words": 15,
+            "substitutions": 12,
+            "deletions": 0,
+            "insertions": 3,
+            "total_errors": 15
+          },
+          "cer": {
+            "cer": 1.0297,
+            "cer_percent": 102.97,
+            "ref_chars": 101,
+            "hyp_chars": 104,
+            "substitutions": 101,
+            "deletions": 0,
+            "insertions": 3,
+            "total_errors": 104
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 20.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'ml' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-mr-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "mr",
+      "samples_evaluated": 1,
+      "total_ref_words": 12,
+      "total_ref_chars": 84,
+      "avg_wer": 133.33,
+      "avg_cer": 117.86,
+      "avg_rtf": 6.724,
+      "results": [
+        {
+          "sample_id": "fleurs_mr_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "mr",
+          "split": "test",
+          "speaker_id": "spk_fleurs_mr_01",
+          "duration_seconds": 7.824,
+          "speech_seconds": 7.02,
+          "inference_ms": 47205,
+          "decode_rtf": 6.7243589743589745,
+          "pipeline_rtf": 6.033358895705521,
+          "reference": "महाराष्ट्र शासनाने राज्यातील सर्व शाळांमध्ये डिजिटल शिक्षणाचा विस्तार करण्याचा निर्णय घेतला आहे.",
+          "hypothesis": "Maharashtra Shasana, Ne Rajyatil, Sarva-Saraan Madhe Digital Shikshana Chaa Vistar karana Chaa Niranaigh Ghitlaa Hai.",
+          "wer": {
+            "wer": 1.3333,
+            "wer_percent": 133.33,
+            "ref_words": 12,
+            "hyp_words": 16,
+            "substitutions": 12,
+            "deletions": 0,
+            "insertions": 4,
+            "total_errors": 16
+          },
+          "cer": {
+            "cer": 1.1786,
+            "cer_percent": 117.86,
+            "ref_chars": 84,
+            "hyp_chars": 99,
+            "substitutions": 84,
+            "deletions": 0,
+            "insertions": 15,
+            "total_errors": 99
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 25.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "HALLUCINATION",
+            "reasons": [
+              "Excessive insertions detected indicating hallucination loops or phantom tokens."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-pa-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "pa",
+      "samples_evaluated": 1,
+      "total_ref_words": 18,
+      "total_ref_chars": 73,
+      "avg_wer": 105.56,
+      "avg_cer": 115.07,
+      "avg_rtf": 6.413,
+      "results": [
+        {
+          "sample_id": "fleurs_pa_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "pa",
+          "split": "test",
+          "speaker_id": "spk_fleurs_pa_01",
+          "duration_seconds": 8.64,
+          "speech_seconds": 7.28,
+          "inference_ms": 46688,
+          "decode_rtf": 6.4131868131868135,
+          "pipeline_rtf": 5.4037037037037035,
+          "reference": "ਪੰਜਾਬ ਸਰਕਾਰ ਨੇ ਨੌਜਵਾਨਾਂ ਲਈ ਤਕਨੀਕੀ ਸਿੱਖਿਆ ਅਤੇ ਰੁਜ਼ਗਾਰ ਦੇ ਨਵੇਂ ਮੌਕੇ ਪੈਦਾ ਕਰਨ ਦਾ ਐਲਾਨ ਕੀਤਾ ਹੈ।",
+          "hypothesis": "Punjab SARKAR NE NAJWANA LAI TAKNI KI SHIKSHA ATE ROOSGAR DE NAVE MAW KE PAIDA KARANDA AILAN KEETA HAI.",
+          "wer": {
+            "wer": 1.0556,
+            "wer_percent": 105.56,
+            "ref_words": 18,
+            "hyp_words": 19,
+            "substitutions": 18,
+            "deletions": 0,
+            "insertions": 1,
+            "total_errors": 19
+          },
+          "cer": {
+            "cer": 1.1507,
+            "cer_percent": 115.07,
+            "ref_chars": 73,
+            "hyp_chars": 84,
+            "substitutions": 73,
+            "deletions": 0,
+            "insertions": 11,
+            "total_errors": 84
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 5.26,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'pa' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-ta-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "ta",
+      "samples_evaluated": 1,
+      "total_ref_words": 11,
+      "total_ref_chars": 88,
+      "avg_wer": 63.64,
+      "avg_cer": 15.91,
+      "avg_rtf": 15.288,
+      "results": [
+        {
+          "sample_id": "fleurs_ta_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "ta",
+          "split": "test",
+          "speaker_id": "spk_fleurs_ta_01",
+          "duration_seconds": 6.432,
+          "speech_seconds": 6.32,
+          "inference_ms": 96622,
+          "decode_rtf": 15.288291139240506,
+          "pipeline_rtf": 15.02207711442786,
+          "reference": "தமிழகத்தில் உள்ள அனைத்து அரசுப் பள்ளிகளிலும் கணினி ஆய்வகங்கள் அமைக்கப்படும் என அரசு அறிவித்துள்ளது.",
+          "hypothesis": "கமலுகத்தில் உள்ளா அனைத்து அரசு பள்ளிகளிலும் கணினி ஆய்வகங்கள் அமைக்கப் படம் என்ன அரசு அறுவித்துளக.",
+          "wer": {
+            "wer": 0.6364,
+            "wer_percent": 63.64,
+            "ref_words": 11,
+            "hyp_words": 12,
+            "substitutions": 6,
+            "deletions": 0,
+            "insertions": 1,
+            "total_errors": 7
+          },
+          "cer": {
+            "cer": 0.1591,
+            "cer_percent": 15.91,
+            "ref_chars": 88,
+            "hyp_chars": 85,
+            "substitutions": 5,
+            "deletions": 6,
+            "insertions": 3,
+            "total_errors": 14
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 8.33,
+            "suspicious_segments_count": 1,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "LANGUAGE",
+            "reasons": [
+              "High error rate on language 'ta' indicates limited multilingual acoustic representation or tokenization gap."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-te-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "te",
+      "samples_evaluated": 1,
+      "total_ref_words": 11,
+      "total_ref_chars": 93,
+      "avg_wer": 163.64,
+      "avg_cer": 112.9,
+      "avg_rtf": 9.151,
+      "results": [
+        {
+          "sample_id": "fleurs_te_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "te",
+          "split": "test",
+          "speaker_id": "spk_fleurs_te_01",
+          "duration_seconds": 7.296,
+          "speech_seconds": 7.04,
+          "inference_ms": 64420,
+          "decode_rtf": 9.150568181818182,
+          "pipeline_rtf": 8.829495614035087,
+          "reference": "రాష్ట్రంలో వ్యవసాయ రంగానికి నిరంతర విద్యుత్ సరఫరా అందించేందుకు ప్రభుత్వం కొత్త ప్రణాళికలు రూపొందించింది.",
+          "hypothesis": "Rust_in_lo_v_y_awasaya_rangani_ki_nirantara_vidyut_sarafara_andhinshende_ku, Prabhutva_un_kotha_pranalikalu_rupundhinshinde.",
+          "wer": {
+            "wer": 1.6364,
+            "wer_percent": 163.64,
+            "ref_words": 11,
+            "hyp_words": 18,
+            "substitutions": 11,
+            "deletions": 0,
+            "insertions": 7,
+            "total_errors": 18
+          },
+          "cer": {
+            "cer": 1.129,
+            "cer_percent": 112.9,
+            "ref_chars": 93,
+            "hyp_chars": 105,
+            "substitutions": 93,
+            "deletions": 0,
+            "insertions": 12,
+            "total_errors": 105
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 38.89,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "HALLUCINATION",
+            "reasons": [
+              "Excessive insertions detected indicating hallucination loops or phantom tokens."
+            ],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    },
+    {
+      "manifest": "fleurs-ur-v1.jsonl",
+      "dataset_name": "fleurs",
+      "language": "ur",
+      "samples_evaluated": 1,
+      "total_ref_words": 17,
+      "total_ref_chars": 67,
+      "avg_wer": 5.88,
+      "avg_cer": 1.49,
+      "avg_rtf": 7.88,
+      "results": [
+        {
+          "sample_id": "fleurs_ur_01",
+          "dataset_name": "fleurs",
+          "dataset_version": "fleurs-v1.0",
+          "language": "ur",
+          "split": "test",
+          "speaker_id": "spk_fleurs_ur_01",
+          "duration_seconds": 6.864,
+          "speech_seconds": 5.98,
+          "inference_ms": 47125,
+          "decode_rtf": 7.880434782608695,
+          "pipeline_rtf": 6.865530303030303,
+          "reference": "محکمہ موسمیات نے ملک کے بالائی علاقوں میں شدید برف باری اور بارشوں کی پیشگوئی کی ہے۔",
+          "hypothesis": "محکمہ موسمیات نے ملک کے بالائی علاقوں میں شدید بف باری اور بارشوں کی پیشگوئی کی ہے.",
+          "wer": {
+            "wer": 0.0588,
+            "wer_percent": 5.88,
+            "ref_words": 17,
+            "hyp_words": 17,
+            "substitutions": 1,
+            "deletions": 0,
+            "insertions": 0,
+            "total_errors": 1
+          },
+          "cer": {
+            "cer": 0.0149,
+            "cer_percent": 1.49,
+            "ref_chars": 67,
+            "hyp_chars": 66,
+            "substitutions": 0,
+            "deletions": 1,
+            "insertions": 0,
+            "total_errors": 1
+          },
+          "hallucination": {
+            "insertion_hallucination_rate_percent": 0.0,
+            "suspicious_segments_count": 0,
+            "rejected_segments_count": 0,
+            "total_segments_evaluated": 1
+          },
+          "failure": {
+            "primary_category": "NONE",
+            "reasons": [],
+            "confidence": "high"
+          },
+          "segments_decoded": 1,
+          "segments_kept": 1,
+          "segments_discarded": 0
+        }
+      ]
+    }
+  ]
+}

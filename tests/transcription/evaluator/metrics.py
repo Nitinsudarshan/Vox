@@ -16,14 +16,14 @@ DOMAIN_KEYWORDS = [
 ]
 
 def normalize_text(text: str) -> str:
-    """Normalizes text for robust WER calculation: lowercase, NFKC unicode, strip punctuation."""
+    """Normalizes text for robust WER calculation: lowercase, NFKC unicode, strip punctuation while preserving all scripts and combining marks."""
     if not text:
         return ""
     text = unicodedata.normalize("NFKC", text).lower()
-    # Replace hyphens and slashes with space
+    # Replace hyphens, slashes, and separators with space
     text = re.sub(r"[-_/\\]", " ", text)
-    # Remove standard punctuation while keeping Devanagari and Latin characters
-    text = re.sub(r"[^\w\s\u0900-\u097F]", "", text)
+    # Preserve Letters (L), Combining Marks (M - Indic vowel signs/matras/viramas), Numbers (N), and Whitespace
+    text = "".join(c for c in text if unicodedata.category(c)[0] in ("L", "M", "N") or c.isspace())
     # Collapse multiple spaces
     return re.sub(r"\s+", " ", text).strip()
 
@@ -239,12 +239,15 @@ def classify_transcription_failure(
 ) -> Dict[str, Any]:
     """
     Classifies failure causes into systematic categories:
-    AUDIO, VAD, SEGMENTATION, LANGUAGE, DECODING, HALLUCINATION, VOCABULARY, CONTEXT, MODEL, UNKNOWN.
+    AUDIO, VAD, SEGMENTATION, DECODING, HALLUCINATION, VOCABULARY, CONTEXT, MODEL, PERSISTENCE, OTHER.
+    For public speech datasets, additionally tracks:
+    LANGUAGE, ACCENT/SPEAKER_VARIATION, ORTHOGRAPHY/NORMALIZATION.
     """
     reasons = []
     primary_category = "NONE"
 
     wer = wer_data.get("wer", 0.0)
+    cer = cer_data.get("cer", 0.0)
     inss = wer_data.get("insertions", 0)
     dels = wer_data.get("deletions", 0)
     subs = wer_data.get("substitutions", 0)
@@ -256,27 +259,42 @@ def classify_transcription_failure(
         primary_category = "HALLUCINATION"
         reasons.append("Excessive insertions detected indicating hallucination loops or phantom tokens.")
 
-    # 2. Audio/Noise check
-    elif case_meta.get("added_ambient_noise", False) and wer > 0.25:
+    # 2. Orthography / Normalization check (e.g. low CER but high WER due to compounding / spacing)
+    elif wer > 0.18 and cer < 0.08:
+        primary_category = "ORTHOGRAPHY/NORMALIZATION"
+        reasons.append(f"Low CER ({cer*100:.1f}%) with elevated WER ({wer*100:.1f}%) indicates word tokenization/compounding boundary divergence.")
+
+    # 3. Audio/Noise check
+    elif (case_meta.get("added_ambient_noise", False) or "noisy" in case_meta.get("acoustic_condition", "")) and wer > 0.25:
         primary_category = "AUDIO"
         reasons.append("Background ambient noise corrupted acoustic features or raised noise floor.")
 
-    # 3. VAD / Deletions check
+    # 4. VAD / Deletions check
     elif dels > 0.3 * ref_words and hyp_words < 0.7 * ref_words:
         primary_category = "VAD"
         reasons.append("Severe word deletions detected indicating premature VAD silence cutoff or unclosed utterance.")
 
-    # 4. Language mismatch check
+    # 5. Language check
+    elif case_meta.get("language") not in ("en", None) and wer > 0.40:
+        primary_category = "LANGUAGE"
+        reasons.append(f"High error rate on language '{case_meta.get('language')}' indicates limited multilingual acoustic representation or tokenization gap.")
+
     elif case_meta.get("language") == "hinglish" and wer > 0.22:
         primary_category = "LANGUAGE"
         reasons.append("Intra-sentence code-switching caused phonetic substitution across English/Hindi boundaries.")
 
-    # 5. Domain Vocabulary check
-    elif case_meta.get("category") == "G_tech_domain" and subs > 0.15 * ref_words:
+    # 6. Accent / Speaker Variation check
+    elif ("accent" in case_meta.get("metadata", {}) or "spontaneous" in case_meta.get("split", "")) and subs > 0.20 * ref_words:
+        primary_category = "ACCENT/SPEAKER_VARIATION"
+        accent_info = case_meta.get("metadata", {}).get("accent", "regional variation")
+        reasons.append(f"Phonetic variation associated with speaker accent ({accent_info}) or spontaneous cadence.")
+
+    # 7. Domain Vocabulary check
+    elif (case_meta.get("category") in ("G_tech_domain", "technical_vocabulary") or "tech" in case_meta.get("id", "")) and subs > 0.10 * ref_words:
         primary_category = "VOCABULARY"
         reasons.append("Specialized proper nouns and domain technical terms experienced phonetic substitution.")
 
-    # 6. High substitutions general model capacity
+    # 8. High substitutions general model capacity
     elif subs > 0.25 * ref_words:
         primary_category = "MODEL"
         reasons.append("High substitution rate indicates acoustic model acoustic-to-text capacity ceiling.")
@@ -288,5 +306,6 @@ def classify_transcription_failure(
     return {
         "primary_category": primary_category,
         "reasons": reasons,
-        "confidence": "high" if primary_category != "UNKNOWN" else "low"
+        "confidence": "high" if primary_category != "OTHER" else "low"
     }
+

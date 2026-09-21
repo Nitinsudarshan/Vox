@@ -48,20 +48,28 @@ python scripts/benchmark_transcription.py --model native/src-tauri/.vox/config/m
 
 ### Comparative Metrics Grid
 
+> [!NOTE]
+> **Measurement Discrepancy & Provenance Notice:**
+> - Earlier documentation listed a theoretical estimate of `RTF ~0.25` for Whisper Small.
+> - **Empirical measurement** on production CPU hardware (`TRANSCRIPTION_BENCHMARK_V1.md` / Stage 13 baseline) demonstrates that single-threaded/multi-core CPU inference with `ggml-small.bin` achieves **Decode RTF = 3.029** and **Pipeline RTF = 2.873** on 340s audio, resulting in **WER = 15.17%** and **CER = 8.03%**.
+> - An RTF > 1.0 means decoding on CPU is slower than real time; real-time decoding ($\text{RTF} < 1.0$) requires GPU acceleration, a lighter model tier (Base / Tiny), or INT8-quantized streaming engines (Parakeet).
+> - All values below are explicitly categorized as `[MEASURED]` (from reproducible benchmark runs), `[THEORETICAL ESTIMATE]` (GPU target), or `[HISTORICAL]`.
+
 | Model Candidate | English WER (%) | Hindi CER (%) | Hinglish WER (%) | Domain Accuracy (%) | Decode RTF (CPU) | Peak Memory (MB) | Recommended Scenario |
 |---|---|---|---|---|---|---|---|
-| **Whisper Small (Baseline)** | Baseline | Baseline | Baseline | Baseline | Baseline (~0.25) | ~480 MB | Standard laptops, universal default |
-| **Whisper Large-v3-Turbo** | Measured | Measured | Measured | Measured | Measured | ~1,200 MB | High-end desktops, complex accents |
-| **Hindi2Hinglish Apex** | Measured | Measured | Measured | Measured | Measured | ~850 MB | Dedicated Indian bilingual deployments |
-| **Parakeet Multilingual** | Measured | Measured | Measured | Measured | Measured | ~700 MB | Ultra-low-latency real-time dictation |
+| **Whisper Small (`ggml-small.bin`)** | **15.17%** `[MEASURED]` | Pending Real | Pending Real | 88.2% `[MEASURED]` | **3.029** `[MEASURED CPU]`<br>*~0.25 `[ESTIMATE GPU]`* | ~487 MB `[MEASURED]` | Universal meeting default; requires queue backlog drain on CPU. |
+| **Whisper Large-v3-Turbo (`ggml-large-v3-turbo.bin`)** | Measured in Baseline v1 | Measured in Baseline v1 | Measured in Baseline v1 | Measured in Baseline v1 | Measured in Baseline v1 | ~1,624 MB `[MEASURED]` | High-spec desktops, complex multi-speaker & accent domains. |
+| **Hindi2Hinglish Apex (`ggml-hindi2hinglish-apex-q5_0.bin`)** | Evaluated in Stage 13 | Evaluated in Stage 13 | Evaluated in Stage 13 | Evaluated in Stage 13 | Evaluated in Stage 13 | ~574 MB `[MEASURED]` | Specialized Indian bilingual & code-switching deployments. |
+| **Parakeet TDT 0.6B (ONNX Runtime)** | *Unmeasured in Meeting Pipeline* `[CAPABILITY: DICTATION ONLY]` | *N/A (English only)* | *N/A (English only)* | *Unmeasured* | *<0.15 `[ESTIMATE STREAMING]`* | ~670 MB | Push-to-talk streaming dictation; not integrated into meetings. |
 
 ---
 
-## 4. Analysis of Trade-Offs
+## 4. Analysis of Trade-Offs & Latency Reality
 
-1. **Accuracy vs. Latency (RTF):**
-   - In background meeting transcription, RTF $< 0.8$ is acceptable because decoding runs asynchronously during the call.
-   - For push-to-talk dictation, RTF must remain $< 0.3$ to preserve user flow.
+1. **Accuracy vs. Latency (RTF Reality):**
+   - **Historical Assumption:** Assumed asynchronous background decoding on CPU could easily achieve $\text{RTF} < 0.8$.
+   - **Empirical Reality:** `ggml-small.bin` on standard modern CPU cores operates at **Decode RTF ≈ 3.0** under full whisper.cpp beam search. Over a 30-minute meeting ($1,800\text{ s}$ audio), CPU decoding takes $\approx 5,400\text{ s}$ ($90\text{ minutes}$), creating a backlog that accumulates during the call and drains post-meeting.
+   - For push-to-talk dictation, RTF must remain $< 0.3$ to preserve user flow, which is why **Whisper Base** or **Parakeet** is selected for dictation while **Small** or **Large v3 Turbo** is reserved for meeting background tasks.
 2. **Memory Footprint:**
    - Vox targets standard Windows laptops with 8 GB to 16 GB of system RAM. Models requiring $> 2$ GB resident memory can trigger paging during concurrent video calls (e.g. Zoom, Teams).
 3. **Code-Switching Fidelity:**

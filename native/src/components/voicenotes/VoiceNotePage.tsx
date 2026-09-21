@@ -193,9 +193,8 @@ export const VoiceNotePage: React.FC = () => {
   const [actionBusy, setActionBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
 
-  // Accordion & Pagination states
+  // Accordion state
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
-  const [expandedDaysWithAllNotes, setExpandedDaysWithAllNotes] = useState<Set<string>>(new Set());
 
   // Group notes chronologically by day
   const dateGroups = useMemo(() => groupNotesByDay(notes), [notes]);
@@ -224,17 +223,6 @@ export const VoiceNotePage: React.FC = () => {
     });
   };
 
-  const toggleShowAllForDay = (key: string) => {
-    setExpandedDaysWithAllNotes((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  };
 
   const toggleSelectNote = (id: string) => {
     setSelectedNoteIds((prev) => {
@@ -1322,9 +1310,7 @@ export const VoiceNotePage: React.FC = () => {
           <div className="flex-1 overflow-y-auto space-y-6 pr-1">
             {dateGroups.map((group) => {
               const isExpanded = expandedSections.has(group.key);
-              const showAll = expandedDaysWithAllNotes.has(group.key);
-              const displayNotes = showAll ? group.notes : group.notes.slice(0, 9);
-              const hasMore = group.notes.length > 9;
+              const displayNotes = group.notes;
 
               return (
                 <div key={group.key} className="space-y-3">
@@ -1541,20 +1527,6 @@ export const VoiceNotePage: React.FC = () => {
                               </div>
                             );
                           })}
-                        </div>
-                      )}
-
-                      {/* Pagination / Show More button */}
-                      {hasMore && (
-                        <div className="flex justify-center pt-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => toggleShowAllForDay(group.key)}
-                            className="text-xs text-muted-foreground hover:text-foreground h-7 px-3 rounded-lg border border-border/50"
-                          >
-                            {showAll ? 'Show fewer notes' : `Show ${group.notes.length - 9} more notes`}
-                          </Button>
                         </div>
                       )}
                     </div>

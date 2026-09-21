@@ -57,3 +57,7 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Public transcription benchmark audio datasets (large audio files not committed)
+tests/transcription/public/audio/
+
