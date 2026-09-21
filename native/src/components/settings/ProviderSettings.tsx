@@ -160,7 +160,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     ollama_model: 'llama3.2:latest',
     cloud_model: 'gpt-4o-mini',
   },
-  stt: { whisper_model_path: '' },
+  stt: { whisper_model_path: '', cleanup_style: 'faithful' },
   hotkeys: {
     show_hide_hotkey: 'Ctrl+Shift+Space',
     dictation_hotkey: 'Ctrl+Space',
@@ -519,6 +519,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         setSettings({
           ...DEFAULT_SETTINGS,
           ...loaded,
+          stt: {
+            ...DEFAULT_SETTINGS.stt!,
+            ...(loaded.stt || {}),
+            cleanup_style:
+              loaded.stt?.cleanup_style ||
+              (loaded.stt as any)?.cleanupStyle ||
+              'faithful',
+          },
           clipboard: {
             ...DEFAULT_SETTINGS.clipboard!,
             ...(loaded.clipboard || {}),
@@ -907,6 +915,98 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Card 0: AI Cleanup & Transcription Style */}
+              <div className="p-4 rounded-lg border border-border bg-card space-y-4 lg:col-span-2 shadow-xs">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-primary" />
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">AI Cleanup & Transcription Style</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Automated text refinement applied directly after speech-to-text
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
+                  {[
+                    {
+                      id: 'faithful',
+                      name: 'Faithful',
+                      tag: 'Default',
+                      desc: 'Fixes punctuation, casing, and disfluencies while preserving exact words.',
+                    },
+                    {
+                      id: 'clean',
+                      name: 'Clean',
+                      desc: 'Cleans grammar, agreement, and splits run-on sentences with light rephrasing.',
+                    },
+                    {
+                      id: 'polished',
+                      name: 'Polished',
+                      desc: 'Elevates to professional business correspondence, preserving all facts and names.',
+                    },
+                    {
+                      id: 'concise',
+                      name: 'Concise',
+                      desc: 'Removes redundancy and tightens sentences into punchy executive notes.',
+                    },
+                    {
+                      id: 'raw',
+                      name: 'Raw',
+                      tag: 'Fastest',
+                      desc: 'Direct verbatim Whisper output with zero AI modification or added latency.',
+                    },
+                  ].map((item) => {
+                    const currentStyle = settings.stt?.cleanup_style || settings.stt?.cleanupStyle || 'faithful';
+                    const isSelected = currentStyle === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={async () => {
+                          const updated: AppSettings = {
+                            ...settings,
+                            stt: {
+                              ...settings.stt,
+                              cleanup_style: item.id as any,
+                              cleanupStyle: item.id as any,
+                            },
+                          };
+                          setSettings(updated);
+                          try {
+                            await invoke('save_settings', { settings: updated });
+                          } catch (err) {
+                            console.error('Failed to update cleanup style', err);
+                          }
+                        }}
+                        className={`p-3 rounded-lg border text-left flex flex-col justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? 'border-primary bg-primary/10 text-foreground shadow-xs ring-1 ring-primary/40'
+                            : 'border-border bg-card/50 text-muted-foreground hover:border-border/80 hover:bg-muted/10'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-bold text-foreground">{item.name}</span>
+                            {item.tag && (
+                              <Badge
+                                variant={item.tag === 'Default' ? 'emerald' : 'secondary'}
+                                className="text-[9px] px-1 py-0 font-mono"
+                              >
+                                {item.tag}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground leading-snug">
+                            {item.desc}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Card 1: Universal Dictation Hotkey & Toggle Mode */}
               <div className="p-4 rounded-lg border border-border bg-card space-y-4 flex flex-col justify-between">
                 <div className="space-y-3">

@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { findSelection, looksLikeVocabulary, type PhraseSelection } from './selection';
+import { diffWords } from '@/lib/diffWords';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '../common/PageHeader';
 import { EmptyState } from '../common/EmptyState';
@@ -187,7 +188,21 @@ export const VoiceNotePage: React.FC = () => {
   const [copiedNoteId, setCopiedNoteId] = useState<string | null>(null);
   const [promotedNoteIds, setPromotedNoteIds] = useState<Set<string>>(new Set());
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
+  const [diffNoteIds, setDiffNoteIds] = useState<Set<string>>(new Set());
   const [activeSelectionMode, setActiveSelectionMode] = useState<'merge' | 'delete' | null>(null);
+
+  const toggleDiffNote = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setDiffNoteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
   const [isMergingBatch, setIsMergingBatch] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
@@ -639,6 +654,68 @@ export const VoiceNotePage: React.FC = () => {
     const notesToday = notes.filter((n) => new Date(n.created_at).toDateString() === todayKey).length;
     return { total, totalWords, notesToday };
   }, [notes]);
+
+  const hasDiff = (note: VaultNote) => {
+    return Boolean(
+      note.raw_content &&
+      note.raw_content.trim() !== note.content.trim() &&
+      note.cleanup_style &&
+      note.cleanup_style !== 'raw'
+    );
+  };
+
+  const renderNoteBody = (note: VaultNote, isGrid: boolean) => {
+    const isShowingDiff = diffNoteIds.has(note.id) && hasDiff(note);
+    if (isShowingDiff && note.raw_content) {
+      const spans = diffWords(note.raw_content, note.content);
+      return (
+        <div
+          ref={(el) => {
+            noteBodyRefs.current[note.id] = el;
+          }}
+          className={`text-foreground/90 leading-relaxed font-sans select-text cursor-text break-words whitespace-pre-wrap ${
+            isGrid ? 'text-xs md:text-sm' : 'text-xs'
+          }`}
+        >
+          {spans.map((span, idx) => {
+            if (span.kind === 'same') {
+              return <span key={idx}>{span.text}</span>;
+            }
+            if (span.kind === 'removed') {
+              return (
+                <span
+                  key={idx}
+                  className="line-through text-rose-600 dark:text-rose-400 bg-rose-500/15 rounded-xs px-0.5"
+                >
+                  {span.text}
+                </span>
+              );
+            }
+            return (
+              <span
+                key={idx}
+                className="text-emerald-700 dark:text-emerald-400 bg-emerald-500/15 rounded-xs px-0.5 font-medium"
+              >
+                {span.text}
+              </span>
+            );
+          })}
+        </div>
+      );
+    }
+    return (
+      <p
+        ref={(el) => {
+          noteBodyRefs.current[note.id] = el;
+        }}
+        className={`text-foreground/90 leading-relaxed font-sans select-text cursor-text break-words whitespace-pre-wrap ${
+          isGrid ? 'text-xs md:text-sm' : 'text-xs'
+        }`}
+      >
+        {note.content}
+      </p>
+    );
+  };
 
   // Reusable Phrase Selection & Correction Popover
   const renderPhraseCorrectionPopover = (note: VaultNote) => {
@@ -1393,6 +1470,20 @@ export const VoiceNotePage: React.FC = () => {
                                   </div>
 
                                   <div className="flex items-center gap-1 shrink-0">
+                                    {hasDiff(note) && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => toggleDiffNote(note.id, e)}
+                                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                                          diffNoteIds.has(note.id)
+                                            ? 'bg-primary text-primary-foreground border-primary font-semibold shadow-2xs'
+                                            : 'bg-muted/40 text-muted-foreground border-border/80 hover:bg-muted hover:text-foreground'
+                                        }`}
+                                        title={diffNoteIds.has(note.id) ? 'Hide diff' : 'Show diff against raw transcript'}
+                                      >
+                                        Diff
+                                      </button>
+                                    )}
                                     {note.merged_from && note.merged_from.length > 0 && (
                                       <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
                                         <GitMerge className="w-2.5 h-2.5" />
@@ -1412,14 +1503,7 @@ export const VoiceNotePage: React.FC = () => {
                                   {isEditing ? (
                                     renderInlineEdit(note)
                                   ) : (
-                                    <p
-                                      ref={(el) => {
-                                        noteBodyRefs.current[note.id] = el;
-                                      }}
-                                      className="text-xs md:text-sm text-foreground/90 leading-relaxed font-sans select-text cursor-text break-words whitespace-pre-wrap"
-                                    >
-                                      {note.content}
-                                    </p>
+                                    renderNoteBody(note, true)
                                   )}
 
                                   {renderPhraseCorrectionPopover(note)}
@@ -1489,6 +1573,20 @@ export const VoiceNotePage: React.FC = () => {
                                         <Badge variant="outline" className="text-[9px] font-mono px-1 py-0">
                                           {countWords(note.content)}w
                                         </Badge>
+                                        {hasDiff(note) && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => toggleDiffNote(note.id, e)}
+                                            className={`text-[9px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                                              diffNoteIds.has(note.id)
+                                                ? 'bg-primary text-primary-foreground border-primary font-semibold shadow-2xs'
+                                                : 'bg-muted/40 text-muted-foreground border-border/80 hover:bg-muted hover:text-foreground'
+                                            }`}
+                                            title={diffNoteIds.has(note.id) ? 'Hide diff' : 'Show diff against raw transcript'}
+                                          >
+                                            Diff
+                                          </button>
+                                        )}
                                         {note.merged_from && note.merged_from.length > 0 && (
                                           <Badge variant="outline" className="text-[9px] font-mono px-1 py-0 bg-primary/10 text-primary border-primary/25 gap-1">
                                             <GitMerge className="w-2.5 h-2.5" />
@@ -1506,14 +1604,7 @@ export const VoiceNotePage: React.FC = () => {
                                       {isEditing ? (
                                         renderInlineEdit(note)
                                       ) : (
-                                        <p
-                                          ref={(el) => {
-                                            noteBodyRefs.current[note.id] = el;
-                                          }}
-                                          className="text-xs text-foreground/90 leading-relaxed font-sans select-text cursor-text break-words whitespace-pre-wrap"
-                                        >
-                                          {note.content}
-                                        </p>
+                                        renderNoteBody(note, false)
                                       )}
 
                                       {renderPhraseCorrectionPopover(note)}
