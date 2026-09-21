@@ -16,8 +16,8 @@ describe('CloseConfirmationDialog', () => {
 
     expect(screen.getByText('Close Vox?')).toBeInTheDocument();
     expect(screen.getByText(/Are you sure you want to close Vox\?/i)).toBeInTheDocument();
-    expect(screen.getByText(/To keep Vox running silently in the background, use/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /hide vox/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close Vox' })).toBeInTheDocument();
   });
 
@@ -54,5 +54,25 @@ describe('CloseConfirmationDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Close Vox' }));
     expect(onConfirmClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onHide when Hide Vox is clicked', async () => {
+    const onOpenChange = vi.fn();
+    const onConfirmClose = vi.fn();
+    const onHide = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <CloseConfirmationDialog
+        open={true}
+        onOpenChange={onOpenChange}
+        onConfirmClose={onConfirmClose}
+        onHide={onHide}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /hide vox/i }));
+    expect(onHide).toHaveBeenCalledTimes(1);
+    expect(onConfirmClose).not.toHaveBeenCalled();
   });
 });

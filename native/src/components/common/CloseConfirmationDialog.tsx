@@ -1,5 +1,6 @@
 import React from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, EyeOff } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +15,7 @@ interface CloseConfirmationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirmClose: () => void;
+  onHide?: () => void;
 }
 
 /**
@@ -27,7 +29,21 @@ export const CloseConfirmationDialog: React.FC<CloseConfirmationDialogProps> = (
   open,
   onOpenChange,
   onConfirmClose,
+  onHide,
 }) => {
+  const handleHide = () => {
+    if (onHide) {
+      onHide();
+    } else {
+      onOpenChange(false);
+      invoke('hide_main_window').catch(() => {
+        import('@tauri-apps/api/window')
+          .then(({ getCurrentWindow }) => getCurrentWindow().hide())
+          .catch((err) => console.warn('Failed to hide window:', err));
+      });
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[420px] bg-card border-border shadow-xl">
@@ -60,6 +76,16 @@ export const CloseConfirmationDialog: React.FC<CloseConfirmationDialogProps> = (
             autoFocus
           >
             Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={handleHide}
+            className="text-xs h-8 px-3.5 gap-1.5 cursor-pointer hover:bg-secondary/80"
+          >
+            <EyeOff className="w-3.5 h-3.5" />
+            <span>Hide Vox</span>
           </Button>
           <Button
             type="button"

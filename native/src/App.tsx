@@ -71,6 +71,20 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleConfirmHide = async () => {
+    setCloseDialogOpen(false);
+    try {
+      await invoke('hide_main_window');
+    } catch {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        await getCurrentWindow().hide();
+      } catch (err) {
+        console.warn('Failed to hide window:', err);
+      }
+    }
+  };
+
 
 
   /**
@@ -426,6 +440,7 @@ export const App: React.FC = () => {
         open={closeDialogOpen}
         onOpenChange={setCloseDialogOpen}
         onConfirmClose={handleConfirmClose}
+        onHide={handleConfirmHide}
       />
       </div>
     </TooltipProvider>
