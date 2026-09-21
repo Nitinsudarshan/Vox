@@ -249,6 +249,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [modelDownloadError, setModelDownloadError] = useState<string | null>(null);
   const [customSttMode, setCustomSttMode] = useState(false);
+  const [showCleanupInfo, setShowCleanupInfo] = useState(false);
 
   const checkLocalLlm = async (overrideHost?: string) => {
     setOllamaStatus({ state: 'checking' });
@@ -917,14 +918,32 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Card 0: AI Cleanup & Transcription Style */}
               <div className="p-4 rounded-lg border border-border bg-card space-y-4 lg:col-span-2 shadow-xs">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-primary" />
-                  <div>
-                    <p className="text-xs font-semibold text-foreground">AI Cleanup & Transcription Style</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Automated text refinement applied directly after speech-to-text
-                    </p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-primary shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">AI Cleanup & Transcription Style</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Automated text refinement applied directly after speech-to-text
+                      </p>
+                    </div>
                   </div>
+
+                  {/* "i" Info button at the far end */}
+                  <button
+                    type="button"
+                    onClick={() => setShowCleanupInfo((prev) => !prev)}
+                    className={`w-6 h-6 rounded-full flex items-center justify-center transition-all border shrink-0 cursor-pointer ${
+                      showCleanupInfo
+                        ? 'bg-primary text-primary-foreground border-primary shadow-xs ring-2 ring-primary/20'
+                        : 'bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground hover:border-primary/40'
+                    }`}
+                    title={showCleanupInfo ? 'Hide mode comparison' : 'Compare all modes with an example'}
+                    aria-label="Compare all modes with an example"
+                    aria-expanded={showCleanupInfo}
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
@@ -933,28 +952,27 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       id: 'faithful',
                       name: 'Faithful',
                       tag: 'Default',
-                      desc: 'Fixes punctuation, casing, and disfluencies while preserving exact words.',
+                      desc: 'Punctuation, capitalization & filler removal. Your words stay 100% untouched.',
                     },
                     {
                       id: 'clean',
                       name: 'Clean',
-                      desc: 'Cleans grammar, agreement, and splits run-on sentences with light rephrasing.',
+                      desc: 'Light grammatical polish & sentence cleanup. Keeps your natural spoken voice.',
                     },
                     {
                       id: 'polished',
                       name: 'Polished',
-                      desc: 'Elevates to professional business correspondence, preserving all facts and names.',
+                      desc: 'Elevates to professional business correspondence, preserving all facts & names.',
                     },
                     {
                       id: 'concise',
                       name: 'Concise',
-                      desc: 'Removes redundancy and tightens sentences into punchy executive notes.',
+                      desc: 'Removes redundancy & condenses text into tight, punchy executive points.',
                     },
                     {
                       id: 'raw',
                       name: 'Raw',
-                      tag: 'Fastest',
-                      desc: 'Direct verbatim Whisper output with zero AI modification or added latency.',
+                      desc: 'Direct verbatim Whisper output. No AI rewrites, no disfluency filtering.',
                     },
                   ].map((item) => {
                     const currentStyle = settings.stt?.cleanup_style || settings.stt?.cleanupStyle || 'faithful';
@@ -1005,6 +1023,84 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     );
                   })}
                 </div>
+
+                {/* Generic Comparison Example Breakdown */}
+                {showCleanupInfo && (
+                  <div className="rounded-lg border border-border/80 bg-muted/20 p-3.5 space-y-3 animate-in fade-in duration-150">
+                    <div className="flex items-start justify-between gap-2 border-b border-border/60 pb-2.5">
+                      <div>
+                        <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-primary">
+                          Generic Comparison Example
+                        </span>
+                        <p className="text-xs text-foreground/90 font-medium italic mt-0.5">
+                          “um so yeah we need to like reschedule the budget review meeting with Sarah to next Tuesday at 3 p.m. because um Monday is totally jammed, you know?”
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCleanupInfo(false)}
+                        className="text-[10px] font-mono text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-muted/80 cursor-pointer"
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-2.5">
+                      <div className="p-2.5 rounded-md bg-card border border-border/70 space-y-1.5">
+                        <span className="text-[11px] font-bold text-foreground font-mono">Raw</span>
+                        <p className="text-[10px] text-muted-foreground leading-tight">
+                          Zero modification. Verbatim Whisper speech with all fillers and pauses.
+                        </p>
+                        <p className="text-[10px] text-foreground/90 font-mono bg-muted/40 p-1.5 rounded break-words">
+                          "um so yeah we need to like reschedule the budget review meeting with Sarah to next Tuesday at 3 p.m. because um Monday is totally jammed, you know?"
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 rounded-md bg-card border border-border/70 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-foreground font-mono">Faithful</span>
+                          <Badge variant="emerald" className="text-[8px] px-1 py-0">Default</Badge>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-tight">
+                          Removes fillers & stutters, adds punctuation. Words stay 100% untouched.
+                        </p>
+                        <p className="text-[10px] text-foreground/90 font-mono bg-muted/40 p-1.5 rounded break-words">
+                          "We need to reschedule the budget review meeting with Sarah to next Tuesday at 3 p.m. because Monday is totally jammed."
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 rounded-md bg-card border border-border/70 space-y-1.5">
+                        <span className="text-[11px] font-bold text-foreground font-mono">Clean</span>
+                        <p className="text-[10px] text-muted-foreground leading-tight">
+                          Polishes grammar, agreement & run-on sentences with light rephrasing.
+                        </p>
+                        <p className="text-[10px] text-foreground/90 font-mono bg-muted/40 p-1.5 rounded break-words">
+                          "We need to reschedule the budget review meeting with Sarah to next Tuesday at 3:00 PM because Monday is completely booked."
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 rounded-md bg-card border border-border/70 space-y-1.5">
+                        <span className="text-[11px] font-bold text-foreground font-mono">Polished</span>
+                        <p className="text-[10px] text-muted-foreground leading-tight">
+                          Elevates register to business professional while preserving all facts & names.
+                        </p>
+                        <p className="text-[10px] text-foreground/90 font-mono bg-muted/40 p-1.5 rounded break-words">
+                          "Please reschedule the budget review meeting with Sarah to next Tuesday at 3:00 PM, as Monday's schedule is fully committed."
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 rounded-md bg-card border border-border/70 space-y-1.5">
+                        <span className="text-[11px] font-bold text-foreground font-mono">Concise</span>
+                        <p className="text-[10px] text-muted-foreground leading-tight">
+                          Cuts all redundancy & extracts the essential action point cleanly.
+                        </p>
+                        <p className="text-[10px] text-foreground/90 font-mono bg-muted/40 p-1.5 rounded break-words">
+                          "Reschedule Sarah's budget review meeting to Tuesday at 3:00 PM."
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Card 1: Universal Dictation Hotkey & Toggle Mode */}
