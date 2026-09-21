@@ -11,6 +11,7 @@ import {
   Volume2,
   Server,
   Zap,
+  Target,
   Info,
   ChevronDown,
   ChevronUp,
@@ -76,6 +77,134 @@ type DownloadState =
   | { kind: 'downloading'; fraction: number | null; downloaded: number }
   | { kind: 'verifying' }
   | { kind: 'failed'; message: string };
+
+interface ModelRatings {
+  accuracy: number;
+  speed: number;
+}
+
+function getModelRatings(modelId: string, tier?: string, filename?: string): ModelRatings {
+  const id = modelId.toLowerCase();
+  const file = (filename || '').toLowerCase();
+
+  // Special case: Parakeet
+  if (id.includes('parakeet')) {
+    return { accuracy: 4, speed: 5 };
+  }
+
+  // Catalogue Whisper models
+  if (id === 'whisper-tiny' || id === 'tiny') {
+    return { accuracy: 1, speed: 5 };
+  }
+  if (id === 'whisper-tiny-en' || id === 'tiny.en' || id === 'tiny-en') {
+    return { accuracy: 2, speed: 5 };
+  }
+  if (id === 'whisper-base' || id === 'base') {
+    return { accuracy: 2, speed: 4 };
+  }
+  if (id === 'whisper-base-en' || id === 'base.en' || id === 'base-en') {
+    return { accuracy: 3, speed: 4 };
+  }
+  if (id === 'whisper-small' || id === 'small') {
+    return { accuracy: 3, speed: 3 };
+  }
+  if (id === 'whisper-small-en' || id === 'small.en' || id === 'small-en') {
+    return { accuracy: 4, speed: 3 };
+  }
+  if (id === 'whisper-medium' || id === 'medium') {
+    return { accuracy: 4, speed: 2 };
+  }
+  if (id === 'whisper-medium-en' || id === 'medium.en' || id === 'medium-en') {
+    return { accuracy: 4, speed: 2 };
+  }
+  if (id.includes('turbo') || file.includes('turbo')) {
+    return { accuracy: 5, speed: 4 };
+  }
+  if (id === 'whisper-large-v1' || id === 'large-v1' || id === 'large_v1') {
+    return { accuracy: 4, speed: 1 };
+  }
+  if (id === 'whisper-large-v2' || id === 'large-v2' || id === 'large_v2') {
+    return { accuracy: 5, speed: 1 };
+  }
+  if (
+    id === 'whisper-large-v3' ||
+    id === 'large-v3' ||
+    id === 'large_v3' ||
+    id === 'whisper-large' ||
+    id === 'large'
+  ) {
+    return { accuracy: 5, speed: 1 };
+  }
+
+  // Unmanaged / Custom models heuristic based on tier or filename
+  if (file.includes('apex') || file.includes('hinglish')) {
+    return { accuracy: 4, speed: 4 };
+  }
+  if (tier === 'fast') {
+    return { accuracy: 2, speed: 4 };
+  }
+  if (tier === 'accurate') {
+    return { accuracy: 4, speed: 2 };
+  }
+  if (tier === 'maximum') {
+    return { accuracy: 5, speed: 1 };
+  }
+  return { accuracy: 3, speed: 3 };
+}
+
+const ModelRatingMeters: React.FC<{
+  accuracy: number;
+  speed: number;
+  className?: string;
+}> = ({ accuracy, speed, className }) => {
+  return (
+    <div className={`flex items-center gap-2.5 text-[9px] ${className ?? ''}`}>
+      {/* Accuracy meter */}
+      <div
+        className="flex items-center gap-1 text-muted-foreground select-none"
+        title={`Accuracy: ${accuracy}/5`}
+        aria-label={`Accuracy rating: ${accuracy} out of 5`}
+      >
+        <Target className="w-2.5 h-2.5 text-sky-500 shrink-0" />
+        <span className="text-[8.5px] font-medium text-muted-foreground/80">Acc</span>
+        <div className="inline-flex items-center gap-0.5">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <span
+              key={i}
+              className={`w-2 h-0.5 rounded-full transition-colors ${
+                i <= accuracy
+                  ? 'bg-sky-500 dark:bg-sky-400 shadow-2xs'
+                  : 'bg-muted-foreground/20 dark:bg-muted-foreground/25'
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Speed meter */}
+      <div
+        className="flex items-center gap-1 text-muted-foreground select-none"
+        title={`Speed: ${speed}/5`}
+        aria-label={`Speed rating: ${speed} out of 5`}
+      >
+        <Zap className="w-2.5 h-2.5 text-amber-500 shrink-0" />
+        <span className="text-[8.5px] font-medium text-muted-foreground/80">Spd</span>
+        <div className="inline-flex items-center gap-0.5">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <span
+              key={i}
+              className={`w-2 h-0.5 rounded-full transition-colors ${
+                i <= speed
+                  ? 'bg-amber-500 dark:bg-amber-400 shadow-2xs'
+                  : 'bg-muted-foreground/20 dark:bg-muted-foreground/25'
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
   settings,
@@ -628,6 +757,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                       <p className="text-xs text-muted-foreground">
                         FastConformer-CTC transducer ASR quantized to int8. Skips blank audio frames for ultra-low latency push-to-talk dictation.
                       </p>
+                      <ModelRatingMeters accuracy={4} speed={5} className="pt-0.5" />
                     </div>
 
                     <div className="shrink-0 flex items-center gap-2">
@@ -791,12 +921,13 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                     model.id === 'base.en' ||
                     model.id === 'base';
                   const busy = sttBusyId === model.id;
+                  const ratings = getModelRatings(model.id, model.tier, model.filename);
 
                   return (
                     <div
                       key={model.id}
                       data-testid={`speech-model-card-${model.id}`}
-                      className={`p-2 rounded-lg border transition-all flex flex-col justify-between min-h-[76px] ${
+                      className={`p-2 rounded-lg border transition-all flex flex-col justify-between min-h-[92px] ${
                         isDictationActive || isMeetingActive
                           ? 'border-primary/50 bg-primary/5 shadow-2xs'
                           : 'border-border bg-card hover:border-border/80'
@@ -833,6 +964,8 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                                   <div>Parameters: {model.parameters_millions}M</div>
                                   <div>Tier: {TIER_LABEL[model.tier]}</div>
                                   <div>Disk: {formatBytes(model.size_bytes)}</div>
+                                  <div>Accuracy: {ratings.accuracy}/5</div>
+                                  <div>Speed: {ratings.speed}/5</div>
                                 </div>
                               </TooltipContent>
                             </Tooltip>
@@ -860,6 +993,13 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                           <span>·</span>
                           <span className="capitalize">{model.tier}</span>
                         </div>
+
+                        {/* Model Rating Meters (Accuracy & Speed) */}
+                        <ModelRatingMeters
+                          accuracy={ratings.accuracy}
+                          speed={ratings.speed}
+                          className="mt-1"
+                        />
                       </div>
 
                       {/* Standardized Bottom Row: Controls / Actions */}
