@@ -19,6 +19,8 @@ export interface VaultNote {
   tags: string[];
   source_audio?: string | null;
   content: string;
+  raw_content?: string | null;
+  cleanup_style?: string | null;
   merged_from?: string[] | null;
 }
 
@@ -458,8 +460,8 @@ export interface SttSettings {
   textTransform?: boolean;
   /** How far that cleanup may go. Empty means `faithful`, the only style that
    *  cannot change meaning. */
-  cleanup_style?: '' | 'faithful' | 'clean' | 'professional' | 'concise';
-  cleanupStyle?: '' | 'faithful' | 'clean' | 'professional' | 'concise';
+  cleanup_style?: '' | 'raw' | 'faithful' | 'clean' | 'polished' | 'professional' | 'concise';
+  cleanupStyle?: '' | 'raw' | 'faithful' | 'clean' | 'polished' | 'professional' | 'concise';
   enableInitialPrompt?: boolean;
   customInitialPrompt?: string | null;
   /** Active dictation STT engine: 'whisper' (default) or 'parakeet' (NVIDIA Parakeet TDT). */

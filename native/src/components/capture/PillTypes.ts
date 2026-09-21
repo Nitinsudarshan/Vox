@@ -11,7 +11,7 @@ export type PillState =
   | 'error'
   | 'warning';
 
-export type CleanupStyle = 'faithful' | 'clean' | 'professional' | 'concise';
+export type CleanupStyle = 'raw' | 'faithful' | 'clean' | 'polished' | 'professional' | 'concise';
 export type SpeechLanguage = 'english' | 'hinglish' | 'hindi' | 'es' | 'auto';
 
 export interface WhisperStatusInfo {

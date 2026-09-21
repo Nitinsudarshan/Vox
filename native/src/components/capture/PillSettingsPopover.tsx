@@ -9,8 +9,6 @@ interface PillSettingsPopoverProps {
   settings: AppSettings | null;
   autoPaste: boolean;
   onToggleAutoPaste: (val: boolean) => void;
-  textTransform: boolean;
-  onToggleTextTransform: (val: boolean) => void;
   onToggleDictationSounds?: (val: boolean) => void;
   cleanupStyle: CleanupStyle;
   onChangeCleanupStyle: (style: CleanupStyle) => void;
@@ -32,19 +30,18 @@ const LANG_LABELS: Record<string, string> = {
 };
 
 const STYLE_LABELS: Record<string, string> = {
+  raw: 'Raw',
   faithful: 'Faithful',
   polished: 'Polished',
   clean: 'Clean',
   concise: 'Concise',
-  professional: 'Professional',
+  professional: 'Polished',
 };
 
 export const PillSettingsPopover: React.FC<PillSettingsPopoverProps> = ({
   settings,
   autoPaste,
   onToggleAutoPaste,
-  textTransform,
-  onToggleTextTransform,
   onToggleDictationSounds,
   cleanupStyle,
   onChangeCleanupStyle,
@@ -88,28 +85,7 @@ export const PillSettingsPopover: React.FC<PillSettingsPopoverProps> = ({
             </button>
           </div>
 
-          {/* 2. Text transform */}
-          <div className="flex items-center justify-between px-3 py-2">
-            <span className="font-medium text-slate-800 dark:text-neutral-200">Text transform</span>
-            <button
-              type="button"
-              onClick={() => onToggleTextTransform(!textTransform)}
-              className={cn(
-                'relative w-8 h-[18px] rounded-full border-none cursor-pointer transition-colors duration-150 p-0',
-                textTransform ? 'bg-blue-600 dark:bg-blue-500' : 'bg-slate-300 dark:bg-neutral-700'
-              )}
-              aria-label="Toggle Text transform"
-            >
-              <span
-                className={cn(
-                  'absolute top-[2px] w-3.5 h-3.5 rounded-full bg-white dark:bg-[#171717] shadow-sm transition-all duration-150',
-                  textTransform ? 'left-[16px]' : 'left-[2px]'
-                )}
-              />
-            </button>
-          </div>
-
-          {/* 3. Dictation sounds */}
+          {/* 2. Dictation sounds */}
           <div className="flex items-center justify-between px-3 py-2">
             <span className="font-medium text-slate-800 dark:text-neutral-200">Dictation sounds</span>
             <button
@@ -239,9 +215,10 @@ export const PillSettingsPopover: React.FC<PillSettingsPopoverProps> = ({
             <span>Back</span>
           </button>
           {[
-            { id: 'faithful', name: 'Faithful' },
-            { id: 'polished', name: 'Polished' },
+            { id: 'raw', name: 'Raw (Verbatim)' },
+            { id: 'faithful', name: 'Faithful (Default)' },
             { id: 'clean', name: 'Clean' },
+            { id: 'polished', name: 'Polished' },
             { id: 'concise', name: 'Concise' },
           ].map((item) => (
             <div
