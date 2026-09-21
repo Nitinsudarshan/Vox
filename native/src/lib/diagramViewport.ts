@@ -89,12 +89,15 @@ export const fitScale = (diagram: Size, viewport: Size): number => {
 /**
  * Where a diagram opens.
  *
- * Fitted when fitting leaves it readable, and floored at
+ * In stage/fullscreen mode, fits the diagram to the viewport.
+ * In panel mode, fitted when fitting leaves it readable, and floored at
  * [`MIN_LEGIBLE_SCALE`] when it does not — at which point the diagram
  * overflows on purpose and the viewport says so.
  */
-export const initialScale = (diagram: Size, viewport: Size): number =>
-  Math.max(fitScale(diagram, viewport), MIN_LEGIBLE_SCALE);
+export const initialScale = (diagram: Size, viewport: Size, isStage = false): number => {
+  const fitted = fitScale(diagram, viewport);
+  return isStage ? clampScale(fitted) : Math.max(fitted, MIN_LEGIBLE_SCALE);
+};
 
 export const clampScale = (scale: number): number =>
   Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
@@ -108,11 +111,26 @@ export const scaledSize = (diagram: Size, scale: number): Size => ({
 });
 
 /**
+ * Calculates initial pan:
+ * - Centers any axis that fits within the viewport.
+ * - Starts at 0 for any axis that overflows, ensuring the beginning of the diagram is visible.
+ */
+export const centerPan = (diagram: Size, viewport: Size, scale: number): Pan => {
+  const scaled = scaledSize(diagram, scale);
+  return {
+    x: Math.max(0, (viewport.width - scaled.width) / 2),
+    y: Math.max(0, (viewport.height - scaled.height) / 2),
+  };
+};
+
+export const initialPan = (diagram: Size, viewport: Size, scale: number): Pan =>
+  centerPan(diagram, viewport, scale);
+
+/**
  * Keeps the diagram from being dragged off its own viewport.
  *
- * An axis with room to spare pins to zero, and the component centres that
- * axis with layout rather than by panning — two mechanisms fighting over the
- * same offset is how a diagram ends up drifting on every resize.
+ * When content exceeds viewport, pan is bounded to [viewport - content, 0].
+ * When content fits within viewport, pan is bounded to [0, viewport - content].
  */
 export const clampPan = (pan: Pan, diagram: Size, viewport: Size, scale: number): Pan => {
   const scaled = scaledSize(diagram, scale);
@@ -123,8 +141,10 @@ export const clampPan = (pan: Pan, diagram: Size, viewport: Size, scale: number)
 };
 
 const clampAxis = (offset: number, content: number, available: number): number => {
-  if (!isUsable(content) || !isUsable(available) || content <= available) return 0;
-  return Math.min(0, Math.max(available - content, offset));
+  if (!isUsable(content) || !isUsable(available)) return 0;
+  const minBound = Math.min(0, available - content);
+  const maxBound = Math.max(0, available - content);
+  return Math.min(maxBound, Math.max(minBound, offset));
 };
 
 /** Whether the diagram is larger than its viewport at this zoom, on either axis. */

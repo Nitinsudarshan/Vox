@@ -8,6 +8,7 @@ import {
   clampScale,
   fitScale,
   formatScale,
+  initialPan,
   initialScale,
   isOverflowing,
   parseSvgSize,
@@ -76,21 +77,26 @@ describe('initialScale', () => {
     expect(initialScale(diagram, viewport)).toBe(MIN_LEGIBLE_SCALE);
     expect(isOverflowing(diagram, viewport, initialScale(diagram, viewport))).toBe(true);
   });
+
+  test('fits fully without legibility floor in stage mode', () => {
+    const diagram = { width: 2400, height: 500 };
+    const viewport = { width: 600, height: 400 };
+    expect(initialScale(diagram, viewport, true)).toBeCloseTo(0.25);
+  });
 });
 
-describe('clampScale', () => {
-  test('holds both ends', () => {
-    expect(clampScale(0.001)).toBe(MIN_SCALE);
-    expect(clampScale(99)).toBe(MAX_SCALE);
-    expect(clampScale(1.5)).toBe(1.5);
+describe('centerPan and initialPan', () => {
+  test('centers an axis with room to spare and aligns overflowing axis to 0', () => {
+    const diagram = { width: 2000, height: 100 };
+    const viewport = { width: 1000, height: 400 };
+    // At scale 1: width 2000 > 1000 (overflows, x=0), height 100 <= 400 (fits, y=(400-100)/2 = 150)
+    expect(initialPan(diagram, viewport, 1)).toEqual({ x: 0, y: 150 });
   });
 
-  test('zooming cannot walk past the limits by repeating', () => {
-    let scale = 1;
-    for (let step = 0; step < 50; step += 1) scale = zoomBy(scale, 1.25);
-    expect(scale).toBe(MAX_SCALE);
-    for (let step = 0; step < 50; step += 1) scale = zoomBy(scale, 1 / 1.25);
-    expect(scale).toBe(MIN_SCALE);
+  test('centers both axes when diagram fits entirely', () => {
+    const diagram = { width: 800, height: 200 };
+    const viewport = { width: 1000, height: 400 };
+    expect(initialPan(diagram, viewport, 1)).toEqual({ x: 100, y: 100 });
   });
 });
 

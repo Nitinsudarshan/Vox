@@ -7,6 +7,7 @@ import {
   PANEL_MAX_HEIGHT,
   clampPan,
   formatScale,
+  initialPan,
   initialScale,
   isOverflowing,
   panStep,
@@ -53,6 +54,7 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
   onExpand,
   className,
 }) => {
+  const isStage = variant === 'stage';
   const viewportRef = useRef<HTMLDivElement>(null);
   const hintId = `${useId().replace(/[^a-zA-Z0-9_-]/g, 'd')}-hint`;
 
@@ -91,17 +93,18 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
   const fitBox: Size = useMemo(
     () => ({
       width: viewport.width,
-      height: variant === 'stage' ? viewport.height : PANEL_MAX_HEIGHT,
+      height: isStage ? viewport.height : PANEL_MAX_HEIGHT,
     }),
-    [viewport.width, viewport.height, variant],
+    [viewport.width, viewport.height, isStage],
   );
 
   // A new diagram, or a resize the reader has not overridden, opens fitted.
   useEffect(() => {
     if (isAdjusted || !diagram || fitBox.width <= 0) return;
-    setScale(initialScale(diagram, fitBox));
-    setPan({ x: 0, y: 0 });
-  }, [diagram, fitBox, isAdjusted]);
+    const s = initialScale(diagram, fitBox, isStage);
+    setScale(s);
+    setPan(initialPan(diagram, viewport.height > 0 ? viewport : fitBox, s));
+  }, [diagram, fitBox, isAdjusted, isStage, viewport]);
 
   // A new diagram is a fresh start, whatever was done to the last one.
   useEffect(() => {
@@ -139,9 +142,10 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
   const resetToFit = useCallback(() => {
     if (!diagram) return;
     setIsAdjusted(false);
-    setScale(initialScale(diagram, fitBox));
-    setPan({ x: 0, y: 0 });
-  }, [diagram, fitBox]);
+    const s = initialScale(diagram, fitBox, isStage);
+    setScale(s);
+    setPan(initialPan(diagram, viewport.height > 0 ? viewport : fitBox, s));
+  }, [diagram, fitBox, isStage, viewport]);
 
   // Wheel is attached by hand because React's is passive, and a passive
   // listener cannot stop the page scrolling under a zoom.
@@ -159,14 +163,14 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
         });
         return;
       }
-      if (!isOverflowing(diagram, viewport, scale)) return;
+      if (!isOverflowing(diagram, viewport, scale) && !isStage) return;
       event.preventDefault();
       movePan(-event.deltaX, -event.deltaY);
     };
 
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, [applyScale, diagram, movePan, scale, viewport]);
+  }, [applyScale, diagram, isStage, movePan, scale, viewport]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const step = panStep(event.shiftKey);
@@ -213,7 +217,7 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !diagram || !isOverflowing(diagram, viewport, scale)) return;
+    if (event.button !== 0 || !diagram) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragOrigin.current = { pointer: { x: event.clientX, y: event.clientY }, pan };
     setIsDragging(true);
@@ -246,10 +250,10 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
   };
 
   const overflowing = diagram ? isOverflowing(diagram, viewport, scale) : false;
-  const height = variant === 'stage' ? undefined : panelHeight(diagram, scale);
+  const height = isStage ? undefined : panelHeight(diagram, scale);
 
   return (
-    <div className={cn('flex flex-col', variant === 'stage' && 'h-full min-h-0', className)}>
+    <div className={cn('flex flex-col', isStage ? 'h-full min-h-0' : 'w-full', className)}>
       <div
         ref={viewportRef}
         role="group"
@@ -261,11 +265,12 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        style={height === undefined ? undefined : { height }}
+        style={isStage ? undefined : { height: `${height}px`, minHeight: `${height}px` }}
         className={cn(
-          'relative flex-1 min-h-0 overflow-hidden bg-card/60 outline-hidden',
+          'relative overflow-hidden bg-card/60 outline-hidden select-none touch-none',
+          isStage ? 'flex-1 min-h-0' : 'w-full',
           'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-          overflowing ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default',
+          isDragging ? 'cursor-grabbing' : 'cursor-grab',
         )}
       >
         <p id={hintId} className="sr-only">
@@ -273,27 +278,24 @@ export const DiagramViewport: React.FC<DiagramViewportProps> = ({
           zero fits it to the panel
           {onExpand ? ', and F opens it full screen.' : '.'}
         </p>
-        <div
-          className={cn(
-            'absolute inset-0 flex',
-            overflowing ? 'items-start justify-start' : 'items-center justify-center',
-          )}
-        >
+        <div className="absolute inset-0 overflow-hidden">
           <div
             aria-hidden="true"
             style={{
+              width: diagram ? `${diagram.width}px` : undefined,
+              height: diagram ? `${diagram.height}px` : undefined,
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
               transformOrigin: '0 0',
             }}
-            className="[&>svg]:block [&>svg]:max-w-none [&>svg]:h-auto"
+            className="[&>svg]:block [&>svg]:w-full [&>svg]:h-full [&>svg]:max-w-none pointer-events-none select-none"
             dangerouslySetInnerHTML={{ __html: markup }}
           />
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/30 px-2 py-1">
+      <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/30 px-2 py-1 select-none">
         <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-          {overflowing ? (
+          {overflowing || isStage ? (
             <>
               <Move className="h-3 w-3" aria-hidden="true" />
               <span>Drag or use arrow keys</span>
