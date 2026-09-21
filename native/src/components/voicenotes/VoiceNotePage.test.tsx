@@ -58,7 +58,55 @@ beforeEach(() => {
     if (cmd === 'get_voice_notes') {
       return [sampleNormalNote2, sampleNormalNote];
     }
+    if (cmd === 'list_speech_models') {
+      return {
+        models_dir: 'C:\\Users\\Test\\RelayVault\\models',
+        models: [
+          {
+            id: 'whisper-base',
+            name: 'Base',
+            filename: 'ggml-base.bin',
+            path: 'C:\\Users\\Test\\RelayVault\\models\\ggml-base.bin',
+            size_bytes: 147951465,
+            installed: true,
+            managed: true,
+            multilingual: true,
+            parameters_millions: 74,
+            tier: 'fast',
+            blurb: 'Base model',
+          },
+        ],
+        active_dictation_model: 'whisper-base',
+        active_meeting_model: 'whisper-small',
+        recommended_meeting_model: 'whisper-large-v3-turbo',
+      };
+    }
+    if (cmd === 'get_parakeet_status') {
+      return {
+        supported: false,
+        installed: false,
+        active_for_dictation: false,
+        missing_files: [],
+        models_dir: '',
+        approx_total_bytes: 0,
+      };
+    }
     return undefined;
+  });
+});
+
+describe('VoiceNotePage - Dictation Model Banner', () => {
+  it('renders active dictation model in the page banner and triggers onOpenSpeechSettings when clicked', async () => {
+    const onOpenSpeechSettings = vi.fn();
+    render(<VoiceNotePage onOpenSpeechSettings={onOpenSpeechSettings} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Dictating with Base/i)).toBeInTheDocument();
+    });
+
+    const button = screen.getByRole('button', { name: /change dictation speech model/i });
+    await userEvent.click(button);
+    expect(onOpenSpeechSettings).toHaveBeenCalledTimes(1);
   });
 });
 

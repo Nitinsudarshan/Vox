@@ -263,28 +263,42 @@ pub async fn ensure_fast_model(models_dir: &Path) -> Result<PathBuf, SttError> {
 /// downloads as a side effect of being asked. A settings screen listing what is
 /// installed must not start a download merely by rendering.
 pub fn dictation_model_filename(stt_settings: &crate::settings::SttSettings) -> Option<String> {
+    if let Some(ref p) = stt_settings.whisper_model_path {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            if let Some(filename) = Path::new(trimmed).file_name() {
+                return Some(filename.to_string_lossy().to_string());
+            }
+        }
+    }
     match stt_settings.dictation_quality {
         crate::settings::DictationSttQuality::Fast => Some(FAST_MODEL_FILENAME.to_string()),
-        crate::settings::DictationSttQuality::Accurate => stt_settings
-            .whisper_model_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .and_then(|p| {
-                Path::new(p)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-            })
-            .or_else(|| Some(DEFAULT_MODEL_FILENAME.to_string())),
+        crate::settings::DictationSttQuality::Accurate => Some(DEFAULT_MODEL_FILENAME.to_string()),
     }
 }
 
-/// Resolves the effective model path for Universal Dictation based on the user's Dictation quality preference.
-/// In `Fast` mode, uses `ggml-base.bin` (~0.8s latency); in `Accurate` mode, uses `ggml-small.bin` (~2.4s latency).
+/// Resolves the effective model path for Universal Dictation based on the user's configured model or quality preference.
+/// In `Fast` mode, defaults to `ggml-base.bin` (~0.8s latency); in `Accurate` mode, defaults to `ggml-small.bin` (~2.4s latency).
 pub async fn resolve_dictation_model_path(
     models_dir: &Path,
     stt_settings: &crate::settings::SttSettings,
 ) -> Option<String> {
+    if let Some(ref path) = stt_settings.whisper_model_path {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            let p = Path::new(trimmed);
+            if p.exists() {
+                return Some(trimmed.to_string());
+            }
+            if let Some(filename) = p.file_name() {
+                let candidate = models_dir.join(filename);
+                if candidate.exists() {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
     match stt_settings.dictation_quality {
         crate::settings::DictationSttQuality::Fast => {
             let fast_path = models_dir.join(FAST_MODEL_FILENAME);
@@ -306,27 +320,13 @@ pub async fn resolve_dictation_model_path(
             }
         }
         crate::settings::DictationSttQuality::Accurate => {
-            if let Some(ref path) = stt_settings.whisper_model_path {
-                let p = Path::new(path);
-                if p.exists() {
-                    Some(path.clone())
-                } else {
-                    let default_path = models_dir.join(DEFAULT_MODEL_FILENAME);
-                    if default_path.exists() {
-                        Some(default_path.to_string_lossy().to_string())
-                    } else {
-                        Some(path.clone())
-                    }
-                }
+            let default_path = models_dir.join(DEFAULT_MODEL_FILENAME);
+            if default_path.exists() {
+                Some(default_path.to_string_lossy().to_string())
             } else {
-                let default_path = models_dir.join(DEFAULT_MODEL_FILENAME);
-                if default_path.exists() {
-                    Some(default_path.to_string_lossy().to_string())
-                } else {
-                    match ensure_default_model(models_dir).await {
-                        Ok(p) => Some(p.to_string_lossy().to_string()),
-                        Err(_) => None,
-                    }
+                match ensure_default_model(models_dir).await {
+                    Ok(p) => Some(p.to_string_lossy().to_string()),
+                    Err(_) => None,
                 }
             }
         }

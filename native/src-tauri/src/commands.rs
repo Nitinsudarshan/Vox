@@ -2036,7 +2036,11 @@ pub async fn list_speech_models(
         });
 
     let active_dictation_model = crate::capture::stt::dictation_model_filename(&stt)
-        .and_then(|filename| models::by_filename(&filename).map(|m| m.id.to_string()));
+        .map(|filename| {
+            models::by_filename(&filename)
+                .map(|m| m.id.to_string())
+                .unwrap_or(filename)
+        });
 
     Ok(models::SpeechModelCatalogue {
         models_dir: models_dir.to_string_lossy().to_string(),
@@ -2106,8 +2110,21 @@ pub async fn delete_speech_model(
     if removed {
         let cleared = {
             let mut settings = state.settings.lock_or_recover();
+            let mut changed = false;
             if settings.stt.meeting_model_id.as_deref() == Some(id.as_str()) {
                 settings.stt.meeting_model_id = None;
+                changed = true;
+            }
+            if let Some(ref path) = settings.stt.whisper_model_path {
+                let deleted_filename = crate::capture::models::by_id(&id)
+                    .map(|m| m.filename)
+                    .unwrap_or(&id);
+                if path.ends_with(deleted_filename) {
+                    settings.stt.whisper_model_path = None;
+                    changed = true;
+                }
+            }
+            if changed {
                 Some(settings.clone())
             } else {
                 None

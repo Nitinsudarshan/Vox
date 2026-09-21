@@ -356,7 +356,11 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'capture' && <VoiceNotePage />}
+          {activeTab === 'capture' && (
+            <VoiceNotePage
+              onOpenSpeechSettings={() => navigateTo('settings', { section: 'speech' })}
+            />
+          )}
 
           {activeTab === 'meetings' && (
             <MeetingsPage

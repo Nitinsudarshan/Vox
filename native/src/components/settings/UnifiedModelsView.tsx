@@ -522,11 +522,21 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                 <Mic className="w-3 h-3 text-emerald-500 shrink-0" />
                 <span className="text-[11px] text-muted-foreground">Dictation:</span>
                 <select
-                  value={activeDictationModel ?? ''}
-                  onChange={(e) => void handleSetDictation(e.target.value || null)}
+                  value={parakeetStatus?.active_for_dictation ? '__parakeet__' : (activeDictationModel ?? '')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '__parakeet__') {
+                      void handleToggleParakeetDictation();
+                    } else {
+                      void handleSetDictation(val || null);
+                    }
+                  }}
                   className="text-xs font-medium text-foreground bg-transparent focus:outline-none cursor-pointer"
                   title="Select active model for voice dictation"
                 >
+                  {parakeetStatus?.installed && (
+                    <option value="__parakeet__">NVIDIA Parakeet TDT</option>
+                  )}
                   <option value="">Default (Fastest)</option>
                   {installedSpeechModels.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -773,9 +783,13 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                 {filteredSpeechModels.map((model) => {
                   const isDownloading = Boolean(downloads[model.id]);
                   const downloadProgress = downloads[model.id];
-                  const isDictationActive = activeDictationModel === model.id;
+                  const isDictationActive = !parakeetStatus?.active_for_dictation && activeDictationModel === model.id;
                   const isMeetingActive = activeMeetingModel === model.id;
-                  const isRecommendedDictation = model.id === 'base.en' || model.id === 'base';
+                  const isRecommendedDictation =
+                    model.id === 'whisper-base-en' ||
+                    model.id === 'whisper-base' ||
+                    model.id === 'base.en' ||
+                    model.id === 'base';
                   const busy = sttBusyId === model.id;
 
                   return (

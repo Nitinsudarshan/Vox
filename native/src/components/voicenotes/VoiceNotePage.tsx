@@ -27,6 +27,7 @@ import { diffWords } from '@/lib/diffWords';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '../common/PageHeader';
 import { EmptyState } from '../common/EmptyState';
+import { DictationModelGate } from './DictationModelGate';
 import { AppSettings, CorrectionRecord, VaultLocationInfo, VaultNote } from '../../types';
 
 type VaultViewState =
@@ -157,7 +158,12 @@ const VaultSetupPrompt: React.FC<VaultSetupPromptProps> = ({
   </div>
 );
 
-export const VoiceNotePage: React.FC = () => {
+export interface VoiceNotePageProps {
+  /** Opens Settings › Speech / Models & Speech so the user can switch or download models. */
+  onOpenSpeechSettings?: () => void;
+}
+
+export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettings }) => {
   const [vaultState, setVaultState] = useState<VaultViewState>({ status: 'loading' });
   const [defaultPath, setDefaultPath] = useState('');
   const [notes, setNotes] = useState<VaultNote[]>([]);
@@ -1059,7 +1065,9 @@ export const VoiceNotePage: React.FC = () => {
         glowColor="emerald"
         compact
       >
-        <div className="flex items-center divide-x divide-border/60 bg-background/60 backdrop-blur-xs border border-border/80 rounded-lg py-1 px-1 shadow-2xs">
+        <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
+          <DictationModelGate onOpenSpeechSettings={onOpenSpeechSettings} />
+          <div className="flex items-center divide-x divide-border/60 bg-background/60 backdrop-blur-xs border border-border/80 rounded-lg py-1 px-1 shadow-2xs">
           <div className="px-3 py-0.5 text-center">
             <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
               Notes
@@ -1085,7 +1093,8 @@ export const VoiceNotePage: React.FC = () => {
             </p>
           </div>
         </div>
-      </PageHeader>
+      </div>
+    </PageHeader>
 
       {/* Error Alert Banner */}
       {error && (
