@@ -10,6 +10,7 @@ import { TodosPage } from './components/todos/TodosPage';
 
 import { ProviderSettings, type SettingsSection } from './components/settings/ProviderSettings';
 import { DiagnosticsPage } from './components/diagnostics/DiagnosticsPage';
+import { DictationTestLabPage } from './components/tests/DictationTestLabPage';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ChangelogModal } from './components/common/ChangelogModal';
 import { WelcomeModal } from './components/common/WelcomeModal';
@@ -36,6 +37,7 @@ const TAB_LABELS: Record<MainTabType, string> = {
   files: 'Files & Docs',
   captures: 'Web Capture',
   diagnostics: 'Diagnostics',
+  tests: 'Dictation Tests',
   settings: 'Settings',
 };
 
@@ -400,6 +402,10 @@ export const App: React.FC = () => {
 
           {activeTab === 'diagnostics' && (
             <DiagnosticsPage onNavigateTab={(tab) => navigateTo(tab)} />
+          )}
+
+          {activeTab === 'tests' && (
+            <DictationTestLabPage />
           )}
 
           {activeTab === 'settings' && (

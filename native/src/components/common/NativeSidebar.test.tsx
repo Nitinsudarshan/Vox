@@ -39,6 +39,7 @@ describe('NativeSidebar', () => {
     }
 
     // System items
+    expect(screen.getByRole('button', { name: 'Tests' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Diagnostics' })).toBeInTheDocument();
 
@@ -82,6 +83,9 @@ describe('NativeSidebar', () => {
 
     await user.click(screen.getByRole('button', { name: 'Knowledge Graph' }));
     expect(setActiveTab).toHaveBeenCalledWith('graph');
+
+    await user.click(screen.getByRole('button', { name: 'Tests' }));
+    expect(setActiveTab).toHaveBeenCalledWith('tests');
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     expect(setActiveTab).toHaveBeenCalledWith('settings');

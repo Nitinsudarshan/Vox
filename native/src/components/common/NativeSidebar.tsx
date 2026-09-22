@@ -13,6 +13,7 @@ import {
   Sliders,
   Network,
   ListChecks,
+  FlaskConical,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -120,6 +121,13 @@ export const NativeSidebar: React.FC<NativeSidebarProps> = ({
   ];
 
   const systemNavItems: NavItemConfig[] = [
+    {
+      id: 'tests',
+      label: 'Tests',
+      icon: FlaskConical,
+      color: 'text-amber-500 dark:text-amber-400',
+      activeBg: 'bg-sidebar-accent text-sidebar-accent-foreground',
+    },
     {
       id: 'settings',
       label: 'Settings',

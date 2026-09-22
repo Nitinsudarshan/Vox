@@ -18,4 +18,5 @@ export type MainTabType =
   | 'files'
   | 'captures'
   | 'diagnostics'
+  | 'tests'
   | 'settings';

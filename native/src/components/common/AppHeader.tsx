@@ -18,6 +18,7 @@ const TAB_LABELS: Record<MainTabType, string> = {
   files: 'Files & Docs',
   captures: 'Web Capture',
   diagnostics: 'Diagnostics',
+  tests: 'Tests',
   settings: 'Settings',
 };
 
