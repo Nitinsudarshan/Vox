@@ -481,6 +481,10 @@ async fn execute_single_model(
     let samples_vec = samples.to_vec();
     let lang_clone = language_to_use.clone();
     let stt_settings = settings.stt.clone();
+    // Dictionary words and the custom initial prompt, exactly as hotkey
+    // dictation primes Whisper; without it the benchmark measures a
+    // recognizer that has never seen the user's vocabulary.
+    let stt_prompt = settings.build_stt_prompt();
 
     // 1. Run STT Inference in blocking task
     let stt_task_result = tokio::task::spawn_blocking(move || {
@@ -488,7 +492,10 @@ async fn execute_single_model(
 
         let (recognition_res, config, call_dur) = match target_clone.engine_id.as_str() {
             "whisper" => {
-                let dec_config = WhisperDecodingConfig::for_dictation(&stt_settings);
+                let mut dec_config = WhisperDecodingConfig::for_dictation(&stt_settings);
+                if let Some(prompt) = stt_prompt {
+                    dec_config.initial_prompt = Some(prompt);
+                }
                 let config_snapshot = ModelExecutionConfig {
                     engine: "Whisper".to_string(),
                     model_name: target_clone.model_name.clone(),
