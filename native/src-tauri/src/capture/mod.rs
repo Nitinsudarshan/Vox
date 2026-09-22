@@ -1,3 +1,5 @@
+pub mod eligibility;
+pub mod streaming_pipeline;
 pub mod glossary;
 pub mod recognizer;
 pub mod recognizers;
@@ -165,6 +167,7 @@ struct ActiveStream {
     input_rate: u32,
     generation: u64,
     alive: Arc<AtomicBool>,
+    streaming_sink: Arc<Mutex<Option<std_mpsc::Sender<Vec<f32>>>>>,
 }
 
 struct AliveGuard(Arc<AtomicBool>);
@@ -205,6 +208,20 @@ impl AudioRecorder {
         guard.active_session.is_none() && guard.active_stream.is_some()
     }
 
+    /// Attaches or detaches a streaming PCM sink that receives live mono audio chunks.
+    pub fn set_streaming_sink(&self, sink: Option<std_mpsc::Sender<Vec<f32>>>) {
+        let inner = self.inner.lock_or_recover();
+        if let Some(ref stream) = inner.active_stream {
+            *stream.streaming_sink.lock_or_recover() = sink;
+        }
+    }
+
+    /// The hardware input rate of the currently active stream.
+    pub fn input_rate(&self) -> u32 {
+        let inner = self.inner.lock_or_recover();
+        inner.active_stream.as_ref().map(|s| s.input_rate).unwrap_or(TARGET_SAMPLE_RATE)
+    }
+
     /// The `mode` of the in-progress session, if any — lets callers tell a
     /// hotkey-owned ("dictation") session apart from a UI-owned one
     /// ("meeting"/"scribble"/"chat") without a separate ownership field.
@@ -240,6 +257,7 @@ impl AudioRecorder {
             if stream.alive.load(Ordering::SeqCst) {
                 stream.samples.lock_or_recover().clear();
                 *stream.detection.lock_or_recover() = AudioDetectionState::default();
+                *stream.streaming_sink.lock_or_recover() = None;
                 *stream.app_handle.lock_or_recover() = app.clone();
                 stream.generation = current_gen;
                 stream.is_recording.store(true, Ordering::SeqCst);
@@ -257,6 +275,7 @@ impl AudioRecorder {
             let detection = Arc::new(Mutex::new(AudioDetectionState::default()));
             let app_handle_store = Arc::new(Mutex::new(app));
             let alive = Arc::new(AtomicBool::new(true));
+            let streaming_sink = Arc::new(Mutex::new(None));
 
             spawn_warm_capture_thread(
                 stop_rx,
@@ -266,6 +285,7 @@ impl AudioRecorder {
                 detection.clone(),
                 app_handle_store.clone(),
                 alive.clone(),
+                streaming_sink.clone(),
             );
 
             let input_rate = match init_rx.recv_timeout(Duration::from_secs(10)) {
@@ -283,6 +303,7 @@ impl AudioRecorder {
                 input_rate,
                 generation: current_gen,
                 alive,
+                streaming_sink,
             });
         }
 
@@ -312,6 +333,7 @@ impl AudioRecorder {
 
             let (samples, detection, rate, stream_gen) = if let Some(ref mut stream) = inner.active_stream {
                 stream.is_recording.store(false, Ordering::SeqCst);
+                *stream.streaming_sink.lock_or_recover() = None;
                 let s = stream.samples.lock_or_recover().split_off(0);
                 let d = std::mem::take(&mut *stream.detection.lock_or_recover());
                 (s, d, stream.input_rate, stream.generation)
@@ -402,6 +424,7 @@ impl AudioRecorder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_warm_capture_thread(
     stop_rx: std_mpsc::Receiver<()>,
     init_tx: std_mpsc::Sender<Result<u32, String>>,
@@ -410,6 +433,7 @@ fn spawn_warm_capture_thread(
     detection: Arc<Mutex<AudioDetectionState>>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     alive: Arc<AtomicBool>,
+    streaming_sink: Arc<Mutex<Option<std_mpsc::Sender<Vec<f32>>>>>,
 ) {
     std::thread::spawn(move || {
         let _alive_guard = AliveGuard(alive.clone());
@@ -445,6 +469,7 @@ fn spawn_warm_capture_thread(
                 let app_ref = app_handle.clone();
                 let emit_ref = last_emit.clone();
                 let level_ref = smoothed_level.clone();
+                let sink_ref = streaming_sink.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _| {
@@ -452,7 +477,7 @@ fn spawn_warm_capture_thread(
                             let app_guard = app_ref.lock_or_recover();
                             push_mono_with_level(
                                 &samps, data, channels, |s| s, &app_guard, &emit_ref,
-                                &level_ref, &det, sample_rate,
+                                &level_ref, &det, sample_rate, &sink_ref,
                             );
                         }
                     },
@@ -467,6 +492,7 @@ fn spawn_warm_capture_thread(
                 let app_ref = app_handle.clone();
                 let emit_ref = last_emit.clone();
                 let level_ref = smoothed_level.clone();
+                let sink_ref = streaming_sink.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[i16], _| {
@@ -482,6 +508,7 @@ fn spawn_warm_capture_thread(
                                 &level_ref,
                                 &det,
                                 sample_rate,
+                                &sink_ref,
                             );
                         }
                     },
@@ -496,6 +523,7 @@ fn spawn_warm_capture_thread(
                 let app_ref = app_handle.clone();
                 let emit_ref = last_emit.clone();
                 let level_ref = smoothed_level.clone();
+                let sink_ref = streaming_sink.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[u16], _| {
@@ -511,6 +539,7 @@ fn spawn_warm_capture_thread(
                                 &level_ref,
                                 &det,
                                 sample_rate,
+                                &sink_ref,
                             );
                         }
                     },
@@ -570,6 +599,7 @@ fn push_mono_with_level<T: Copy>(
     smoothed_level: &Arc<Mutex<f32>>,
     detection: &Arc<Mutex<AudioDetectionState>>,
     sample_rate: u32,
+    streaming_sink: &Arc<Mutex<Option<std_mpsc::Sender<Vec<f32>>>>>,
 ) {
     let mut chunk = Vec::with_capacity(data.len() / channels.max(1));
     if channels > 1 {
@@ -600,6 +630,10 @@ fn push_mono_with_level<T: Copy>(
             *last_guard = std::time::Instant::now();
             let _ = a.emit("capture-level", serde_json::json!({ "level": smoothed }));
         }
+    }
+
+    if let Some(ref tx) = *streaming_sink.lock_or_recover() {
+        let _ = tx.send(chunk.clone());
     }
 
     let mut guard = buf.lock_or_recover();

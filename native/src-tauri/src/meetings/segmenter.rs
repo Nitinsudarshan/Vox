@@ -219,6 +219,11 @@ impl Segmenter {
         done
     }
 
+    /// Feeds mono 16 kHz audio without requiring channel separation slices.
+    pub fn push_mono(&mut self, samples: &[f32]) -> Vec<SpeechSegment> {
+        self.push(samples, &[], &[])
+    }
+
     /// Closes whatever is open, returning the final segment if it qualifies.
     ///
     /// Called when capture stops. A partial frame at the end is padded rather
@@ -432,6 +437,152 @@ fn classify_channel(mic_sum_sq: f32, sys_sum_sq: f32, samples: usize) -> Segment
         SegmentChannel::System
     } else {
         SegmentChannel::Mixed
+    }
+}
+
+/// Why a completed audio segment was closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentCloseReason {
+    /// Speech ended due to acoustic silence / pause.
+    Pause,
+    /// Hit maximum segment duration ceiling mid-turn.
+    MaxDuration,
+    /// Closed explicitly on manual hotkey release.
+    ManualRelease,
+    /// Closed via pipeline flush or end of stream.
+    Flush,
+}
+
+impl SegmentCloseReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::MaxDuration => "max_duration",
+            Self::ManualRelease => "manual_release",
+            Self::Flush => "flush",
+        }
+    }
+}
+
+/// A completed audio segment produced by the streaming segmenter.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CompletedAudioSegment {
+    pub session_id: String,
+    pub segment_id: u64,
+    pub start_sample: u64,
+    pub end_sample: u64,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub duration_ms: u64,
+    #[serde(skip)]
+    pub audio: Vec<f32>,
+    pub reason_closed: SegmentCloseReason,
+    pub hangover_ms: u64,
+    pub audio_stats: crate::capture::AudioStats,
+}
+
+impl CompletedAudioSegment {
+    pub fn duration_seconds(&self) -> f64 {
+        self.duration_ms as f64 / 1000.0
+    }
+}
+
+/// Generalized streaming speech segmenter for both meetings and dictation.
+///
+/// Wraps the underlying [`Segmenter`] to provide session-scoped, numbered
+/// [`CompletedAudioSegment`] instances tagged with distinct close reasons.
+pub struct StreamingSegmenter {
+    session_id: String,
+    inner: Segmenter,
+    next_segment_id: u64,
+}
+
+impl StreamingSegmenter {
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            inner: Segmenter::new(),
+            next_segment_id: 0,
+        }
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn is_in_speech(&self) -> bool {
+        self.inner.is_in_speech()
+    }
+
+    pub fn speech_state(&self) -> SpeechState {
+        self.inner.speech_state()
+    }
+
+    pub fn position_seconds(&self) -> f64 {
+        self.inner.position_seconds()
+    }
+
+    /// Feeds mixed multi-channel audio frames in, returning any completed segments.
+    pub fn push_mixed(&mut self, mixed: &[f32], mic: &[f32], sys: &[f32]) -> Vec<CompletedAudioSegment> {
+        let segments = self.inner.push(mixed, mic, sys);
+        segments
+            .into_iter()
+            .map(|s| self.convert_segment(s, false))
+            .collect()
+    }
+
+    /// Feeds mono 16 kHz audio frames in, returning any completed segments.
+    pub fn push(&mut self, samples: &[f32]) -> Vec<CompletedAudioSegment> {
+        let segments = self.inner.push_mono(samples);
+        segments
+            .into_iter()
+            .map(|s| self.convert_segment(s, false))
+            .collect()
+    }
+
+    /// Closes whatever is open, returning the final segment if it qualifies.
+    pub fn flush(&mut self, is_manual_release: bool) -> Vec<CompletedAudioSegment> {
+        let segments = self.inner.flush();
+        segments
+            .into_iter()
+            .map(|s| self.convert_segment(s, is_manual_release))
+            .collect()
+    }
+
+    fn convert_segment(&mut self, seg: SpeechSegment, is_manual_release: bool) -> CompletedAudioSegment {
+        let segment_id = self.next_segment_id;
+        self.next_segment_id += 1;
+
+        let reason_closed = match seg.end_reason {
+            TurnEnd::Silence => SegmentCloseReason::Pause,
+            TurnEnd::Ceiling => SegmentCloseReason::MaxDuration,
+            TurnEnd::Flush => {
+                if is_manual_release {
+                    SegmentCloseReason::ManualRelease
+                } else {
+                    SegmentCloseReason::Flush
+                }
+            }
+        };
+
+        let duration_ms = ((seg.duration_seconds() * 1000.0).round() as u64).max(1);
+        let start_sample = (seg.start_seconds * SEGMENT_SAMPLE_RATE as f64).round() as u64;
+        let end_sample = start_sample + seg.samples.len() as u64;
+
+        CompletedAudioSegment {
+            session_id: self.session_id.clone(),
+            segment_id,
+            start_sample,
+            end_sample,
+            start_seconds: seg.start_seconds,
+            end_seconds: seg.end_seconds,
+            duration_ms,
+            audio: seg.samples,
+            reason_closed,
+            hangover_ms: seg.hangover_ms,
+            audio_stats: seg.audio_stats,
+        }
     }
 }
 
@@ -819,5 +970,35 @@ mod tests {
             assert_eq!(a.samples.len(), e.samples.len());
             assert!((a.start_seconds - e.start_seconds).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn streaming_segmenter_lifecycle_and_reasons() {
+        let mut streaming = StreamingSegmenter::new("test-session-1");
+        assert_eq!(streaming.session_id(), "test-session-1");
+
+        // Calibration room silence + speech + pause
+        let mut audio = silence(0.5);
+        audio.extend(tone(1.5, 0.25));
+        audio.extend(silence(1.0));
+
+        let segs = streaming.push(&audio);
+        assert_eq!(segs.len(), 1);
+        let s = &segs[0];
+        assert_eq!(s.session_id, "test-session-1");
+        assert_eq!(s.segment_id, 0);
+        assert_eq!(s.reason_closed, SegmentCloseReason::Pause);
+        assert!(s.duration_ms > 0);
+        assert_eq!(s.audio.len() as u64, s.end_sample - s.start_sample);
+
+        // Manual flush at release
+        let speech2 = tone(0.8, 0.25);
+        let live_segs = streaming.push(&speech2);
+        assert!(live_segs.is_empty(), "turn still open without silence");
+
+        let flushed = streaming.flush(true);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].segment_id, 1);
+        assert_eq!(flushed[0].reason_closed, SegmentCloseReason::ManualRelease);
     }
 }

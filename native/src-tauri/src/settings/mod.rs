@@ -153,6 +153,11 @@ pub struct SttSettings {
     /// what the toggle is for — turn it off and re-record to compare.
     #[serde(default = "default_trim_meeting_audio_context", alias = "meetingTrimAudioContext")]
     pub meeting_trim_audio_context: bool,
+    /// Feature flag for running the dictation streaming pipeline in shadow mode.
+    /// In shadow mode, live PCM is segmented and transcribed in the background to
+    /// collect latency, backlog, and accuracy telemetry, but never alters production output.
+    #[serde(default, alias = "dictationStreamingShadow")]
+    pub dictation_streaming_shadow: bool,
 }
 
 fn default_trim_meeting_audio_context() -> bool {
@@ -178,6 +183,7 @@ impl Default for SttSettings {
             meeting_model_id: None,
             dictation_engine: None,
             meeting_trim_audio_context: default_trim_meeting_audio_context(),
+            dictation_streaming_shadow: false,
         }
     }
 }

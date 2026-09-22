@@ -646,6 +646,15 @@ pub struct SttLanguageConfig {
     pub translate: bool,
 }
 
+impl Default for SttLanguageConfig {
+    fn default() -> Self {
+        Self {
+            whisper_language: Some("en".to_string()),
+            translate: false,
+        }
+    }
+}
+
 impl SttLanguageConfig {
     /// Resolves the Whisper STT language configuration for one window class.
     ///
@@ -1205,7 +1214,7 @@ pub struct SttUtterance {
 }
 
 /// Diagnostic metadata recorded for an STT transcription session.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SttSessionDiagnostics {
     pub model_path: String,
     pub audio_duration_seconds: f32,
