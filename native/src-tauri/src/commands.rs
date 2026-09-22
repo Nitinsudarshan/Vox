@@ -4050,6 +4050,185 @@ pub async fn add_relationship(
     Ok(rel)
 }
 
+// ---------------------------------------------------------------------------
+// Dictation Test Lab Benchmarking Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_available_test_models(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::capture::benchmark::AvailableModelTarget>, CommandError> {
+    let models_dir = state.config_dir.join("models");
+    Ok(crate::capture::benchmark::discover_available_models(&models_dir))
+}
+
+#[tauri::command]
+pub async fn get_available_cleanup_styles() -> Result<Vec<crate::capture::benchmark::CleanupStyleInfo>, CommandError> {
+    Ok(crate::capture::benchmark::get_available_cleanup_styles())
+}
+
+#[tauri::command]
+pub async fn start_dictation_test_recording(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    if state.recorder.is_active() {
+        return Err(CommandError::new(
+            "RECORDER_ACTIVE",
+            "A recording session is already active.",
+        ));
+    }
+    let audio_dir = state.config_dir.join("audio");
+    state
+        .recorder
+        .start("dictation_test", &audio_dir, Some(app))
+        .map_err(|e| CommandError::new("CAPTURE_FAILED", &e.to_string()))
+}
+
+#[tauri::command]
+pub async fn stop_dictation_test_recording(
+    app: AppHandle,
+    request: crate::capture::benchmark::RunDictationTestRequest,
+    state: State<'_, AppState>,
+) -> Result<crate::capture::benchmark::DictationTestRun, CommandError> {
+    let t_stop = std::time::Instant::now();
+    let captured = state
+        .recorder
+        .stop()
+        .await
+        .map_err(|e| CommandError::new("CAPTURE_STOP_FAILED", &e.to_string()))?;
+    let t_audio_ready = std::time::Instant::now();
+
+    if !captured.had_audio || captured.samples.is_empty() {
+        return Err(CommandError::new(
+            "NO_SPEECH",
+            "No speech detected in recording session.",
+        ));
+    }
+
+    let settings = state.settings.lock_or_recover().clone();
+    crate::capture::benchmark::execute_benchmark_run(
+        Some(&app),
+        &state.config_dir,
+        &captured.samples,
+        &captured.audio_path,
+        t_stop,
+        t_audio_ready,
+        request,
+        settings,
+    )
+    .await
+    .map_err(|e| CommandError::new("BENCHMARK_FAILED", &e))
+}
+
+#[tauri::command]
+pub async fn run_dictation_test_on_audio(
+    app: AppHandle,
+    audio_path: String,
+    request: crate::capture::benchmark::RunDictationTestRequest,
+    state: State<'_, AppState>,
+) -> Result<crate::capture::benchmark::DictationTestRun, CommandError> {
+    let path = std::path::PathBuf::from(&audio_path);
+    if !path.is_file() {
+        return Err(CommandError::new("FILE_NOT_FOUND", "Audio file not found."));
+    }
+
+    let path_clone = path.clone();
+    let (raw_samples, sample_rate) = tokio::task::spawn_blocking(move || -> Result<(Vec<f32>, u32), String> {
+        let mut reader = hound::WavReader::open(&path_clone)
+            .map_err(|e| format!("Failed to open WAV: {}", e))?;
+        let spec = reader.spec();
+        let raw_samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
+            hound::SampleFormat::Int => reader
+                .samples::<i16>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / i16::MAX as f32)
+                .collect(),
+        };
+        Ok((raw_samples, spec.sample_rate))
+    })
+    .await
+    .map_err(|e| CommandError::new("IO_ERROR", &e.to_string()))?
+    .map_err(|e| CommandError::new("WAV_ERROR", &e))?;
+
+    let samples = if sample_rate != 16_000 {
+        crate::capture::resample_to_16k_mono(&raw_samples, sample_rate)
+    } else {
+        raw_samples
+    };
+
+    let t_now = std::time::Instant::now();
+    let settings = state.settings.lock_or_recover().clone();
+
+    crate::capture::benchmark::execute_benchmark_run(
+        Some(&app),
+        &state.config_dir,
+        &samples,
+        &audio_path,
+        t_now,
+        t_now,
+        request,
+        settings,
+    )
+    .await
+    .map_err(|e| CommandError::new("BENCHMARK_FAILED", &e))
+}
+
+#[tauri::command]
+pub async fn get_dictation_test_history(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::capture::benchmark::DictationTestSummary>, CommandError> {
+    crate::capture::benchmark::list_dictation_test_history(&state.config_dir)
+        .map_err(|e| CommandError::new("STORAGE_ERROR", &e))
+}
+
+#[tauri::command]
+pub async fn get_dictation_test_run(
+    test_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::capture::benchmark::DictationTestRun>, CommandError> {
+    crate::capture::benchmark::load_dictation_test_run(&state.config_dir, &test_id)
+        .map_err(|e| CommandError::new("STORAGE_ERROR", &e))
+}
+
+#[tauri::command]
+pub async fn delete_dictation_test_run(
+    test_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    crate::capture::benchmark::delete_dictation_test_run(&state.config_dir, &test_id)
+        .map_err(|e| CommandError::new("STORAGE_ERROR", &e))
+}
+
+#[tauri::command]
+pub async fn export_dictation_test_report(
+    test_id: String,
+    format: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    let run = crate::capture::benchmark::load_dictation_test_run(&state.config_dir, &test_id)
+        .map_err(|e| CommandError::new("STORAGE_ERROR", &e))?
+        .ok_or_else(|| CommandError::new("NOT_FOUND", "Test run not found"))?;
+
+    if format.to_lowercase() == "json" {
+        serde_json::to_string_pretty(&run)
+            .map_err(|e| CommandError::new("SERIALIZATION_ERROR", &e.to_string()))
+    } else {
+        Ok(crate::capture::benchmark::format_markdown_report(&run))
+    }
+}
+
+#[tauri::command]
+pub async fn inject_dictation_test_result(
+    text: String,
+) -> Result<(), CommandError> {
+    crate::hotkeys::injection::copy_to_clipboard(&text)
+        .map_err(|e| CommandError::new("CLIPBOARD_FAILED", &e.to_string()))?;
+    crate::hotkeys::injection::paste_from_clipboard()
+        .map_err(|e| CommandError::new("INJECTION_FAILED", &e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

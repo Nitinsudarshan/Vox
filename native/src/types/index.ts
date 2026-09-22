@@ -1302,3 +1302,5 @@ export interface DecisionRecord {
   created_at: string;
   updated_at: string;
 }
+
+export * from './benchmark';
