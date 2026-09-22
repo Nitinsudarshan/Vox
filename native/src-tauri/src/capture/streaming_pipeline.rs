@@ -44,7 +44,10 @@ pub struct SttTimingMetrics {
 pub struct FaithfulTimingMetrics {
     pub queue_wait_ms: u128,
     pub faithful_ms: u128,
-    pub ttft_ms: u128,
+    /// Time to first token. `None` because `rewrite::propose` is a
+    /// non-streaming call: there is no first token to observe, only the
+    /// complete response, so any number here would be invented.
+    pub ttft_ms: Option<u128>,
 }
 
 /// A cached segment result stored during the active dictation session.
@@ -86,7 +89,7 @@ pub struct ShadowSegmentTelemetry {
     pub stt_ms: u128,
     pub faithful_queue_wait_ms: u128,
     pub faithful_ms: u128,
-    pub faithful_ttft_ms: u128,
+    pub faithful_ttft_ms: Option<u128>,
     pub total_segment_processing_ms: u128,
     pub worker_backlog_depth: usize,
     pub faithful_queue_depth: usize,
@@ -173,7 +176,6 @@ pub struct ShadowDictationRunner {
     engine: SttEngine,
     llm_client: Arc<LLMClient>,
     samples_pushed: usize,
-    stt_backlog_depth: Arc<AtomicU64>,
     faithful_backlog_depth: Arc<AtomicU64>,
 }
 
@@ -188,7 +190,6 @@ impl ShadowDictationRunner {
             engine,
             llm_client: Arc::new(LLMClient::new(provider)),
             samples_pushed: 0,
-            stt_backlog_depth: Arc::new(AtomicU64::new(0)),
             faithful_backlog_depth: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -200,24 +201,38 @@ impl ShadowDictationRunner {
     pub async fn push_audio(&mut self, samples: &[f32]) {
         self.samples_pushed += samples.len();
         let segments = self.segmenter.push(samples);
-        for segment in segments {
-            self.process_segment(segment).await;
-        }
+        self.process_batch(segments).await;
     }
 
     /// Flushes the segmenter (e.g. at hotkey release) and processes any remaining tail audio.
     pub async fn flush_and_process_tail(&mut self, is_manual_release: bool) -> Option<CompletedAudioSegment> {
         let segments = self.segmenter.flush(is_manual_release);
-        let mut tail_segment = None;
-        for segment in segments {
-            tail_segment = Some(segment.clone());
-            self.process_segment(segment).await;
-        }
+        let tail_segment = segments.last().cloned();
+        self.process_batch(segments).await;
         tail_segment
     }
 
+    /// Decodes a batch of completed segments serially, in order.
+    ///
+    /// Every segment in the batch is enqueued at the same instant, so a
+    /// segment's STT queue wait is the time it spent behind the ones decoded
+    /// before it, and its backlog depth is how many segments were still
+    /// waiting (itself included) when its decode began.
+    async fn process_batch(&self, segments: Vec<CompletedAudioSegment>) {
+        let enqueued_at = Instant::now();
+        let total = segments.len();
+        for (index, segment) in segments.into_iter().enumerate() {
+            self.process_segment(segment, enqueued_at, total - index).await;
+        }
+    }
+
     /// Internal serial STT and Faithful processing for a completed segment.
-    async fn process_segment(&self, segment: CompletedAudioSegment) {
+    async fn process_segment(
+        &self,
+        segment: CompletedAudioSegment,
+        enqueued_at: Instant,
+        worker_backlog_depth: usize,
+    ) {
         let created_at = Instant::now();
         let segment_id = segment.segment_id;
         let duration_ms = segment.duration_ms;
@@ -226,11 +241,9 @@ impl ShadowDictationRunner {
         let start_seconds = segment.start_seconds;
         let end_seconds = segment.end_seconds;
 
-        self.stt_backlog_depth.fetch_add(1, Ordering::SeqCst);
-        let worker_backlog_depth = self.stt_backlog_depth.load(Ordering::SeqCst) as usize;
-
         // 1. Serial STT decode
         let t_stt_start = Instant::now();
+        let stt_queue_wait_ms = t_stt_start.duration_since(enqueued_at).as_millis();
         let engine = self.engine.clone();
         let audio = segment.audio.clone();
         let model_path = self.config.model_path.clone();
@@ -249,7 +262,6 @@ impl ShadowDictationRunner {
         .unwrap_or_else(|e| Err(crate::capture::stt::SttError::TranscriptionFailed(e.to_string())));
 
         let stt_ms = t_stt_start.elapsed().as_millis();
-        self.stt_backlog_depth.fetch_sub(1, Ordering::SeqCst);
 
         let raw_text = match decode_res {
             Ok((t, _)) => t.trim().to_string(),
@@ -266,7 +278,7 @@ impl ShadowDictationRunner {
         };
 
         let stt_timing = SttTimingMetrics {
-            queue_wait_ms: 0,
+            queue_wait_ms: stt_queue_wait_ms,
             stt_ms,
             rtf,
         };
@@ -310,10 +322,12 @@ impl ShadowDictationRunner {
             let faithful_backlog = self.faithful_backlog_depth.clone();
             let style = self.config.cleanup_style;
             let input_text = raw_text;
+            let t_spawned = Instant::now();
+            faithful_backlog.fetch_add(1, Ordering::SeqCst);
 
             tokio::spawn(async move {
-                faithful_backlog.fetch_add(1, Ordering::SeqCst);
                 let t_start = Instant::now();
+                let queue_wait_ms = t_start.duration_since(t_spawned).as_millis();
                 let proposal = rewrite::propose(client.as_ref(), &input_text, style).await;
                 let faithful_ms = t_start.elapsed().as_millis();
                 faithful_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -328,9 +342,9 @@ impl ShadowDictationRunner {
                     segment_id,
                     cleaned,
                     FaithfulTimingMetrics {
-                        queue_wait_ms: 0,
+                        queue_wait_ms,
                         faithful_ms,
-                        ttft_ms: 35, // Typical warm TTFT observed in Phase 3
+                        ttft_ms: None,
                     },
                 );
             });
@@ -420,8 +434,7 @@ impl ShadowDictationRunner {
                 faithful_ttft_ms: seg
                     .faithful_timing
                     .as_ref()
-                    .map(|t| t.ttft_ms)
-                    .unwrap_or(0),
+                    .and_then(|t| t.ttft_ms),
                 total_segment_processing_ms: seg.total_segment_processing_ms,
                 worker_backlog_depth: seg.worker_backlog_depth,
                 faithful_queue_depth: seg.faithful_queue_depth,
@@ -543,7 +556,7 @@ mod tests {
             FaithfulTimingMetrics {
                 queue_wait_ms: 10,
                 faithful_ms: 250,
-                ttft_ms: 30,
+                ttft_ms: None,
             },
         );
 

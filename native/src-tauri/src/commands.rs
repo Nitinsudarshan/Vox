@@ -4085,6 +4085,23 @@ pub async fn start_dictation_test_recording(
         .map_err(|e| CommandError::new("CAPTURE_FAILED", &e.to_string()))
 }
 
+/// Discards an in-progress Test Lab recording without benchmarking it, e.g.
+/// when the user leaves the page mid-recording. Only a `dictation_test`
+/// session is touched, so this can never cut off hotkey dictation or a meeting.
+#[tauri::command]
+pub async fn cancel_dictation_test_recording(state: State<'_, AppState>) -> Result<bool, CommandError> {
+    if state.recorder.active_mode().as_deref() != Some("dictation_test") {
+        return Ok(false);
+    }
+    let captured = state
+        .recorder
+        .stop()
+        .await
+        .map_err(|e| CommandError::new("CAPTURE_STOP_FAILED", &e.to_string()))?;
+    let _ = std::fs::remove_file(&captured.audio_path);
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn stop_dictation_test_recording(
     app: AppHandle,
@@ -4133,30 +4150,20 @@ pub async fn run_dictation_test_on_audio(
         return Err(CommandError::new("FILE_NOT_FOUND", "Audio file not found."));
     }
 
+    // Shared decoder: honours bit depth (8/16/24/32-bit int, float) and
+    // averages channels before resampling, so stereo and 24-bit files decode
+    // correctly instead of garbled or empty.
     let path_clone = path.clone();
-    let (raw_samples, sample_rate) = tokio::task::spawn_blocking(move || -> Result<(Vec<f32>, u32), String> {
-        let mut reader = hound::WavReader::open(&path_clone)
-            .map_err(|e| format!("Failed to open WAV: {}", e))?;
-        let spec = reader.spec();
-        let raw_samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
-            hound::SampleFormat::Int => reader
-                .samples::<i16>()
-                .filter_map(|s| s.ok())
-                .map(|s| s as f32 / i16::MAX as f32)
-                .collect(),
-        };
-        Ok((raw_samples, spec.sample_rate))
+    let samples = tokio::task::spawn_blocking(move || {
+        crate::meetings::checkpoint::read_wav_mono_16k(&path_clone).map_err(|e| format!("Failed to read WAV: {}", e))
     })
     .await
     .map_err(|e| CommandError::new("IO_ERROR", &e.to_string()))?
     .map_err(|e| CommandError::new("WAV_ERROR", &e))?;
 
-    let samples = if sample_rate != 16_000 {
-        crate::capture::resample_to_16k_mono(&raw_samples, sample_rate)
-    } else {
-        raw_samples
-    };
+    if samples.is_empty() {
+        return Err(CommandError::new("WAV_ERROR", "WAV file contains no decodable audio."));
+    }
 
     let t_now = std::time::Instant::now();
     let settings = state.settings.lock_or_recover().clone();

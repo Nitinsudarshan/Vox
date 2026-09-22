@@ -516,6 +516,7 @@ pub fn run() {
             commands::get_available_cleanup_styles,
             commands::start_dictation_test_recording,
             commands::stop_dictation_test_recording,
+            commands::cancel_dictation_test_recording,
             commands::run_dictation_test_on_audio,
             commands::get_dictation_test_history,
             commands::get_dictation_test_run,
