@@ -28,7 +28,7 @@ use crate::capture::recognizer::{
 };
 use crate::capture::recognizers::{ParakeetRecognizer, WhisperRecognizer};
 use crate::capture::rewrite::{self, CleanupStyle, DiffSpan};
-use crate::capture::stt::{SttEngine, WhisperDecodingConfig};
+use crate::capture::stt::{SttEngine, SttLanguageConfig, SttWindow, WhisperDecodingConfig};
 use crate::providers::{LLMClient, ProviderType};
 use crate::settings::AppSettings;
 
@@ -416,6 +416,48 @@ fn format_instant_ts(instant: Instant, reference_instant: Instant, reference_sys
     format!("{:02}:{:02}:{:02}.{:03}", hours, mins, s, millis)
 }
 
+/// A result for a model that never produced a transcript.
+fn failed_model_result(
+    target: &AvailableModelTarget,
+    error: String,
+    t_recording_stop: Instant,
+    t_audio_ready: Instant,
+    model_test_start: Instant,
+    now_system: SystemTime,
+) -> DictationTestModelResult {
+    DictationTestModelResult {
+        target_id: target.target_id.clone(),
+        engine_id: target.engine_id.clone(),
+        model_name: target.model_name.clone(),
+        config: ModelExecutionConfig {
+            engine: target.engine_id.clone(),
+            model_name: target.model_name.clone(),
+            model_filename: target.model_filename.clone(),
+            language: None,
+            task: "transcribe".to_string(),
+            decoding_strategy: "failed".to_string(),
+            temperature: 0.0,
+            initial_prompt: None,
+            threads: None,
+            backend: "unknown".to_string(),
+        },
+        success: false,
+        error: Some(error),
+        raw_transcript: String::new(),
+        cleanup_results: BTreeMap::new(),
+        timings: DictationModelTimings {
+            recording_to_audio_ready_ms: t_audio_ready.duration_since(t_recording_stop).as_millis(),
+            queue_wait_ms: model_test_start.duration_since(t_audio_ready).as_millis(),
+            model_start_ts: format_instant_ts(model_test_start, t_recording_stop, now_system),
+            ..Default::default()
+        },
+        accuracy: None,
+        char_count: 0,
+        word_count: 0,
+        segment_count: 0,
+    }
+}
+
 /// Executes an isolated test pass for a single target model, recording all timing and accuracy metrics.
 #[allow(clippy::too_many_arguments)]
 async fn execute_single_model(
@@ -439,6 +481,10 @@ async fn execute_single_model(
     let samples_vec = samples.to_vec();
     let lang_clone = language_to_use.clone();
     let stt_settings = settings.stt.clone();
+    // Dictionary words and the custom initial prompt, exactly as hotkey
+    // dictation primes Whisper; without it the benchmark measures a
+    // recognizer that has never seen the user's vocabulary.
+    let stt_prompt = settings.build_stt_prompt();
 
     // 1. Run STT Inference in blocking task
     let stt_task_result = tokio::task::spawn_blocking(move || {
@@ -446,7 +492,10 @@ async fn execute_single_model(
 
         let (recognition_res, config, call_dur) = match target_clone.engine_id.as_str() {
             "whisper" => {
-                let dec_config = WhisperDecodingConfig::for_dictation(&stt_settings);
+                let mut dec_config = WhisperDecodingConfig::for_dictation(&stt_settings);
+                if let Some(prompt) = stt_prompt {
+                    dec_config.initial_prompt = Some(prompt);
+                }
                 let config_snapshot = ModelExecutionConfig {
                     engine: "Whisper".to_string(),
                     model_name: target_clone.model_name.clone(),
@@ -534,37 +583,14 @@ async fn execute_single_model(
         Ok(tuple) => tuple,
         Err(e) => {
             tracing::error!("STT join error on {}: {}", target.model_name, e);
-            return DictationTestModelResult {
-                target_id: target.target_id.clone(),
-                engine_id: target.engine_id.clone(),
-                model_name: target.model_name.clone(),
-                config: ModelExecutionConfig {
-                    engine: target.engine_id.clone(),
-                    model_name: target.model_name.clone(),
-                    model_filename: target.model_filename.clone(),
-                    language: None,
-                    task: "transcribe".to_string(),
-                    decoding_strategy: "failed".to_string(),
-                    temperature: 0.0,
-                    initial_prompt: None,
-                    threads: None,
-                    backend: "unknown".to_string(),
-                },
-                success: false,
-                error: Some(e.to_string()),
-                raw_transcript: String::new(),
-                cleanup_results: BTreeMap::new(),
-                timings: DictationModelTimings {
-                    recording_to_audio_ready_ms: audio_prep_ms,
-                    queue_wait_ms,
-                    model_start_ts: format_instant_ts(model_test_start, t_recording_stop, now_system),
-                    ..Default::default()
-                },
-                accuracy: None,
-                char_count: 0,
-                word_count: 0,
-                segment_count: 0,
-            };
+            return failed_model_result(
+                target,
+                e.to_string(),
+                t_recording_stop,
+                t_audio_ready,
+                model_test_start,
+                now_system,
+            );
         }
     };
 
@@ -708,17 +734,14 @@ async fn execute_single_model(
         production_e2e_by_style.insert(style_name.clone(), style_e2e);
     }
 
-    // Exact selected production cleanup duration lookup
+    // Exact selected production cleanup duration lookup. The run always
+    // includes the production style (see `execute_benchmark_run`), so a miss
+    // here means cleanup was skipped (failed or empty transcript), which is
+    // also what production would do — never substitute another style's time.
     let prod_cleanup_duration_ms = cleanup_results
         .get(selected_prod_style)
         .map(|c| c.duration_ms)
-        .unwrap_or_else(|| {
-            cleanup_results
-                .get("faithful")
-                .or_else(|| cleanup_results.get("raw"))
-                .map(|c| c.duration_ms)
-                .unwrap_or(0)
-        });
+        .unwrap_or(0);
 
     let production_e2e_ms = audio_prep_ms
         + model_load_ms
@@ -898,7 +921,7 @@ pub async fn execute_benchmark_run(
     }
 
     // Parse requested cleanup styles
-    let cleanup_styles: Vec<CleanupStyle> = if request.selected_cleanup_styles.is_empty() {
+    let mut cleanup_styles: Vec<CleanupStyle> = if request.selected_cleanup_styles.is_empty() {
         vec![CleanupStyle::Raw, CleanupStyle::Faithful]
     } else {
         request
@@ -908,20 +931,29 @@ pub async fn execute_benchmark_run(
             .collect()
     };
 
+    // Production E2E is only honest if the production style actually ran, so
+    // it is always part of the run even when not selected for comparison.
+    let production_style = CleanupStyle::from_setting(
+        request.production_cleanup_style.as_deref().unwrap_or("faithful"),
+    );
+    if !cleanup_styles.contains(&production_style) {
+        cleanup_styles.push(production_style);
+    }
+
     let mut model_results = Vec::new();
     let total_models = targets_to_run.len();
     let run_start_instant = Instant::now();
 
-    let selected_prod_style = request
-        .production_cleanup_style
-        .as_deref()
-        .unwrap_or("faithful")
-        .to_lowercase();
+    let selected_prod_style = production_style.as_str().to_string();
 
-    let language_to_use = request
-        .language_override
-        .clone()
-        .or_else(|| settings.language.spoken_languages.first().cloned());
+    // Resolve the language exactly as hotkey dictation does (short-form window
+    // pins the primary dictation language), with the request's override on top.
+    let language_to_use = SttLanguageConfig::from_settings_with_override(
+        &settings.language,
+        SttWindow::ShortForm,
+        request.language_override.as_deref().unwrap_or(""),
+    )
+    .whisper_language;
 
     let concurrency = request.concurrency.unwrap_or(1).max(1);
 
@@ -973,44 +1005,66 @@ pub async fn execute_benchmark_run(
             set.spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore acquired");
                 let model_test_start = Instant::now();
-                let res = execute_single_model(
-                    &target,
-                    &samples_vec,
-                    audio_duration_seconds,
-                    t_recording_stop,
-                    t_audio_ready,
-                    model_test_start,
-                    lang_opt,
-                    &styles_vec,
-                    &prod_style,
-                    ref_transcript.as_deref(),
-                    &app_settings,
-                    now_system,
-                )
-                .await;
+                // Run the model in its own task so a panic comes back as a
+                // JoinError we can attribute to this model, instead of
+                // silently dropping it from the results.
+                let failure_target = target.clone();
+                let inner = tokio::spawn(async move {
+                    execute_single_model(
+                        &target,
+                        &samples_vec,
+                        audio_duration_seconds,
+                        t_recording_stop,
+                        t_audio_ready,
+                        model_test_start,
+                        lang_opt,
+                        &styles_vec,
+                        &prod_style,
+                        ref_transcript.as_deref(),
+                        &app_settings,
+                        now_system,
+                    )
+                    .await
+                });
+                let res = match inner.await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        tracing::error!("Benchmark task crashed on {}: {}", failure_target.model_name, e);
+                        failed_model_result(
+                            &failure_target,
+                            format!("Benchmark task crashed: {e}"),
+                            t_recording_stop,
+                            t_audio_ready,
+                            model_test_start,
+                            now_system,
+                        )
+                    }
+                };
                 (index, res)
             });
         }
 
+        // Emit progress as each model finishes, not after all of them.
         let mut completed_items = Vec::new();
-        while let Some(res) = set.join_next().await {
-            if let Ok((idx, model_res)) = res {
-                completed_items.push((idx, model_res));
-            }
-        }
-        completed_items.sort_by_key(|(idx, _)| *idx);
-        for (idx, res) in completed_items {
+        while let Some(joined) = set.join_next().await {
+            let Ok((idx, model_res)) = joined else {
+                // The outer task only awaits the semaphore and the inner
+                // task, so it cannot fail short of runtime shutdown.
+                continue;
+            };
             let progress_payload = DictationTestProgressPayload {
                 test_id: test_id.clone(),
-                current_model_index: idx + 1,
+                current_model_index: completed_items.len() + 1,
                 total_models,
-                completed_model: res.clone(),
+                completed_model: model_res.clone(),
             };
             if let Some(app) = app {
                 let _ = app.emit(DICTATION_TEST_PROGRESS_EVENT, &progress_payload);
             }
-            model_results.push(res);
+            completed_items.push((idx, model_res));
         }
+        completed_items.sort_by_key(|(idx, _)| *idx);
+        model_results.extend(completed_items.into_iter().map(|(_, res)| res));
     }
 
     let total_run_duration_ms = run_start_instant.elapsed().as_millis();
@@ -1046,17 +1100,29 @@ fn test_runs_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("dictation_tests").join("runs")
 }
 
+/// Path of a stored run. `test_id` arrives from the frontend, so it is
+/// restricted to the characters a generated UUID uses; anything else (a `/`,
+/// `..`, a drive prefix) could otherwise reach files outside the runs folder.
+fn test_run_path(config_dir: &Path, test_id: &str) -> Result<PathBuf, String> {
+    let valid = !test_id.is_empty()
+        && test_id.len() <= 64
+        && test_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid {
+        return Err(format!("Invalid test id: {test_id:?}"));
+    }
+    Ok(test_runs_dir(config_dir).join(format!("{test_id}.json")))
+}
+
 pub fn save_dictation_test_run(config_dir: &Path, run: &DictationTestRun) -> Result<(), String> {
-    let dir = test_runs_dir(config_dir);
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file_path = dir.join(format!("{}.json", run.test_id));
+    let file_path = test_run_path(config_dir, &run.test_id)?;
+    fs::create_dir_all(test_runs_dir(config_dir)).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(run).map_err(|e| e.to_string())?;
     fs::write(file_path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 pub fn load_dictation_test_run(config_dir: &Path, test_id: &str) -> Result<Option<DictationTestRun>, String> {
-    let file_path = test_runs_dir(config_dir).join(format!("{}.json", test_id));
+    let file_path = test_run_path(config_dir, test_id)?;
     if !file_path.is_file() {
         return Ok(None);
     }
@@ -1126,7 +1192,7 @@ pub fn list_dictation_test_history(config_dir: &Path) -> Result<Vec<DictationTes
 }
 
 pub fn delete_dictation_test_run(config_dir: &Path, test_id: &str) -> Result<bool, String> {
-    let file_path = test_runs_dir(config_dir).join(format!("{}.json", test_id));
+    let file_path = test_run_path(config_dir, test_id)?;
     if file_path.is_file() {
         fs::remove_file(file_path).map_err(|e| e.to_string())?;
         Ok(true)
@@ -1263,6 +1329,19 @@ mod tests {
         assert!(!models.is_empty(), "Should discover Whisper catalogue entries and Parakeet");
         assert!(models.iter().any(|m| m.engine_id == "whisper"));
         assert!(models.iter().any(|m| m.engine_id == "parakeet"));
+    }
+
+    #[test]
+    fn test_run_path_rejects_ids_that_escape_the_runs_folder() {
+        let dir = Path::new("/cfg");
+        for bad in ["", "../../settings", "..", "a/b", "a\\b", "C:evil", "x.json"] {
+            assert!(test_run_path(dir, bad).is_err(), "accepted {bad:?}");
+        }
+        let id = "3f2b8c1e-7d4a-4e5b-9c6d-0a1b2c3d4e5f";
+        assert_eq!(
+            test_run_path(dir, id).unwrap(),
+            dir.join("dictation_tests").join("runs").join(format!("{id}.json"))
+        );
     }
 
     #[test]

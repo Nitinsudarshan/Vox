@@ -72,6 +72,23 @@ export const DictationTestLabPage: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isRecordingRef = useRef(false);
+
+  // Leaving the page mid-recording must release the recorder, or hotkey
+  // dictation and meetings fail with an active session until restart.
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    return () => {
+      if (isRecordingRef.current) {
+        invoke('cancel_dictation_test_recording').catch(() => {
+          // Non-fatal: nothing more we can do after unmount
+        });
+      }
+    };
+  }, []);
 
   // 1. Initial Discovery
   useEffect(() => {
