@@ -1,5 +1,6 @@
 mod ollama_manager;
 
+pub mod secrets;
 pub mod ollama_install;
 
 pub use ollama_manager::{

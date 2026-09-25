@@ -89,11 +89,16 @@ To configure the official Vox Desktop Client ID in Google Cloud:
 ## 3. Configuring the Client ID in Vox
 
 ### Production / Environment Builds
-Set the environment variable at build or runtime:
+Set the environment variables at build or run time (`oauth/config.rs`):
 ```bash
 # In .env or CI build environment
-Vox_GOOGLE_CLIENT_ID="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+VOX_GOOGLE_CLIENT_ID="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+VOX_GOOGLE_CLIENT_SECRET="GOCSPX-..."
 ```
+The pre-rename `RELAY_GOOGLE_CLIENT_ID` / `RELAY_GOOGLE_CLIENT_SECRET` names
+are still read as a fallback. Google's token endpoint requires the secret even
+for desktop clients; it treats a desktop client secret as non-confidential,
+which is the only reason it may be baked in at build time.
 
 ### Developer Setting Override (In-App)
 In the Vox application:

@@ -42,6 +42,7 @@ import type {
   RunDictationTestRequest,
   DiffSpan,
 } from '@/types/benchmark';
+import type { AppSettings } from '@/types';
 
 export const DictationTestLabPage: React.FC = () => {
   // Available hardware/engine discovery
@@ -52,7 +53,9 @@ export const DictationTestLabPage: React.FC = () => {
   // User selections
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const [selectedCleanupStyles, setSelectedCleanupStyles] = useState<string[]>(['raw', 'faithful', 'clean', 'polished', 'concise']);
-  const [productionCleanupStyle, setProductionCleanupStyle] = useState<string>('faithful');
+  // Seeded from the user's own setting below, so "production" means what
+  // their dictation actually does.
+  const [productionCleanupStyle, setProductionCleanupStyle] = useState<string>('raw');
   const [referenceTranscript, setReferenceTranscript] = useState('');
   const [testLabel, setTestLabel] = useState('');
 
@@ -102,6 +105,14 @@ export const DictationTestLabPage: React.FC = () => {
 
         setAvailableModels(models);
         setAvailableCleanupStyles(styles);
+
+        try {
+          const appSettings = await invoke<AppSettings>('get_settings');
+          const configured = appSettings?.stt?.cleanup_style || appSettings?.stt?.cleanupStyle;
+          if (configured) setProductionCleanupStyle(configured);
+        } catch {
+          // Keep the default: the comparison still runs, against Raw.
+        }
 
         // Default behaviour per product requirement: ALL available (installed & compiled-in) models selected by default
         const installedIds = models

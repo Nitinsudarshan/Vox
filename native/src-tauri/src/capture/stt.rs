@@ -277,9 +277,17 @@ pub fn dictation_model_filename(stt_settings: &crate::settings::SttSettings) -> 
     }
 }
 
-/// Resolves the effective model path for Universal Dictation based on the user's configured model or quality preference.
-/// In `Fast` mode, defaults to `ggml-base.bin` (~0.8s latency); in `Accurate` mode, defaults to `ggml-small.bin` (~2.4s latency).
-pub async fn resolve_dictation_model_path(
+/// The dictation model the settings resolve to, if it is already on disk.
+///
+/// An explicitly configured model wins — by its path, or by its filename in
+/// `models_dir`. Otherwise the quality preset picks: `Fast` is
+/// `ggml-base.bin`, falling back to `ggml-small.bin` when only that is
+/// installed; `Accurate` is `ggml-small.bin`.
+///
+/// Synchronous and side-effect free, so a caller can find out *before* the
+/// user is waiting whether [`resolve_dictation_model_path`] is about to
+/// download something.
+pub fn installed_dictation_model_path(
     models_dir: &Path,
     stt_settings: &crate::settings::SttSettings,
 ) -> Option<String> {
@@ -299,36 +307,44 @@ pub async fn resolve_dictation_model_path(
         }
     }
 
-    match stt_settings.dictation_quality {
-        crate::settings::DictationSttQuality::Fast => {
-            let fast_path = models_dir.join(FAST_MODEL_FILENAME);
-            if fast_path.exists() {
-                Some(fast_path.to_string_lossy().to_string())
-            } else {
-                match ensure_fast_model(models_dir).await {
-                    Ok(p) => Some(p.to_string_lossy().to_string()),
-                    Err(e) => {
-                        tracing::warn!("Could not ensure fast Whisper model ({}): Falling back to default", e);
-                        let default_path = models_dir.join(DEFAULT_MODEL_FILENAME);
-                        if default_path.exists() {
-                            Some(default_path.to_string_lossy().to_string())
-                        } else {
-                            stt_settings.whisper_model_path.clone()
-                        }
-                    }
-                }
-            }
-        }
-        crate::settings::DictationSttQuality::Accurate => {
-            let default_path = models_dir.join(DEFAULT_MODEL_FILENAME);
-            if default_path.exists() {
-                Some(default_path.to_string_lossy().to_string())
-            } else {
-                match ensure_default_model(models_dir).await {
-                    Ok(p) => Some(p.to_string_lossy().to_string()),
-                    Err(_) => None,
-                }
-            }
+    let preferred: &[&str] = match stt_settings.dictation_quality {
+        crate::settings::DictationSttQuality::Fast => &[FAST_MODEL_FILENAME, DEFAULT_MODEL_FILENAME],
+        crate::settings::DictationSttQuality::Accurate => &[DEFAULT_MODEL_FILENAME],
+    };
+    preferred
+        .iter()
+        .map(|name| models_dir.join(name))
+        .find(|candidate| candidate.exists())
+        .map(|candidate| candidate.to_string_lossy().to_string())
+}
+
+/// Resolves the effective dictation model path, downloading the preset's model
+/// when nothing suitable is installed.
+///
+/// In `Fast` mode the download is `ggml-base.bin` (~0.8s latency); in
+/// `Accurate` mode it is `ggml-small.bin` (~2.4s latency). Callers on the
+/// dictation hot path check [`installed_dictation_model_path`] first so they
+/// can tell the user a download is happening.
+pub async fn resolve_dictation_model_path(
+    models_dir: &Path,
+    stt_settings: &crate::settings::SttSettings,
+) -> Option<String> {
+    if let Some(installed) = installed_dictation_model_path(models_dir, stt_settings) {
+        return Some(installed);
+    }
+
+    let downloaded = match stt_settings.dictation_quality {
+        crate::settings::DictationSttQuality::Fast => ensure_fast_model(models_dir).await,
+        crate::settings::DictationSttQuality::Accurate => ensure_default_model(models_dir).await,
+    };
+    match downloaded {
+        Ok(p) => Some(p.to_string_lossy().to_string()),
+        Err(e) => {
+            tracing::warn!("Could not download the dictation Whisper model: {}", e);
+            // A configured path that does not exist is still passed through,
+            // so the decode reports the missing file by name rather than
+            // falling back silently to a model the user did not pick.
+            stt_settings.whisper_model_path.clone()
         }
     }
 }
@@ -2047,6 +2063,61 @@ fn num_cpus() -> std::ffi::c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn models_dir_with(files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vox_test_models_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp models dir");
+        for file in files {
+            std::fs::write(dir.join(file), b"model").expect("fake model");
+        }
+        dir
+    }
+
+    #[test]
+    fn installed_dictation_model_prefers_the_fast_model() {
+        let dir = models_dir_with(&[FAST_MODEL_FILENAME, DEFAULT_MODEL_FILENAME]);
+        let stt = crate::settings::SttSettings::default();
+        let path = installed_dictation_model_path(&dir, &stt).expect("installed");
+        assert!(path.ends_with(FAST_MODEL_FILENAME), "{path}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn installed_dictation_model_falls_back_to_small_instead_of_downloading() {
+        let dir = models_dir_with(&[DEFAULT_MODEL_FILENAME]);
+        let stt = crate::settings::SttSettings::default();
+        let path = installed_dictation_model_path(&dir, &stt).expect("installed");
+        assert!(path.ends_with(DEFAULT_MODEL_FILENAME), "{path}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn installed_dictation_model_is_none_when_a_download_is_needed() {
+        let dir = models_dir_with(&[]);
+        let stt = crate::settings::SttSettings::default();
+        assert_eq!(installed_dictation_model_path(&dir, &stt), None);
+
+        let accurate = crate::settings::SttSettings {
+            dictation_quality: crate::settings::DictationSttQuality::Accurate,
+            ..Default::default()
+        };
+        let dir_fast_only = models_dir_with(&[FAST_MODEL_FILENAME]);
+        assert_eq!(installed_dictation_model_path(&dir_fast_only, &accurate), None);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir_fast_only);
+    }
+
+    #[test]
+    fn installed_dictation_model_honours_a_configured_filename() {
+        let dir = models_dir_with(&["ggml-medium.bin", FAST_MODEL_FILENAME]);
+        let stt = crate::settings::SttSettings {
+            whisper_model_path: Some("C:/elsewhere/ggml-medium.bin".into()),
+            ..Default::default()
+        };
+        let path = installed_dictation_model_path(&dir, &stt).expect("installed");
+        assert!(path.ends_with("ggml-medium.bin"), "{path}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     const HI: &str = "मुझे लगता है कि यह ठीक है और हमें आगे बढ़ना चाहिए";
     const EN: &str = "I think that is fine and we should move ahead with it";

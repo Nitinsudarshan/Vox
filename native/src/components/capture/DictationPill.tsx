@@ -89,7 +89,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   
   // Settings & Toggles
   const [autoPaste, setAutoPaste] = useState(true);
-  const [cleanupStyle, setCleanupStyle] = useState<CleanupStyle>('faithful');
+  const [cleanupStyle, setCleanupStyle] = useState<CleanupStyle>('raw');
   const [language, setLanguage] = useState<SpeechLanguage>('auto');
   const [dictationShortcut, setDictationShortcut] = useState('Ctrl+Space');
 
@@ -300,7 +300,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
         }
         if (payload.stt) {
           setCleanupStyle(
-            (payload.stt.cleanup_style || payload.stt.cleanupStyle || 'faithful') as CleanupStyle
+            (payload.stt.cleanup_style || payload.stt.cleanupStyle || 'raw') as CleanupStyle
           );
         }
         if (payload.hotkeys?.dictation_hotkey) {
@@ -351,7 +351,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       }
       if (appSettings?.stt) {
         setCleanupStyle(
-          (appSettings.stt.cleanup_style || (appSettings.stt as any).cleanupStyle || 'faithful') as CleanupStyle
+          (appSettings.stt.cleanup_style || appSettings.stt.cleanupStyle || 'raw') as CleanupStyle
         );
       }
       if (appSettings?.clipboard?.auto_paste !== undefined) {
@@ -620,7 +620,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
     llmStatus: ollamaStatus.status,
     hotkeyStatus: hotkeyStatus.status,
     windowMode: popoverOpen ? 'popover' : isExpanded ? 'expanded' : 'resting',
-    activeApp: 'Relay',
+    activeApp: 'Vox',
   };
 
   const pillPos = settings?.ui?.pill_position || 'bottom_center';
@@ -646,7 +646,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           )}
         >
           <div className="flex items-center gap-1 font-bold border-b border-emerald-500/20 pb-0.5">
-            <Bug className="w-3 h-3 text-emerald-400" /> Relay Inspection HUD
+            <Bug className="w-3 h-3 text-emerald-400" /> Vox Inspection HUD
           </div>
           <div>State: <span className="text-white">{diagnosticsInfo.state}</span> | Window: <span className="text-white">{diagnosticsInfo.windowMode}</span></div>
           <div>STT: <span className="text-white">{diagnosticsInfo.sttStatus}</span> | LLM: <span className="text-white">{diagnosticsInfo.llmStatus}</span></div>
@@ -716,7 +716,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           </div>
         )}
 
-      {/* Main Relay Pill Surface (Process label removed, dark theme matching #171717) */}
+      {/* Main Vox Pill Surface (Process label removed, dark theme matching #171717) */}
       <div
         className={cn(
           'absolute bottom-[16px] transition-all duration-200 ease-out pointer-events-none z-30',

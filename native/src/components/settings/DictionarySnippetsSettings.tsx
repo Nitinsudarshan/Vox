@@ -9,7 +9,6 @@ import {
   Upload,
   Download,
   Check,
-  Zap,
   Copy,
   ChevronDown,
   ChevronUp,
@@ -19,7 +18,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { TriggerSettings } from './TriggerSettings';
 
 interface DictionarySnippetsSettingsProps {
   settings: AppSettings;
@@ -42,7 +40,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
   onUpdateSettings,
   onSaveDirect,
 }) => {
-  const [activeTab, setActiveTab] = useState<'dictionary' | 'snippets' | 'triggers'>('dictionary');
+  const [activeTab, setActiveTab] = useState<'dictionary' | 'snippets'>('dictionary');
 
   // Dictionary State
   const [dictInput, setDictInput] = useState('');
@@ -291,18 +289,6 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
             <Badge variant="secondary" className="text-[9px] px-1 py-0 ml-1">
               {snippets.length}
             </Badge>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('triggers')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-              activeTab === 'triggers'
-                ? 'bg-card text-foreground font-semibold shadow-xs'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Zap className="w-3.5 h-3.5" />
-            <span>MCP Triggers</span>
           </button>
         </div>
       </div>
@@ -786,12 +772,6 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
         </div>
       )}
 
-      {/* 3. MCP TRIGGERS TAB */}
-      {activeTab === 'triggers' && (
-        <div className="space-y-4 animate-in fade-in-50">
-          <TriggerSettings />
-        </div>
-      )}
     </div>
   );
 };

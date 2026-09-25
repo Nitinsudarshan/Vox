@@ -329,46 +329,6 @@ pub fn focus_unchanged(
     }
 }
 
-/// Selects the last `steps` cursor positions before the caret.
-///
-/// Shift+Left, repeated. Used by the dictation cleanup to select exactly what
-/// Relay injected so a replacement overwrites it rather than appending to it.
-///
-/// `steps` must come from `capture::text_normalize::cursor_steps`, not from
-/// `chars().count()`. An arrow key moves by grapheme cluster, so counting chars
-/// over-selects on any script with combining marks and would swallow whatever
-/// the user had written before dictating.
-///
-/// Selecting nothing is a success: the caller has nothing to replace and a
-/// subsequent injection simply inserts.
-pub fn select_previous(steps: usize) -> Result<(), InjectionError> {
-    use enigo::{Direction, Key};
-    if steps == 0 {
-        return Ok(());
-    }
-
-    release_modifier_keys();
-
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| InjectionError::ConnectionFailed(e.to_string()))?;
-    enigo
-        .key(Key::Shift, Direction::Press)
-        .map_err(|e| InjectionError::SimulationFailed(e.to_string()))?;
-    let mut result = Ok(());
-    for _ in 0..steps {
-        if let Err(e) = enigo.key(Key::LeftArrow, Direction::Click) {
-            result = Err(InjectionError::SimulationFailed(e.to_string()));
-            break;
-        }
-    }
-    // Released even when a press failed part-way: leaving Shift held would
-    // turn the user's next keystroke into a selection.
-    let released = enigo
-        .key(Key::Shift, Direction::Release)
-        .map_err(|e| InjectionError::SimulationFailed(e.to_string()));
-    result.and(released)
-}
-
 /// Injects text using simulated individual keystrokes.
 pub fn inject_keystrokes(text: &str) -> Result<(), InjectionError> {
     if text.trim().is_empty() {

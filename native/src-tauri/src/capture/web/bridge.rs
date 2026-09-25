@@ -1,4 +1,4 @@
-//! The local capture bridge: a loopback HTTP endpoint the Relay browser
+//! The local capture bridge: a loopback HTTP endpoint the Vox browser
 //! extension posts captures to.
 //!
 //! ## Why loopback and not native messaging
@@ -20,12 +20,19 @@
 //! it is compared in constant time, and it is never logged.
 //!
 //! Browsers additionally enforce CORS on the extension's request, so the
-//! responses here name exactly one allowed origin — the paired extension —
-//! rather than `*`.
+//! responses echo back the requesting origin — and only when it is a browser
+//! extension origin ([`is_allowed_origin`]) — rather than `*`. That is a check
+//! of *kind*, not of identity: any installed extension passes it, so the
+//! pairing token remains the control that decides who may write.
+//!
+//! Connections are served one thread each, capped at
+//! [`MAX_CONCURRENT_CONNECTIONS`]; past that, new connections are closed
+//! unread, so a local process opening sockets in a loop costs a handful of
+//! threads rather than all of them.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +55,32 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// seconds is far longer than a local POST needs.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How many connections may be served at once. Captures are human-paced — one
+/// at a time is the norm — so this only ever bites a client that is not the
+/// extension.
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+
+/// Counts a connection for as long as it is being served.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl ConnectionSlot {
+    /// Takes a slot, or `None` when all of them are in use.
+    fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        active
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n < MAX_CONCURRENT_CONNECTIONS).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(active.clone()))
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Where the bridge writes its port and token so the pairing UI can show them.
 pub const BRIDGE_STATE_FILE: &str = "capture-bridge.json";
 
@@ -64,9 +97,9 @@ pub struct BridgeState {
 
 /// Generates a fresh pairing token.
 ///
-/// Two v4 UUIDs' worth of randomness (256 bits) rendered as hex. Relay
-/// already depends on `uuid` for ids; a token is not worth a second RNG
-/// dependency.
+/// Two v4 UUIDs rendered as hex: 244 random bits (each UUID spends 6 of its
+/// 128 on version and variant). Vox already depends on `uuid` for ids; a
+/// token is not worth a second RNG dependency.
 pub fn generate_token() -> String {
     format!(
         "{}{}",
@@ -342,21 +375,33 @@ where
     };
 
     let on_capture = Arc::new(on_capture);
+    let active = Arc::new(AtomicUsize::new(0));
     std::thread::Builder::new()
-        .name("relay-capture-bridge".to_string())
+        .name("vox-capture-bridge".to_string())
         .spawn(move || {
             tracing::info!("[Capture] Bridge listening on 127.0.0.1:{}", port);
             while !stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _peer)) => {
+                        let Some(slot) = ConnectionSlot::acquire(&active) else {
+                            tracing::warn!(
+                                "[Capture] Bridge refused a connection: {} already open",
+                                MAX_CONCURRENT_CONNECTIONS
+                            );
+                            drop(stream);
+                            continue;
+                        };
                         let token = token.clone();
                         let on_capture = on_capture.clone();
                         // One thread per connection so a stalled client
                         // cannot block the next capture. Captures are a
-                        // human-paced event; there is no pool to justify.
+                        // human-paced event; the slot cap above bounds it.
                         let _ = std::thread::Builder::new()
-                            .name("relay-capture-conn".to_string())
-                            .spawn(move || handle_connection(stream, &token, on_capture.as_ref()));
+                            .name("vox-capture-conn".to_string())
+                            .spawn(move || {
+                                let _slot = slot;
+                                handle_connection(stream, &token, on_capture.as_ref());
+                            });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(120));
@@ -396,6 +441,12 @@ fn handle_connection<F>(stream: TcpStream, token: &str, on_capture: &F)
 where
     F: Fn(&[u8]) -> (u16, String),
 {
+    // The listener is non-blocking so its loop can observe the stop flag, and
+    // on Windows an accepted socket inherits that. A non-blocking read here
+    // returns `WouldBlock` the moment the client pauses mid-body, which the
+    // parser would report as a malformed request — so switch back to blocking
+    // reads, bounded by the timeouts below.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
 
@@ -455,6 +506,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_slots_are_capped_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let held: Vec<_> = (0..MAX_CONCURRENT_CONNECTIONS)
+            .map(|_| ConnectionSlot::acquire(&active).expect("under the cap"))
+            .collect();
+        assert!(ConnectionSlot::acquire(&active).is_none(), "the cap holds");
+
+        drop(held);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert!(ConnectionSlot::acquire(&active).is_some(), "released slots are reusable");
+    }
 
     const TOKEN: &str = "0123456789abcdef";
 

@@ -160,7 +160,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     ollama_model: 'llama3.2:latest',
     cloud_model: 'gpt-4o-mini',
   },
-  stt: { whisper_model_path: '', cleanup_style: 'faithful' },
+  stt: { whisper_model_path: '', cleanup_style: 'raw' },
   hotkeys: {
     show_hide_hotkey: 'Ctrl+Shift+Space',
     dictation_hotkey: 'Ctrl+Space',
@@ -525,8 +525,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             ...(loaded.stt || {}),
             cleanup_style:
               loaded.stt?.cleanup_style ||
-              (loaded.stt as any)?.cleanupStyle ||
-              'faithful',
+              loaded.stt?.cleanupStyle ||
+              'raw',
           },
           clipboard: {
             ...DEFAULT_SETTINGS.clipboard!,
@@ -924,7 +924,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     <div>
                       <p className="text-xs font-semibold text-foreground">AI Cleanup & Transcription Style</p>
                       <p className="text-[11px] text-muted-foreground">
-                        Automated text refinement applied directly after speech-to-text
+                        Off (Raw) by default. Any other style sends each dictation to your selected AI
+                        provider and can add up to 5 seconds before the text lands.
                       </p>
                     </div>
                   </div>
@@ -949,9 +950,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
                   {[
                     {
+                      id: 'raw',
+                      name: 'Raw',
+                      tag: 'Default',
+                      desc: 'No AI rewrite. Text as transcribed, with only the built-in filler and dictionary fixes.',
+                    },
+                    {
                       id: 'faithful',
                       name: 'Faithful',
-                      tag: 'Default',
                       desc: 'Punctuation, capitalization & filler removal. Your words stay 100% untouched.',
                     },
                     {
@@ -969,13 +975,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       name: 'Concise',
                       desc: 'Removes redundancy & condenses text into tight, punchy executive points.',
                     },
-                    {
-                      id: 'raw',
-                      name: 'Raw',
-                      desc: 'Direct verbatim Whisper output. No AI rewrites, no disfluency filtering.',
-                    },
                   ].map((item) => {
-                    const currentStyle = settings.stt?.cleanup_style || settings.stt?.cleanupStyle || 'faithful';
+                    const currentStyle = settings.stt?.cleanup_style || settings.stt?.cleanupStyle || 'raw';
                     const isSelected = currentStyle === item.id;
                     return (
                       <button

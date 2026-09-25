@@ -4,7 +4,6 @@ use crate::hotkeys;
 use crate::pipeline::{PipelineEngine, ProcessedPipelineResult};
 use crate::providers::{LLMClient, OllamaStatus, ProviderType};
 use crate::settings::{AppSettings, HotkeySettings, PillPosition};
-use crate::triggers::{TriggerConfig, TriggerEngine};
 use crate::vault::{
     GraphFilter, KanbanCard, KnowledgeGraphData, KnowledgeSearchResult,
     Scribble, ScribbleRelationship, TrashItem, VaultFile, VaultManager, VaultNote,
@@ -85,12 +84,6 @@ pub struct AppState {
     pub settings: Mutex<AppSettings>,
     pub stt: SttEngine,
     pub last_stt_diagnostics: Mutex<Option<crate::capture::SttDiagnosticSnapshot>>,
-    /// What the last dictation put into a field, and where.
-    ///
-    /// Held so the cleanup offered afterwards can select exactly that text and
-    /// replace it. Cleared on the next dictation, because the offer is only
-    /// ever about the most recent one.
-    pub last_dictation: Mutex<Option<LastDictation>>,
     /// The loopback listener the Relay browser extension posts captures to.
     /// `None` whenever capture is switched off, which is the default.
     pub capture_bridge: Mutex<Option<crate::capture::web::bridge::BridgeHandle>>,
@@ -113,16 +106,6 @@ impl AppState {
     }
 }
 
-/// The dictation a cleanup may still replace.
-#[derive(Debug, Clone)]
-pub struct LastDictation {
-    /// Exactly the text that was injected — not the transcript before
-    /// normalization, because what has to be selected back is what landed.
-    pub text: String,
-    /// Where it landed. A cleanup that cannot prove the caret is still in the
-    /// same place does not touch the field.
-    pub focus: Option<crate::hotkeys::injection::TargetFocusContext>,
-}
 
 pub fn record_stt_diagnostics(
     app: &AppHandle,
@@ -166,141 +149,6 @@ pub async fn get_stt_decode_summary(
     Ok(crate::capture::decode_history::summarize(&records))
 }
 
-/// Proposes a cleanup of dictated text, with the diff that makes it reviewable.
-///
-/// Returns a proposal rather than replacing anything. The decision to accept it
-/// is the user's, made against the diff — which is the entire reason this layer
-/// is allowed to exist (Decision 65 for where it may not be used, and
-/// `capture::rewrite` for why a diff rather than a more careful prompt).
-#[tauri::command]
-pub async fn rewrite_dictation(
-    state: State<'_, AppState>,
-    text: String,
-    style: Option<String>,
-) -> Result<crate::capture::rewrite::RewriteProposal, CommandError> {
-    let (provider, configured, enabled) = {
-        let settings = state.settings.lock_or_recover();
-        (
-            settings.provider.clone(),
-            settings.stt.cleanup_style.clone(),
-            settings.stt.text_transform,
-        )
-    };
-
-    // The setting decides, not the caller. The pill hides the button when this
-    // is off, and gating only there would leave `text_transform` as a
-    // preference nothing enforces — which is how a setting comes to mean
-    // whatever the newest call site assumed.
-    if !enabled {
-        return Ok(crate::capture::rewrite::RewriteProposal::unchanged(text));
-    }
-    let style = crate::capture::rewrite::CleanupStyle::from_setting(
-        style.as_deref().unwrap_or(&configured),
-    );
-    let client = crate::providers::LLMClient::new(provider);
-    Ok(crate::capture::rewrite::propose(&client, &text, style).await)
-}
-
-/// Whether a cleanup can still be offered for the last dictation, and of what.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CleanupTarget {
-    pub available: bool,
-    pub text: String,
-}
-
-/// The dictation a cleanup would act on, if any.
-#[tauri::command]
-pub async fn get_cleanup_target(
-    state: State<'_, AppState>,
-) -> Result<CleanupTarget, CommandError> {
-    let guard = state.last_dictation.lock_or_recover();
-    Ok(match guard.as_ref() {
-        Some(last) => CleanupTarget {
-            available: !last.text.trim().is_empty(),
-            text: last.text.clone(),
-        },
-        None => CleanupTarget {
-            available: false,
-            text: String::new(),
-        },
-    })
-}
-
-/// How an apply ended, in the terms the pill has to render.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum CleanupApplied {
-    /// The field now holds the cleaned text.
-    Replaced,
-    /// The caret is no longer where the dictation landed, so nothing was
-    /// touched. The cleaned text is on the clipboard instead.
-    Moved { message: String },
-    Failed { message: String },
-}
-
-/// Replaces the last dictation with its cleaned form.
-///
-/// Selects exactly what Relay injected and types over it. Three things make
-/// that safe enough to do to somebody's document:
-///
-/// * The selection is counted in cursor steps, not characters
-///   (`text_normalize::cursor_steps`), so a Devanagari cluster is one step and
-///   the selection cannot run past what was written.
-/// * The focus context is compared against the one captured at injection. If
-///   the user has moved to another window or tab, nothing is selected and
-///   nothing is typed.
-/// * The target is consumed. A second apply has nothing to act on, so a
-///   double-press cannot delete a second helping of the user's text.
-#[tauri::command]
-pub async fn apply_dictation_cleanup(
-    state: State<'_, AppState>,
-    cleaned: String,
-) -> Result<CleanupApplied, CommandError> {
-    use crate::hotkeys::injection;
-
-    // Taken, not read: whatever happens next, this dictation is no longer a
-    // thing a later press may replace.
-    let Some(last) = state.last_dictation.lock_or_recover().take() else {
-        return Ok(CleanupApplied::Failed {
-            message: "There is no recent dictation to clean up.".to_string(),
-        });
-    };
-
-    let still_there = injection::focus_unchanged(
-        last.focus.as_ref(),
-        injection::capture_target_focus_context().as_ref(),
-    );
-
-    if !still_there {
-        let _ = injection::copy_to_clipboard(&cleaned);
-        return Ok(CleanupApplied::Moved {
-            message: "You've moved since dictating, so nothing was changed. The cleaned text is on the clipboard.".to_string(),
-        });
-    }
-
-    let steps = crate::capture::text_normalize::cursor_steps(&last.text);
-    if let Err(e) = injection::select_previous(steps) {
-        let _ = injection::copy_to_clipboard(&cleaned);
-        return Ok(CleanupApplied::Failed {
-            message: format!("Could not select the dictated text ({e}). It is on the clipboard."),
-        });
-    }
-
-    let method = state.settings.lock_or_recover().clipboard.injection_method;
-    match injection::inject_text(&cleaned, method) {
-        Ok(()) => Ok(CleanupApplied::Replaced),
-        Err(e) => {
-            // The selection is still live and the replacement did not land.
-            // The clipboard is the recovery path, and saying so is the whole
-            // of the contract the injection branches already keep.
-            let _ = injection::copy_to_clipboard(&cleaned);
-            Ok(CleanupApplied::Failed {
-                message: format!("Could not type the cleaned text ({e}). It is on the clipboard."),
-            })
-        }
-    }
-}
-
 #[tauri::command]
 pub async fn get_capture_status(state: State<'_, AppState>) -> Result<CaptureStatus, CommandError> {
     let active = state.recorder.is_active();
@@ -336,7 +184,7 @@ pub async fn update_hotkeys(
     let updated = settings.clone();
     drop(settings);
 
-    let _ = app.emit("settings-changed", &updated);
+    let _ = app.emit("settings-changed", &updated.for_webview());
     Ok(())
 }
 
@@ -557,7 +405,7 @@ pub async fn stop_capture(
             // hallucination (e.g. "Hello.") on a marginal recording that
             // whisper.cpp's own confidence/no-speech heuristics rejected
             // internally, leaving an empty transcript. Must not run
-            // trigger-matching or the note/kanban pipeline on nothing.
+            // the note/kanban pipeline on nothing.
             tracing::info!("[Dictation] Transcription produced no usable text");
             emit_capture_status_event(&app, false, None, "NO_SPEECH", None);
         }
@@ -571,144 +419,48 @@ async fn process_captured_audio(
     state: &State<'_, AppState>,
     captured: crate::capture::CapturedAudio,
 ) -> Result<Option<ProcessedPipelineResult>, CommandError> {
+    let transcription = crate::capture::dictation::transcribe(app, state, &captured)
+        .await
+        .map_err(|message| CommandError::new("STT_FAILED", &message))?;
+
     let settings = state.settings.lock_or_recover().clone();
-    let stt = state.stt.clone();
-    let samples = captured.samples.clone();
-
-    // Use the shared Capture STT Profile (Fast / ggml-base.bin vs Accurate / ggml-small.bin)
-    let models_dir = state.config_dir.join("models");
-    let model_path = crate::capture::stt::resolve_dictation_model_path(&models_dir, &settings.stt).await;
-
-    let language_config = crate::capture::SttLanguageConfig::from_settings(&settings.language, crate::capture::stt::SttWindow::ShortForm);
-    let mut decoding_config = crate::capture::stt::WhisperDecodingConfig::for_dictation(&settings.stt);
-    if let Some(prompt) = settings.build_stt_prompt() {
-        decoding_config.initial_prompt = Some(prompt);
-    }
-
-    let parakeet_dir = models_dir.join("parakeet");
-    let use_parakeet = settings.stt.dictation_engine.as_deref() == Some("parakeet")
-        && crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir);
-
-    let (transcript, diag, err) = if use_parakeet {
-        let stt = state.stt.clone();
-        let samples = captured.samples.clone();
-        let p_dir = parakeet_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            match stt.transcribe_parakeet(&p_dir, &samples) {
-                Ok((t, d)) => (t, Some(d), None),
-                Err(e) => (String::new(), None, Some(e.to_string())),
-            }
-        })
-        .await
-        .map_err(|e| CommandError::new("STT_TASK_FAILED", &e.to_string()))?
-    } else {
-        let mp_clone = model_path.clone();
-        let lang_clone = language_config.clone();
-        let dec_clone = decoding_config.clone();
-        tokio::task::spawn_blocking(move || {
-            match stt.transcribe_with_config(
-                mp_clone.as_deref(),
-                &samples,
-                &lang_clone,
-                &dec_clone,
-            ) {
-                Ok((t, d)) => (t, Some(d), None),
-                Err(e) => (String::new(), None, Some(e.to_string())),
-            }
-        })
-        .await
-        .map_err(|e| CommandError::new("STT_TASK_FAILED", &e.to_string()))?
-    };
-
-    let model_str = if use_parakeet {
-        "parakeet-tdt-0.6b-v3"
-    } else {
-        model_path.as_deref().unwrap_or(crate::capture::stt::DEFAULT_MODEL_FILENAME)
-    };
-    let snapshot = crate::capture::build_diagnostic_snapshot(
-        &captured.mode,
-        Some(captured.audio_path.clone()),
-        &captured,
-        &settings.language,
-        &language_config,
-        &decoding_config,
-        model_str,
-        &transcript,
-        diag.as_ref(),
-        err.clone(),
-    );
-    record_stt_diagnostics(app, state, snapshot);
-
-    if let Some(err_msg) = err {
-        return Err(CommandError::new("STT_FAILED", &err_msg));
-    }
-
-    // The deterministic cleanup meetings have always had, now on this path
-    // too: bracketed ASR tags removed, decoder stutters collapsed, isolated
-    // fillers dropped, and the user's own dictionary applied by edit distance.
-    // No model runs, so nothing here can invent a word that was not spoken.
-    //
-    // The `Dictated` profile leaves sentence boundaries alone. This text is
-    // going into whatever field has focus, and a period Relay appended is a
-    // period the user has to delete.
-    let transcript = crate::capture::text_normalize::normalize_text(
-        &transcript,
-        crate::capture::text_normalize::Vocabulary::new(
-            &settings.dictionary,
-            &settings.vocabulary_corrections,
-        ),
-        crate::capture::text_normalize::TextProfile::Dictated,
-    )
-    .text;
 
     // had_audio only proves the mic measured sustained energy — Whisper can
     // still land on nothing (most commonly a short hallucination that its
     // own internal confidence/no-speech heuristics then reject, leaving an
     // empty result) on a marginal recording. An empty transcript must never
     // reach the note/kanban pipeline.
-    if transcript.trim().is_empty() {
+    let Some(finished) = crate::capture::dictation::finish_text(&settings, &transcription.text) else {
         return Ok(None);
-    }
-
-    // Expand snippets if trigger words were dictated
-    let expanded = settings.expand_snippets(&transcript);
-    let transcript = if !expanded.trim().is_empty() { expanded } else { transcript };
-    let transcript = {
-        let script = crate::capture::romanize::OutputScript::from_setting(&settings.language.output_script);
-        crate::capture::romanize::project(&transcript, script).into_owned()
     };
 
-    let raw_text = transcript.clone();
-    let cleanup_style = crate::capture::rewrite::CleanupStyle::from_setting(&settings.stt.cleanup_style);
-
-    let (transcript, cleanup_style_recorded) = if captured.mode != TODO_CAPTURE_MODE && captured.mode != "scribble" && cleanup_style != crate::capture::rewrite::CleanupStyle::Raw {
-        let client = crate::providers::LLMClient::new(settings.provider.clone());
-        let rewrite_fut = crate::capture::rewrite::propose(&client, &transcript, cleanup_style);
-        match tokio::time::timeout(std::time::Duration::from_secs(5), rewrite_fut).await {
-            Ok(proposal) if proposal.changed => {
-                (proposal.rewritten, Some(cleanup_style.as_str().to_string()))
-            }
-            Ok(_) => (transcript, None),
-            Err(_) => {
-                tracing::warn!("Dictation rewrite timed out after 5s; falling back to raw text");
-                (transcript, None)
-            }
-        }
+    // A todo title and a scribble are structured by what comes next, so the
+    // prose rewrite is for dictated voice notes only.
+    let cleanup_style = if captured.mode == TODO_CAPTURE_MODE || captured.mode == "scribble" {
+        crate::capture::rewrite::CleanupStyle::Raw
     } else {
-        (transcript, None)
+        crate::capture::rewrite::CleanupStyle::from_setting(&settings.stt.cleanup_style)
     };
+    let client = LLMClient::new(settings.provider.clone());
+    let cleanup = crate::capture::dictation::clean_up(
+        &client,
+        finished,
+        cleanup_style,
+        crate::capture::dictation::CLEANUP_TIMEOUT,
+    )
+    .await;
 
     // Every successful, non-empty transcript becomes a Voice Note — this
     // must not depend on which mode-specific pipeline runs next, or on
     // whether it succeeds.
-    let raw_opt = if raw_text != transcript { Some(raw_text.as_str()) } else { None };
     let voice_note_id = save_voice_note(
         app,
         &state.vault,
-        &transcript,
-        raw_opt,
-        cleanup_style_recorded.as_deref(),
+        &cleanup.text,
+        cleanup.before_if_changed(),
+        cleanup.applied_style_name(),
     );
+    let transcript = cleanup.text;
 
     match captured.mode.as_str() {
         // Press-and-hold on the TODOs page. Reuses this whole path —
@@ -751,7 +503,7 @@ async fn process_captured_audio(
         "voice_note" => Ok(Some(ProcessedPipelineResult {
             mode: "voice_note".to_string(),
             transcript: transcript.clone(),
-            note_id: None,
+            note_id: voice_note_id,
             kanban_cards_created: 0,
             output_markdown: transcript,
             sources: Vec::new(),
@@ -977,7 +729,7 @@ pub async fn correct_voice_note_phrase(
             // and `save_settings` writes that copy whole. Without this it
             // would overwrite the rule the moment anything else there is
             // changed.
-            let _ = app.emit("settings-changed", &updated);
+            let _ = app.emit("settings-changed", &updated.for_webview());
         }
         added
     } else {
@@ -1074,7 +826,7 @@ pub async fn add_dictionary_word(
     let updated = settings.clone();
     drop(settings);
     // Same reason as above: the Settings window holds its own copy.
-    let _ = app.emit("settings-changed", &updated);
+    let _ = app.emit("settings-changed", &updated.for_webview());
     Ok(updated.dictionary)
 }
 
@@ -1758,7 +1510,7 @@ pub async fn set_vault_location(
 
     state.vault.set_vault_dir(new_dir);
 
-    let _ = app.emit("settings-changed", &updated_settings);
+    let _ = app.emit("settings-changed", &updated_settings.for_webview());
     let _ = app.emit("vault-changed", &path);
 
     Ok(VaultLocationInfo {
@@ -1767,23 +1519,6 @@ pub async fn set_vault_location(
         configured: true,
         accessible: true,
     })
-}
-
-#[tauri::command]
-pub async fn get_triggers(state: State<'_, AppState>) -> Result<Vec<TriggerConfig>, CommandError> {
-    let path = state.config_dir.join("triggers.json");
-    TriggerEngine::load_triggers(&path)
-        .map_err(|e| CommandError::new("CONFIG_READ_FAILED", &e.to_string()))
-}
-
-#[tauri::command]
-pub async fn save_triggers(
-    triggers: Vec<TriggerConfig>,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let path = state.config_dir.join("triggers.json");
-    TriggerEngine::save_triggers(&path, &triggers)
-        .map_err(|e| CommandError::new("CONFIG_SAVE_FAILED", &e.to_string()))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1941,7 +1676,7 @@ pub(crate) fn persist_settings(
         .save(&state.settings_path())
         .map_err(|e| CommandError::new("CONFIG_SAVE_FAILED", &e.to_string()))?;
     *state.settings.lock_or_recover() = settings.clone();
-    let _ = app.emit("settings-changed", &settings);
+    let _ = app.emit("settings-changed", &settings.for_webview());
     Ok(())
 }
 
@@ -2322,7 +2057,7 @@ pub async fn copy_to_clipboard(text: String) -> Result<(), CommandError> {
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, CommandError> {
-    Ok(state.settings.lock_or_recover().clone())
+    Ok(state.settings.lock_or_recover().for_webview())
 }
 
 #[tauri::command]
@@ -2337,6 +2072,11 @@ pub async fn save_settings(
     // off and throw away the pairing token as a side effect.
     let stored_capture = state.settings.lock_or_recover().capture.clone();
     let mut settings = settings.preserving_capture(&stored_capture);
+
+    // The webview only ever holds placeholders for stored API keys (see
+    // `providers::secrets`); one sent back unchanged means "keep that key".
+    let stored_provider = state.settings.lock_or_recover().provider.clone();
+    settings.provider.resolve_placeholders(&stored_provider);
 
     // If incoming settings has no vault directory set, preserve the stored one
     let stored_vault = state.settings.lock_or_recover().vault.clone();
@@ -2379,7 +2119,7 @@ pub async fn save_settings(
         crate::overlay::reposition_meeting_overlay(&app, &window);
     }
 
-    let _ = app.emit("settings-changed", &settings);
+    let _ = app.emit("settings-changed", &settings.for_webview());
     Ok(())
 }
 
@@ -3104,7 +2844,7 @@ pub async fn set_diagnostics_consent(
     settings
         .save(&state.config_dir.join("settings.json"))
         .map_err(|e| CommandError::new("SAVE_FAILED", &e.to_string()))?;
-    Ok(settings.clone())
+    Ok(settings.for_webview())
 }
 
 #[tauri::command]
@@ -3116,7 +2856,7 @@ pub async fn complete_first_run(
     settings
         .save(&state.config_dir.join("settings.json"))
         .map_err(|e| CommandError::new("SAVE_FAILED", &e.to_string()))?;
-    Ok(settings.clone())
+    Ok(settings.for_webview())
 }
 
 // ---------------------------------------------------------------------------
@@ -3442,7 +3182,7 @@ pub async fn set_capture_analyze_on_capture(
             .map_err(|e| CommandError::new("CONFIG_SAVE_FAILED", &e.to_string()))?;
         let updated = settings.clone();
         drop(settings);
-        let _ = app.emit("settings-changed", &updated);
+        let _ = app.emit("settings-changed", &updated.for_webview());
     }
     Ok(bridge_status(&state, None))
 }

@@ -104,9 +104,19 @@ mod tests {
         );
         assert!(!act.requires_confirmation);
 
+        // What this pins is the gate: a read-only action is never held for
+        // confirmation. Whether the OS then manages to launch a browser
+        // depends on the machine (a headless CI container has no `xdg-open`),
+        // so a launch failure is allowed; being gated is not.
         let res = ActionDispatcher::execute(&mut act, false, None);
-        assert!(res.is_ok());
-        assert_eq!(act.status, ActionStatus::Completed);
+        assert_ne!(act.status, ActionStatus::RequiresConfirmation);
+        match res {
+            Ok(_) => assert_eq!(act.status, ActionStatus::Completed),
+            Err(message) => assert!(
+                !message.contains("requires explicit confirmation"),
+                "a read-only action must not be gated"
+            ),
+        }
     }
 
     #[test]

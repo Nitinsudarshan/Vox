@@ -6,7 +6,7 @@
  * assert against the same bytes, so a change to either model that the other
  * has not followed fails a test instead of failing a user's capture.
  *
- * Regenerate with `RELAY_UPDATE_CAPTURE_FIXTURES=1 npm test`.
+ * Regenerate with `VOX_UPDATE_CAPTURE_FIXTURES=1 npm test`.
  */
 
 import fs from 'node:fs';

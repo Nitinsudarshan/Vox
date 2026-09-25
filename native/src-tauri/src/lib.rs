@@ -1,3 +1,4 @@
+pub mod env_config;
 pub mod actions;
 pub mod calendar;
 pub mod capture;
@@ -22,7 +23,6 @@ pub mod settings;
 pub mod startup;
 pub mod sync;
 pub mod theme_icon;
-pub mod triggers;
 pub mod tts;
 pub mod updates;
 pub mod vault;
@@ -54,22 +54,82 @@ fn set_app_user_model_id() {
     }
 }
 
+/// The bundle identifier, which names Vox's folder under the OS application
+/// data directory — the same folder Tauri's own `app_data_dir()` resolves to.
+const APP_IDENTIFIER: &str = "com.vox.app";
+
+/// Everything [`choose_base_dir`] looks at, gathered once so the decision
+/// itself is a pure function that can be tested.
+#[derive(Debug, Default)]
+struct BaseDirInputs {
+    /// `VOX_HOME`, when set: an explicit choice that always wins.
+    override_dir: Option<PathBuf>,
+    /// The crate directory, in debug builds only.
+    manifest_dir: Option<PathBuf>,
+    /// The directory holding the executable.
+    exe_dir: Option<PathBuf>,
+    /// The process working directory.
+    cwd: Option<PathBuf>,
+    /// Vox's folder under the OS application data directory.
+    app_data_dir: Option<PathBuf>,
+}
+
+/// Where the vault, `config/` and the models live.
 fn resolve_base_dir() -> PathBuf {
-    // 1. In debug/development, prioritize CARGO_MANIFEST_DIR/.vox
-    #[cfg(debug_assertions)]
-    {
-        let manifest_vox = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".vox");
-        if manifest_vox.exists() {
-            return manifest_vox;
-        }
-        let manifest_relay = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".relay");
-        if manifest_relay.exists() {
-            return manifest_relay;
+    let inputs = BaseDirInputs {
+        override_dir: std::env::var_os("VOX_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from),
+        manifest_dir: cfg!(debug_assertions).then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+        exe_dir: std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+        cwd: std::env::current_dir().ok(),
+        app_data_dir: os_app_data_dir(),
+    };
+    choose_base_dir(&inputs, |path| path.exists())
+}
+
+/// Picks the base directory.
+///
+/// In order:
+///
+/// 1. `VOX_HOME`, if set.
+/// 2. In a debug build, an existing `.vox` (or legacy `.relay`) in the crate
+///    directory — the development checkout.
+/// 3. An existing `.vox`/`.relay` beside the executable, or in the working
+///    directory or any of its ancestors. This is where every earlier release
+///    put its data, and it is honoured wherever it is found: moving someone's
+///    vault is a migration with its own consent, never a side effect of an
+///    upgrade (`maybe_later.md`, "Offer to move a legacy data folder").
+/// 4. With nothing existing: the crate's `.vox` in a debug build, and the OS
+///    application data directory in a release build.
+///
+/// Step 4 is the fix. Release builds used to fall back to `cwd/.vox`, and a
+/// packaged app's working directory is whatever launched it — `System32` from
+/// autostart, the install folder from a shortcut — so a fresh install could
+/// write its vault somewhere unwritable, or somewhere different each launch.
+fn choose_base_dir(inputs: &BaseDirInputs, exists: impl Fn(&std::path::Path) -> bool) -> PathBuf {
+    if let Some(dir) = &inputs.override_dir {
+        return dir.clone();
+    }
+
+    let legacy_names = [".vox", ".relay"];
+
+    if let Some(manifest) = &inputs.manifest_dir {
+        if let Some(found) = legacy_names.iter().map(|n| manifest.join(n)).find(|p| exists(p)) {
+            return found;
         }
     }
 
-    // 2. Search CWD and its ancestors
-    if let Ok(mut dir) = std::env::current_dir() {
+    if let Some(exe_dir) = &inputs.exe_dir {
+        if let Some(found) = legacy_names.iter().map(|n| exe_dir.join(n)).find(|p| exists(p)) {
+            return found;
+        }
+    }
+
+    if let Some(cwd) = &inputs.cwd {
+        let mut dir = cwd.clone();
         loop {
             let candidates = [
                 dir.join("native").join("src-tauri").join(".vox"),
@@ -79,33 +139,43 @@ fn resolve_base_dir() -> PathBuf {
                 dir.join("src-tauri").join(".relay"),
                 dir.join(".relay"),
             ];
-
-            for candidate in &candidates {
-                if candidate.exists() {
-                    return candidate.clone();
-                }
+            if let Some(found) = candidates.into_iter().find(|p| exists(p)) {
+                return found;
             }
-
             if !dir.pop() {
                 break;
             }
         }
     }
 
-    // 3. Fallback to process cwd or manifest dir
-    #[cfg(debug_assertions)]
-    {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".vox")
+    if let Some(manifest) = &inputs.manifest_dir {
+        return manifest.join(".vox");
     }
-    #[cfg(not(debug_assertions))]
-    {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        if cwd.join(".relay").exists() && !cwd.join(".vox").exists() {
-            cwd.join(".relay")
-        } else {
-            cwd.join(".vox")
-        }
+    if let Some(app_data) = &inputs.app_data_dir {
+        return app_data.clone();
     }
+    inputs
+        .cwd
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".vox")
+}
+
+/// Vox's folder under the per-user application data directory:
+/// `%APPDATA%\com.vox.app` on Windows, `~/Library/Application Support/com.vox.app`
+/// on macOS, `$XDG_DATA_HOME/com.vox.app` (or `~/.local/share/com.vox.app`)
+/// elsewhere. Matches Tauri's `app_data_dir()`, which is not available yet
+/// this early in startup.
+fn os_app_data_dir() -> Option<PathBuf> {
+    let non_empty = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let base = if cfg!(target_os = "windows") {
+        non_empty("APPDATA")
+    } else if cfg!(target_os = "macos") {
+        non_empty("HOME").map(|home| home.join("Library").join("Application Support"))
+    } else {
+        non_empty("XDG_DATA_HOME").or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share")))
+    }?;
+    Some(base.join(APP_IDENTIFIER))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -198,7 +268,6 @@ pub fn run() {
         settings: Mutex::new(settings),
         stt,
         last_stt_diagnostics: Mutex::new(None),
-        last_dictation: Mutex::new(None),
         capture_bridge: Mutex::new(None),
         memory_store,
         relationship_store,
@@ -378,9 +447,6 @@ pub fn run() {
             commands::test_llm_prompt,
             commands::ensure_stt_model_ready,
             commands::get_stt_decode_summary,
-            commands::rewrite_dictation,
-            commands::get_cleanup_target,
-            commands::apply_dictation_cleanup,
             commands::get_available_stt_models,
             commands::download_stt_model,
             commands::test_stt_model,
@@ -399,8 +465,6 @@ pub fn run() {
             commands::create_manual_todo,
             commands::set_todo_status,
             commands::delete_todo,
-            commands::get_triggers,
-            commands::save_triggers,
             commands::get_audio_devices,
             commands::get_audio_output_devices,
             commands::get_settings,
@@ -586,4 +650,87 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod base_dir_tests {
+    use super::{choose_base_dir, BaseDirInputs};
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    fn existing(paths: &[&str]) -> impl Fn(&Path) -> bool {
+        let set: HashSet<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        move |p: &Path| set.contains(p)
+    }
+
+    fn release(cwd: &str, exe_dir: &str) -> BaseDirInputs {
+        BaseDirInputs {
+            override_dir: None,
+            manifest_dir: None,
+            exe_dir: Some(PathBuf::from(exe_dir)),
+            cwd: Some(PathBuf::from(cwd)),
+            app_data_dir: Some(PathBuf::from("/appdata/com.vox.app")),
+        }
+    }
+
+    #[test]
+    fn a_fresh_release_install_uses_app_data_not_the_launch_directory() {
+        let inputs = release("/windows/system32", "/programs/vox");
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&[])),
+            PathBuf::from("/appdata/com.vox.app")
+        );
+    }
+
+    #[test]
+    fn existing_data_beside_the_executable_is_never_moved() {
+        let inputs = release("/windows/system32", "/programs/vox");
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&["/programs/vox/.vox"])),
+            PathBuf::from("/programs/vox/.vox")
+        );
+    }
+
+    #[test]
+    fn existing_data_in_the_working_directory_tree_is_still_found() {
+        let inputs = release("/home/asha/projects/notes", "/programs/vox");
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&["/home/asha/.relay"])),
+            PathBuf::from("/home/asha/.relay")
+        );
+    }
+
+    #[test]
+    fn vox_home_overrides_everything() {
+        let mut inputs = release("/windows/system32", "/programs/vox");
+        inputs.override_dir = Some(PathBuf::from("/data/vox"));
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&["/programs/vox/.vox"])),
+            PathBuf::from("/data/vox")
+        );
+    }
+
+    #[test]
+    fn a_debug_build_prefers_and_falls_back_to_the_checkout() {
+        let mut inputs = release("/windows/system32", "/target/debug");
+        inputs.manifest_dir = Some(PathBuf::from("/repo/native/src-tauri"));
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&[])),
+            PathBuf::from("/repo/native/src-tauri/.vox")
+        );
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&["/repo/native/src-tauri/.relay"])),
+            PathBuf::from("/repo/native/src-tauri/.relay")
+        );
+    }
+
+    #[test]
+    fn without_an_app_data_directory_the_old_fallback_remains() {
+        let mut inputs = release("/srv/vox", "/programs/vox");
+        inputs.app_data_dir = None;
+        assert_eq!(
+            choose_base_dir(&inputs, existing(&[])),
+            PathBuf::from("/srv/vox/.vox")
+        );
+    }
 }

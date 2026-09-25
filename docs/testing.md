@@ -309,7 +309,7 @@ immediately rather than failing quietly on a user's next capture. Regenerate
 with:
 
 ```bash
-cd native && Vox_UPDATE_CAPTURE_FIXTURES=1 npm test
+cd native && VOX_UPDATE_CAPTURE_FIXTURES=1 npm test
 ```
 
 

@@ -109,15 +109,14 @@ pub struct SttSettings {
     /// override and applies everywhere.
     #[serde(default, alias = "sttPreset")]
     pub preset: String,
-    /// Whether dictated text is offered to the Tier 2 cleanup layer.
+    /// Whether, and how far, dictated text is rewritten by the Tier 2 cleanup
+    /// layer — see `capture::rewrite::CleanupStyle`.
     ///
-    /// Off by default. The layer costs a model call before the text is usable
-    /// and may change words, so it is something the user turns on rather than
-    /// something they discover has been happening.
-    #[serde(default, alias = "textTransform")]
-    pub text_transform: bool,
-    /// How far that cleanup may go — see `capture::rewrite::CleanupStyle`.
-    /// Empty means `faithful`, the only style that cannot change meaning.
+    /// Empty (the default) and unrecognised values mean `raw`: no model is
+    /// asked. The layer costs a model call before the text is usable, may
+    /// change words, and with a cloud provider sends the dictation off the
+    /// machine, so it is something the user turns on rather than something
+    /// they discover has been happening.
     #[serde(default, alias = "cleanupStyle")]
     pub cleanup_style: String,
     /// Catalogue id of the model meetings are transcribed with.
@@ -153,11 +152,6 @@ pub struct SttSettings {
     /// what the toggle is for — turn it off and re-record to compare.
     #[serde(default = "default_trim_meeting_audio_context", alias = "meetingTrimAudioContext")]
     pub meeting_trim_audio_context: bool,
-    /// Feature flag for running the dictation streaming pipeline in shadow mode.
-    /// In shadow mode, live PCM is segmented and transcribed in the background to
-    /// collect latency, backlog, and accuracy telemetry, but never alters production output.
-    #[serde(default, alias = "dictationStreamingShadow")]
-    pub dictation_streaming_shadow: bool,
 }
 
 fn default_trim_meeting_audio_context() -> bool {
@@ -178,12 +172,10 @@ impl Default for SttSettings {
             enable_initial_prompt: false,
             custom_initial_prompt: None,
             preset: String::new(),
-            text_transform: false,
             cleanup_style: String::new(),
             meeting_model_id: None,
             dictation_engine: None,
             meeting_trim_audio_context: default_trim_meeting_audio_context(),
-            dictation_streaming_shadow: false,
         }
     }
 }
@@ -831,15 +823,36 @@ impl AppSettings {
         let content = fs::read_to_string(path)?;
         // Fall back to defaults on a corrupt/partial file rather than
         // refusing to start the app.
-        Ok(serde_json::from_str(&content).unwrap_or_default())
+        let mut settings: Self = serde_json::from_str(&content).unwrap_or_default();
+        crate::providers::secrets::hydrate_keys(
+            crate::providers::secrets::default_store(),
+            &mut settings.provider,
+        );
+        Ok(settings)
     }
 
+    /// Writes the settings file. Provider API keys go to the OS credential
+    /// store instead of the file whenever it is available — see
+    /// `providers::secrets`.
     pub fn save(&self, path: &Path) -> Result<(), SettingsError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        let mut on_disk = self.clone();
+        on_disk.provider = crate::providers::secrets::persist_keys(
+            crate::providers::secrets::default_store(),
+            &self.provider,
+        );
+        fs::write(path, serde_json::to_string_pretty(&on_disk)?)?;
         Ok(())
+    }
+
+    /// The settings as the webview may see them: provider API keys replaced by
+    /// a placeholder. Everything sent to the frontend goes through this.
+    pub fn for_webview(&self) -> Self {
+        let mut copy = self.clone();
+        copy.provider = self.provider.redacted();
+        copy
     }
 
     /// Applies active snippet expansions to the given transcript.
@@ -863,12 +876,20 @@ impl AppSettings {
         result
     }
 
-    /// Builds the combined STT initial prompt incorporating custom dictionary words.
+    /// Builds the combined STT initial prompt: the dictionary words, plus the
+    /// custom initial prompt when `enable_initial_prompt` is on.
+    ///
+    /// The toggle governs the custom prompt only. Turning it off used to leave
+    /// a previously typed prompt in effect, because this appended it
+    /// regardless and callers then overwrote the decoding config's own,
+    /// correctly gated, copy with the result.
     pub fn build_stt_prompt(&self) -> Option<String> {
         let mut terms: Vec<String> = self.dictionary.iter().filter(|w| !w.trim().is_empty()).cloned().collect();
-        if let Some(custom) = &self.stt.custom_initial_prompt {
-            if !custom.trim().is_empty() {
-                terms.push(custom.trim().to_string());
+        if self.stt.enable_initial_prompt {
+            if let Some(custom) = &self.stt.custom_initial_prompt {
+                if !custom.trim().is_empty() {
+                    terms.push(custom.trim().to_string());
+                }
             }
         }
         if terms.is_empty() {
@@ -941,6 +962,28 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_custom_initial_prompt_is_used_only_when_enabled() {
+        let mut settings = AppSettings {
+            dictionary: vec!["Pragati".into()],
+            ..Default::default()
+        };
+        settings.stt.custom_initial_prompt = Some("Tauri, Supabase".into());
+
+        settings.stt.enable_initial_prompt = false;
+        assert_eq!(settings.build_stt_prompt().as_deref(), Some("Pragati"));
+
+        settings.stt.enable_initial_prompt = true;
+        assert_eq!(
+            settings.build_stt_prompt().as_deref(),
+            Some("Pragati, Tauri, Supabase")
+        );
+
+        settings.dictionary.clear();
+        settings.stt.enable_initial_prompt = false;
+        assert_eq!(settings.build_stt_prompt(), None);
+    }
 
     #[test]
     fn teaching_a_correction_records_the_mapping_not_just_the_word() {
