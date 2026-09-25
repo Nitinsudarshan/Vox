@@ -322,11 +322,8 @@ pub fn run() {
             // read the user's disk. One directory is the whole of what this
             // feature needs.
             //
-            // TODO(vault-relocation): `set_vault_dir` repoints `state.vault`
-            // but not `meeting_store`, so moving the vault already leaves
-            // meetings reading the old location (`commands.rs`, set_vault_path).
-            // This scope inherits that staleness. Fixing the store's repoint is
-            // what fixes both.
+            // A vault moved while Vox runs gets its own grant from
+            // `AppState::repoint_vault`.
             {
                 let state = app.state::<AppState>();
                 let meetings_dir = state.meeting_store.meetings_dir();
