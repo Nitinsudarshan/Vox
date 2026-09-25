@@ -237,59 +237,71 @@ pub fn extract_text_from_file(file_path: &Path, file_type: &str) -> Result<Strin
     }
 }
 
-/// Helper function to parse `<w:p>` paragraphs and `<w:t>` text nodes from `word/document.xml`.
+/// Extracts paragraph text from a DOCX `word/document.xml`.
+///
+/// Text inside `<w:t>` is kept to the character. Word splits a sentence into
+/// runs wherever the formatting changes, and the space between two words often
+/// sits at the edge of a run — `"This is "`, `"bold"`, `" text"` — so trimming
+/// each piece (as this once did) glued the words together. Paragraphs are
+/// trimmed once assembled instead. `<w:tab/>` and `<w:br/>` inside a run become
+/// a tab and a line break; the `<w:tab>` tab-stop *definitions* in paragraph
+/// properties are not text and are skipped.
+///
+/// Entity and character references (`&amp;`, `&#8217;`) arrive from the parser
+/// as their own events and are resolved here.
 fn extract_docx_xml_text(xml_content: &str) -> String {
     use quick_xml::events::Event;
     use quick_xml::reader::Reader;
 
     let mut reader = Reader::from_str(xml_content);
-    reader.config_mut().trim_text(true);
 
     let mut result = String::new();
-    let mut in_text_node = false;
     let mut current_paragraph = String::new();
+    let mut in_text_node = false;
+    let mut in_tab_stops = false;
 
-    let mut buf = Vec::new();
+    let flush = |paragraph: &mut String, result: &mut String| {
+        let trimmed = paragraph.trim();
+        if !trimmed.is_empty() {
+            result.push_str(trimmed);
+            result.push_str("\n\n");
+        }
+        paragraph.clear();
+    };
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                if name.as_ref() == b"w:t" {
-                    in_text_node = true;
+        match reader.read_event() {
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                "w:t" => in_text_node = true,
+                "w:tabs" => in_tab_stops = true,
+                _ => {}
+            },
+            Ok(Event::Empty(e)) => match e.name().as_ref() {
+                "w:tab" if !in_tab_stops => current_paragraph.push('\t'),
+                "w:br" | "w:cr" => current_paragraph.push('\n'),
+                _ => {}
+            },
+            Ok(Event::Text(e)) if in_text_node => {
+                current_paragraph.push_str(&e.xml10_content());
+            }
+            Ok(Event::GeneralRef(e)) if in_text_node => {
+                if let Ok(Some(ch)) = e.resolve_char_ref() {
+                    current_paragraph.push(ch);
+                } else if let Some(resolved) = quick_xml::escape::resolve_predefined_entity(&e) {
+                    current_paragraph.push_str(resolved);
                 }
             }
-            Ok(Event::Text(e)) => {
-                if in_text_node {
-                    if let Ok(t) = e.unescape() {
-                        current_paragraph.push_str(&t);
-                    }
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                let name = e.name();
-                if name.as_ref() == b"w:t" {
-                    in_text_node = false;
-                } else if name.as_ref() == b"w:p" {
-                    let trimmed = current_paragraph.trim();
-                    if !trimmed.is_empty() {
-                        result.push_str(trimmed);
-                        result.push_str("\n\n");
-                    }
-                    current_paragraph.clear();
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                "w:t" => in_text_node = false,
+                "w:tabs" => in_tab_stops = false,
+                "w:p" => flush(&mut current_paragraph, &mut result),
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
-        buf.clear();
     }
-
-    if !current_paragraph.trim().is_empty() {
-        result.push_str(current_paragraph.trim());
-        result.push_str("\n\n");
-    }
+    flush(&mut current_paragraph, &mut result);
 
     result.trim().to_string()
 }
@@ -297,6 +309,113 @@ fn extract_docx_xml_text(xml_content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-page PDF built by hand, so the tests need no fixture file.
+    /// `extra` is appended to the catalog dictionary, which is how a test
+    /// smuggles an arbitrary object into what the parser must read.
+    fn minimal_pdf(text: &str, extra_catalog_entry: &str) -> Vec<u8> {
+        let content = format!("BT /F1 24 Tf 72 700 Td ({text}) Tj ET");
+        let objects = [
+            format!("<< /Type /Catalog /Pages 2 0 R {extra_catalog_entry} >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+                .to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    fn write_temp(name: &str, bytes: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("file_test_pdf_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, bytes).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn pdf_text_is_extracted() {
+        let (dir, path) = write_temp("hello.pdf", &minimal_pdf("Hello Vox", ""));
+        let extracted = extract_text_from_file(&path, "pdf").expect("text extracts");
+        assert!(extracted.contains("Hello Vox"), "{extracted}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// RUSTSEC-2026-0187: lopdf < 0.42 recursed once per nesting level, so a
+    /// hostile PDF of deeply nested arrays overflowed the stack and aborted
+    /// the whole app — from a document the user merely imported. Whatever the
+    /// parser now decides about such a file, the process must survive it.
+    #[test]
+    fn a_deeply_nested_pdf_does_not_overflow_the_stack() {
+        let depth = 100_000;
+        let nested = format!("/Nested {}{}", "[".repeat(depth), "]".repeat(depth));
+        let (dir, path) = write_temp("nested.pdf", &minimal_pdf("Hello", &nested));
+
+        // An explicit, modest stack, so the result does not depend on the
+        // platform's default thread size.
+        let outcome = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || extract_text_from_file(&path, "pdf").is_ok())
+            .expect("spawn")
+            .join();
+        assert!(outcome.is_ok(), "parsing a nested PDF must not panic the thread");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn docx_text_keeps_the_spaces_between_runs() {
+        let xml = r#"<w:document><w:body><w:p>
+            <w:r><w:t xml:space="preserve">This is </w:t></w:r>
+            <w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>
+            <w:r><w:t xml:space="preserve"> text</w:t></w:r>
+        </w:p></w:body></w:document>"#;
+        assert_eq!(extract_docx_xml_text(xml), "This is bold text");
+    }
+
+    #[test]
+    fn docx_text_resolves_entity_and_character_references() {
+        let xml = r#"<w:p><w:r><w:t>Q&amp;A &lt;draft&gt; Asha&#8217;s &#x2014; done</w:t></w:r></w:p>"#;
+        assert_eq!(extract_docx_xml_text(xml), "Q&A <draft> Asha\u{2019}s \u{2014} done");
+    }
+
+    #[test]
+    fn docx_text_keeps_run_tabs_and_breaks_but_not_tab_stop_definitions() {
+        let xml = r#"<w:p>
+            <w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr>
+            <w:r><w:t>Name</w:t><w:tab/><w:t>Value</w:t><w:br/><w:t>Next line</w:t></w:r>
+        </w:p>"#;
+        assert_eq!(extract_docx_xml_text(xml), "Name\tValue\nNext line");
+    }
+
+    #[test]
+    fn docx_paragraphs_are_separated_and_empty_ones_dropped() {
+        let xml = r#"<w:body>
+            <w:p><w:r><w:t>First</w:t></w:r></w:p>
+            <w:p></w:p>
+            <w:p><w:r><w:t xml:space="preserve">  Second  </w:t></w:r></w:p>
+        </w:body>"#;
+        assert_eq!(extract_docx_xml_text(xml), "First\n\nSecond");
+    }
 
     #[test]
     fn test_extract_text_markdown_and_txt() {

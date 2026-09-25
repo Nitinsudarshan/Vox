@@ -52,7 +52,7 @@ keyring = "2.1"
 urlencoding = "2.1"
 dotenvy = "0.15"
 sha2 = "0.10"
-pdf-extract = "0.7"
+pdf-extract = "0.12"
 # Decodes the audio formats a meeting recording arrives in when the user
 # imports one — mp3, m4a/aac, flac, ogg, wav. Pure Rust and decoded packet by
 # packet, so importing a three-hour recording neither pulls in an external
@@ -69,7 +69,7 @@ symphonia = { version = "0.5", default-features = false, features = [
     "wav",
     "pcm",
 ] }
-quick-xml = "0.36"
+quick-xml = "0.42"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Unpacks the Ollama archive on macOS and Linux (`providers::ollama_install`).
 # `flate2` is already in the tree behind `zip`'s deflate, so the gzip half of a
