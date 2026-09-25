@@ -687,7 +687,7 @@ fn describe_termination(termination: &str) -> &'static str {
         "reached_end" => "it reached the end of the page",
         "not_needed" => "there was nothing further to reveal",
         "no_progress" => "the page stopped yielding new content",
-        "step_budget" => "it reached Relay's reading limit for one page",
+        "step_budget" => "it reached Vox's reading limit for one page",
         "time_budget" => "it reached Relay's time limit for one page",
         "expansion_budget" => "it reached Relay's limit on opening shortened sections",
         "user_interrupted" => "the page was used while it was being read",

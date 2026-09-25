@@ -54,7 +54,7 @@ pub async fn ensure_accurate_model(models_dir: &Path) -> Result<PathBuf, SttErro
     ensure_model_file(models_dir, ACCURATE_MODEL_FILENAME, ACCURATE_MODEL_URL).await
 }
 
-/// Downloads one of Relay's three managed models, named by filename.
+/// Downloads one of Vox's three managed models, named by filename.
 ///
 /// Keyed by filename against the managed set rather than taking a URL. A
 /// command that accepts a URL from the frontend is a command that will
@@ -85,7 +85,7 @@ pub async fn ensure_managed_model(models_dir: &Path, filename: &str) -> Result<P
         ACCURATE_MODEL_FILENAME => ensure_accurate_model(models_dir).await,
         other => Err(SttError::ModelLoadFailed {
             path: other.to_string(),
-            message: format!("'{other}' is not one of Relay's managed models"),
+            message: format!("'{other}' is not one of Vox's managed models"),
         }),
     }
 }

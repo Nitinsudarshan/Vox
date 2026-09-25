@@ -456,7 +456,7 @@ pub struct StartupSettings {
     pub launch_at_login: bool,
     /// Launch Relay minimized without showing the main control panel window.
     ///
-    /// Withheld rather than minimized: the tray's "Show Relay" item and the
+    /// Withheld rather than minimized: the tray's "Show Vox" item and the
     /// show/hide hotkey both toggle on `Window::is_visible`, so hidden is the
     /// state they can bring back.
     #[serde(default, alias = "startMinimized")]
@@ -902,7 +902,7 @@ impl AppSettings {
     /// Teaches Relay that `source` should read as `replacement`.
     ///
     /// Returns whether the vocabulary changed. Called only when the user ticks
-    /// "Teach Relay this correction" — most corrections are ordinary edits, and
+    /// "Teach Vox this correction" — most corrections are ordinary edits, and
     /// "Thursday" to "Tuesday" is not something to repeat on every future
     /// transcript.
     ///

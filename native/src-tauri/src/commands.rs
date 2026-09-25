@@ -77,7 +77,7 @@ pub struct AppState {
     pub recorder: AudioRecorder,
     pub vault: VaultManager,
     /// The process-relative vault path Relay used before Vault Directory
-    /// Location was configurable — the "Use Default Relay Vault" choice in
+    /// Location was configurable — the "Use Default Vox Vault" choice in
     /// first-time setup, and the fallback whenever nothing is configured.
     pub default_vault_dir: PathBuf,
     pub config_dir: PathBuf,
@@ -1467,7 +1467,7 @@ pub struct VaultLocationInfo {
     /// Absolute path currently in use, whether from an explicit user choice
     /// or the process-relative default.
     pub path: String,
-    /// The process-relative default path — what "Use Default Relay Vault"
+    /// The process-relative default path — what "Use Default Vox Vault"
     /// would set `path` to.
     pub default_path: String,
     /// Whether the user has explicitly chosen/confirmed a location (Voice
@@ -2426,7 +2426,7 @@ fn parse_bullet_line(content: &str) -> (String, String, String) {
         }
     }
 
-    ("General".to_string(), "Relay".to_string(), content.to_string())
+    ("General".to_string(), "Vox".to_string(), content.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3305,7 +3305,7 @@ pub async fn import_web_capture(
     if payload_json.len() > crate::capture::web::MAX_PAYLOAD_BYTES {
         return Err(CommandError::new(
             "PAYLOAD_TOO_LARGE",
-            "That capture is larger than Relay's capture size limit.",
+            "That capture is larger than Vox's capture size limit.",
         ));
     }
 

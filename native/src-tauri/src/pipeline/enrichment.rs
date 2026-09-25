@@ -72,7 +72,7 @@ const DOMAIN_TOPIC_PATTERNS: &[(&str, &str)] = &[
 
 /// Known technical entities for deterministic entity extraction.
 const KNOWN_ENTITIES: &[&str] = &[
-    "Relay",
+    "Vox",
     "Google Calendar",
     "Google Sign In",
     "Google",
@@ -281,11 +281,17 @@ pub fn extract_deterministic_questions(content: &str, title: &str, topics: &[Str
     let mut questions = Vec::new();
     let lower = content.to_lowercase();
 
-    let primary_entity = entities.first().cloned().unwrap_or_else(|| "Relay".to_string());
     let primary_topic = topics.first().cloned().unwrap_or_else(|| title.to_string());
 
     if lower.contains("local") && (lower.contains("cloud") || lower.contains("sync") || lower.contains("hybrid")) {
-        questions.push(format!("What are the architectural implications of keeping {}'s knowledge layer local while supporting cloud features?", primary_entity));
+        // Named after the note's own subject when it has one. The fallback
+        // used to be the app's former name, which put "Relay" into questions
+        // about notes that never mentioned it.
+        let subject = entities
+            .first()
+            .map(|entity| format!("{entity}'s"))
+            .unwrap_or_else(|| "the system's".to_string());
+        questions.push(format!("What are the architectural implications of keeping {subject} knowledge layer local while supporting cloud features?"));
         questions.push("What information should remain strictly device-local versus cloud-synchronized?".to_string());
     }
 
@@ -998,7 +1004,7 @@ mod tests {
 
     #[test]
     fn test_extract_deterministic_title_strips_conversational_fillers() {
-        let text1 = "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. The important distinction is: Google Sign In should not mean Relay is becoming a cloud app.";
+        let text1 = "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. The important distinction is: Google Sign In should not mean Vox is becoming a cloud app.";
         let title1 = extract_deterministic_title(text1);
         assert!(!title1.to_lowercase().starts_with("yes"));
         assert!(!title1.to_lowercase().contains("makes a lot"));
@@ -1018,7 +1024,7 @@ mod tests {
     fn test_extract_deterministic_knowledge_full_payload() {
         let content = "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration.\n\
             The important distinction is:\n\
-            Google Sign In should not mean Relay is becoming a cloud app.\n\
+            Google Sign In should not mean Vox is becoming a cloud app.\n\
             It should initially be an identity + product telemetry/update layer, while the user's knowledge remains local.\n\
             That gives you a clean path from local → hybrid without forcing users through a painful migration later.\n\
             I would structure it as 3 modes: 100% Local, Google Account only for telemetry, and Hybrid with encrypted cloud sync.";
@@ -1037,13 +1043,13 @@ mod tests {
 
         // 3. Named entities must be extracted
         assert!(!extracted.entities.is_empty());
-        assert!(extracted.entities.contains(&"Relay".to_string()));
+        assert!(extracted.entities.contains(&"Vox".to_string()));
         assert!(extracted.entities.contains(&"Google Calendar".to_string()) || extracted.entities.contains(&"Google Sign In".to_string()) || extracted.entities.contains(&"Google".to_string()));
 
         // 4. Questions must be relevant exploration questions
         assert!(!extracted.questions.is_empty());
         assert!(extracted.questions.len() <= 4);
-        assert!(extracted.questions.iter().any(|q| q.contains("Relay") || q.contains("local") || q.contains("cloud") || q.contains("Calendar")));
+        assert!(extracted.questions.iter().any(|q| q.contains("Vox") || q.contains("local") || q.contains("cloud") || q.contains("Calendar")));
     }
 
     #[test]
@@ -1053,7 +1059,7 @@ mod tests {
         let llm = LLMClient::new(crate::providers::ProviderConfig::default());
 
         let mut scribble = Scribble::new_text(
-            "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. Google Sign In should not mean Relay is becoming a cloud app.",
+            "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. Google Sign In should not mean Vox is becoming a cloud app.",
             None,
         );
         // Pre-populate old topics to verify replacement
@@ -1079,7 +1085,7 @@ mod tests {
 
         // Verify entities replaced
         assert!(!enriched.entities.contains(&"OldEntity".to_string()));
-        assert!(enriched.entities.contains(&"Relay".to_string()) || enriched.entities.contains(&"Google Calendar".to_string()));
+        assert!(enriched.entities.contains(&"Vox".to_string()) || enriched.entities.contains(&"Google Calendar".to_string()));
 
         // Verify questions populated
         assert!(!enriched.ai_metadata.suggested_questions.is_empty());
@@ -1122,7 +1128,7 @@ mod tests {
         let mut file = vault
             .import_vault_file_bytes(
                 "architecture_spec.md",
-                "Yes — this makes a lot of sense. The important distinction is that Google Sign In should not make Relay a cloud app.".as_bytes(),
+                "Yes — this makes a lot of sense. The important distinction is that Google Sign In should not make Vox a cloud app.".as_bytes(),
                 None,
             )
             .unwrap();

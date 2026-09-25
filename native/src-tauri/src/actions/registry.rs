@@ -257,7 +257,7 @@ impl ActionHandler for OpenSourceHandler {
     }
 
     fn description(&self) -> &'static str {
-        "Resolves and opens an existing source item in Relay."
+        "Resolves and opens an existing source item in Vox."
     }
 
     fn requires_confirmation(&self, _action: &UniversalAction) -> bool {

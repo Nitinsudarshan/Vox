@@ -205,7 +205,7 @@ impl<'a> SourceDescriptor<'a> {
             source_type: SourceType::Audio,
             subtype: SourceSubtype::None,
             title: "Dictation",
-            origin: "Relay dictation",
+            origin: "Vox dictation",
             canonical_location: None,
             captured_at,
             trust: SourceTrust::UserAuthored,
