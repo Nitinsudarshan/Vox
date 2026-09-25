@@ -89,6 +89,34 @@ jobs:
       - name: Test
         run: cargo test
 
+  # Vox ships on Windows, and everything behind `cfg(target_os = "windows")` —
+  # text injection, focus tracking, the Win32 `unsafe` calls, the credential
+  # store — is invisible to the Linux job above. This is the only place that
+  # code is compiled, linted and tested before a user runs it.
+  rust-windows:
+    name: Rust backend (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: native/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner image ships MSVC, CMake and LLVM (libclang for bindgen),
+      # which is everything whisper.cpp and the Tauri crates need.
+      - name: Show toolchain
+        run: rustc --version && cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/src-tauri
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
   native-frontend:
     name: Native frontend
     runs-on: ubuntu-latest
@@ -116,3 +144,8 @@ jobs:
       # asset, a Vite config that no longer resolves.
       - name: Build
         run: npm run build
+
+      # The capture extension is bundled separately, from `src/webcapture`,
+      # and nothing above builds it.
+      - name: Build the browser extension
+        run: npm run build:extension

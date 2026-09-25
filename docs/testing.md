@@ -3,11 +3,16 @@
 What is actually tested today, and how to run it. `rules/testing.md` holds the
 conventions (frameworks, placement, what not to test); this file holds the
 state of play. CI runs all of it on every push and pull request —
-`.github/workflows/ci.yml`.
+`.github/workflows/ci.yml` — with the Rust clippy and test steps on both
+`ubuntu-latest` and `windows-latest`, so the `cfg(target_os = "windows")` code
+(injection, focus tracking, the Win32 calls) is compiled, linted and tested
+too. `.github/workflows/security.yml` audits `Cargo.lock` and
+`package-lock.json` against published advisories weekly and whenever either
+changes.
 
 ## 1. Rust backend (`native/src-tauri/`)
 
-665 tests, `cargo test`.
+About 1,250 tests, `cargo test`.
 
 ```bash
 cd native/src-tauri
@@ -319,7 +324,7 @@ cd native && VOX_UPDATE_CAPTURE_FIXTURES=1 npm test
 - `cargo fmt --check` is not a CI gate. The crate predates any formatting pass
   and currently differs from rustfmt in 45 files; running `cargo fmt` once, as
   its own commit, is what unblocks adding it.
-- Several large native components have no tests: `ProviderSettings.tsx` (1,874
+- Several large native components have no tests: `ProviderSettings.tsx` (2,241
   lines), `ScribbleDetailEditor.tsx`, `DictationPill.tsx`. The pill is the
   highest-value of these, since it owns the capture state machine.
 - No end-to-end test drives a real recording through capture, STT, and
@@ -356,7 +361,6 @@ cd native && VOX_UPDATE_CAPTURE_FIXTURES=1 npm test
   markup last week. `docs/capture.md` §11 holds the reproducible manual
   procedure, and it is the only thing that validates the site extractors
   against live pages.
-- The extension bundle build (`npm run build:extension`) is not a CI step. Its
-  sources live under `native/src/webcapture/`, so they are typechecked and
-  unit-tested with the rest of the frontend; what is unverified in CI is the
-  bundling itself.
+- The Windows CI job compiles and unit-tests the Windows code paths, but no
+  test exercises them against a real desktop: injection, focus tracking and
+  the credential store are still verified by hand on a Windows machine.

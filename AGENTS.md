@@ -42,8 +42,8 @@ All paths are relative to `rules/`.
 
 ## Verifying a change
 
-CI runs these on every push and pull request (`.github/workflows/ci.yml`);
-run them locally before pushing:
+CI runs these on every push and pull request (`.github/workflows/ci.yml`),
+the Rust checks on both Linux and Windows; run them locally before pushing:
 
 ```bash
 # Rust backend
