@@ -114,8 +114,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # One test at a time. Several tests reach process-wide OS state on
+      # Windows (the clipboard, the foreground window, the credential store),
+      # and a native crash then names the test that caused it: libtest prints
+      # each test's name before running it only when it runs them serially.
       - name: Test
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
   native-frontend:
     name: Native frontend

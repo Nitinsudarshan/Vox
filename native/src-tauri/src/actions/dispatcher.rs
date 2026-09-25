@@ -19,7 +19,16 @@ impl ActionDispatcher {
         confirmed: bool,
         vault: Option<&VaultManager>,
     ) -> Result<serde_json::Value, String> {
-        let registry = ActionRegistry::new();
+        Self::execute_with(&ActionRegistry::new(), action, confirmed, vault)
+    }
+
+    /// [`execute`](Self::execute) against a given registry.
+    pub fn execute_with(
+        registry: &ActionRegistry,
+        action: &mut UniversalAction,
+        confirmed: bool,
+        vault: Option<&VaultManager>,
+    ) -> Result<serde_json::Value, String> {
         let handler = registry.find_handler(&action.action_type)
             .ok_or_else(|| format!("Action '{}' is unsupported/not-implemented", action.action_type.as_str()))?;
 
@@ -95,8 +104,39 @@ mod tests {
     use super::*;
     use crate::actions::model::ActionType;
 
+    /// A read-only handler with no side effects, standing in for `open_url` —
+    /// the real one launches the system browser, which a unit test must not
+    /// do (on a CI runner it leaves a browser running behind the job).
+    struct InertReadOnly;
+
+    impl crate::actions::registry::ActionHandler for InertReadOnly {
+        fn action_type(&self) -> ActionType {
+            ActionType::OpenUrl
+        }
+        fn name(&self) -> &'static str {
+            "inert_open_url"
+        }
+        fn description(&self) -> &'static str {
+            "Test stand-in that does nothing."
+        }
+        fn requires_confirmation(&self, _action: &UniversalAction) -> bool {
+            false
+        }
+        fn validate(&self, _action: &UniversalAction) -> Result<(), String> {
+            Ok(())
+        }
+        fn execute(
+            &self,
+            action: &UniversalAction,
+            _ctx: &crate::actions::registry::ActionExecutionContext,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({ "opened": action.target }))
+        }
+    }
+
     #[test]
     fn test_read_only_action_executes_without_confirmation() {
+        let registry = ActionRegistry::with_handlers(vec![std::sync::Arc::new(InertReadOnly)]);
         let mut act = UniversalAction::new(
             ActionType::OpenUrl,
             "https://github.com/stablyai/orca",
@@ -104,19 +144,9 @@ mod tests {
         );
         assert!(!act.requires_confirmation);
 
-        // What this pins is the gate: a read-only action is never held for
-        // confirmation. Whether the OS then manages to launch a browser
-        // depends on the machine (a headless CI container has no `xdg-open`),
-        // so a launch failure is allowed; being gated is not.
-        let res = ActionDispatcher::execute(&mut act, false, None);
-        assert_ne!(act.status, ActionStatus::RequiresConfirmation);
-        match res {
-            Ok(_) => assert_eq!(act.status, ActionStatus::Completed),
-            Err(message) => assert!(
-                !message.contains("requires explicit confirmation"),
-                "a read-only action must not be gated"
-            ),
-        }
+        let res = ActionDispatcher::execute_with(&registry, &mut act, false, None);
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(act.status, ActionStatus::Completed);
     }
 
     #[test]

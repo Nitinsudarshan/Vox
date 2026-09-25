@@ -306,6 +306,13 @@ impl ActionRegistry {
         }
     }
 
+    /// A registry holding exactly these handlers. The dispatcher's own tests
+    /// use it to exercise gating and auditing without a handler that opens a
+    /// browser or writes to the vault.
+    pub fn with_handlers(handlers: Vec<Arc<dyn ActionHandler>>) -> Self {
+        Self { handlers }
+    }
+
     pub fn find_handler(&self, action_type: &ActionType) -> Option<Arc<dyn ActionHandler>> {
         self.handlers.iter().find(|h| &h.action_type() == action_type).cloned()
     }
