@@ -37,9 +37,16 @@ pub enum MeetingState {
 }
 
 impl MeetingState {
-    /// Whether a crash in this state left work to finish on next launch.
+    /// Whether a meeting found in this state at launch was cut off by Vox
+    /// closing. Nothing records or transcribes before startup recovery runs,
+    /// so `Transcribing` is as stranded as `Recording`: a quit during a
+    /// stop's final decode used to leave the meeting "Transcribing…" forever,
+    /// with its audio on disk and no way to play it.
     pub fn is_interrupted(self) -> bool {
-        matches!(self, MeetingState::Recording | MeetingState::Paused)
+        matches!(
+            self,
+            MeetingState::Recording | MeetingState::Paused | MeetingState::Transcribing
+        )
     }
 }
 
@@ -460,7 +467,7 @@ mod tests {
     fn interrupted_states_are_exactly_the_ones_a_crash_can_leave() {
         assert!(MeetingState::Recording.is_interrupted());
         assert!(MeetingState::Paused.is_interrupted());
-        assert!(!MeetingState::Transcribing.is_interrupted());
+        assert!(MeetingState::Transcribing.is_interrupted());
         assert!(!MeetingState::Completed.is_interrupted());
         assert!(!MeetingState::Failed.is_interrupted());
     }

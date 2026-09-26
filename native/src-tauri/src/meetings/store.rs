@@ -709,15 +709,27 @@ impl MeetingStore {
             }
             let audio_dir = self.audio_dir(&meeting.id)?;
             let chunks = list_chunks(&audio_dir);
-            let duration = chunks
-                .iter()
-                .filter_map(|path| wav_duration_seconds(path))
-                .sum::<f64>();
+            // A meeting stopped before Vox closed has had its checkpoints
+            // merged into one recording; measure and link that instead.
+            let merged = audio_dir.join(crate::meetings::checkpoint::MERGED_AUDIO_FILE);
+            let merged = merged.exists().then_some(merged);
+            let duration = match &merged {
+                Some(path) if chunks.is_empty() => wav_duration_seconds(path).unwrap_or(0.0),
+                _ => chunks
+                    .iter()
+                    .filter_map(|path| wav_duration_seconds(path))
+                    .sum::<f64>(),
+            };
             let segments = self.load_transcript(&meeting.id).unwrap_or_default();
 
             let id = meeting.id.clone();
             self.update_meeting(&id, |record| {
                 record.state = MeetingState::Completed;
+                if record.audio_path.is_none() {
+                    if let Some(path) = &merged {
+                        record.audio_path = Some(path.to_string_lossy().to_string());
+                    }
+                }
                 // A duration measured from the audio that actually reached
                 // disk, not the clock the dead process was keeping.
                 if duration > 0.0 {
@@ -783,10 +795,10 @@ fn modified_time(path: &Path) -> Option<std::time::SystemTime> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), MeetingStoreError> {
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
-    let tmp = path.with_extension(format!(
-        "tmp{}",
-        std::process::id()
-    ));
+    // Unique per write, not per process: two threads writing the same file
+    // (the live worker and a translation) shared one temp name and could
+    // interleave their bytes before either rename.
+    let tmp = path.with_extension(format!("tmp{}", uuid::Uuid::new_v4().simple()));
     fs::write(&tmp, bytes)?;
     match fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
@@ -1050,6 +1062,43 @@ mod tests {
 
         let recovered = store.load_meeting("meeting-f").unwrap();
         assert!((recovered.duration_seconds - 2.0).abs() < 0.01);
+    }
+
+    /// A quit during a stop's final decode leaves the meeting `Transcribing`
+    /// with its merged recording on disk; recovery completes it and links
+    /// that recording so it can be played and transcribed again.
+    #[test]
+    fn recovery_finishes_a_meeting_left_transcribing_and_links_its_recording() {
+        let vault = temp_vault("recover-transcribing");
+        let store = MeetingStore::new(&vault);
+        let mut meeting = Meeting::new("meeting-t".into(), "Stopped".into(), MeetingSource::Recorded);
+        meeting.state = MeetingState::Transcribing;
+        store.create(&meeting).expect("create");
+        store.save_meeting(&meeting).expect("save");
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let merged = store
+            .audio_dir("meeting-t")
+            .unwrap()
+            .join(crate::meetings::checkpoint::MERGED_AUDIO_FILE);
+        let mut writer = hound::WavWriter::create(&merged, spec).unwrap();
+        for _ in 0..48_000 {
+            writer.write_sample(0i16).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let recovered = store.recover_interrupted().expect("recover");
+
+        assert_eq!(recovered, vec!["meeting-t".to_string()]);
+        let meeting = store.load_meeting("meeting-t").unwrap();
+        assert_eq!(meeting.state, MeetingState::Completed);
+        assert!((meeting.duration_seconds - 3.0).abs() < 0.01);
+        assert_eq!(meeting.audio_path.as_deref(), Some(merged.to_string_lossy().as_ref()));
     }
 
     #[test]

@@ -91,6 +91,9 @@ pub enum MeetingEngineError {
     #[error("no meeting is being recorded")]
     NotRecording,
 
+    #[error("the last meeting is still being transcribed; try again when it finishes")]
+    StillFinishing,
+
     #[error(
         "no speech model is installed, so a meeting would record audio with no transcript. \
          Install one under Settings › Speech."
@@ -202,6 +205,20 @@ struct ActiveMeeting {
 pub struct MeetingEngine {
     store: Arc<MeetingStore>,
     active: Mutex<Option<ActiveMeeting>>,
+    /// The meeting a `stop` is still finishing: out of the recording slot,
+    /// but its transcript is still being written. Deleting it, moving the
+    /// vault or starting another recording in that window split or
+    /// resurrected the meeting.
+    finalizing: Mutex<Option<String>>,
+}
+
+/// Clears the finalizing slot however `stop` returns.
+struct FinalizingGuard<'a>(&'a Mutex<Option<String>>);
+
+impl Drop for FinalizingGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.lock_or_recover() = None;
+    }
 }
 
 impl MeetingEngine {
@@ -209,6 +226,7 @@ impl MeetingEngine {
         Self {
             store,
             active: Mutex::new(None),
+            finalizing: Mutex::new(None),
         }
     }
 
@@ -216,8 +234,14 @@ impl MeetingEngine {
         &self.store
     }
 
+    /// Whether a meeting is recording, or still being finished by `stop`.
     pub fn is_recording(&self) -> bool {
-        self.active.lock_or_recover().is_some()
+        self.active.lock_or_recover().is_some() || self.finalizing.lock_or_recover().is_some()
+    }
+
+    /// The meeting `stop` is still finishing, if any.
+    pub fn finalizing_meeting_id(&self) -> Option<String> {
+        self.finalizing.lock_or_recover().clone()
     }
 
     /// The current recording's state, or an idle status.
@@ -267,6 +291,9 @@ impl MeetingEngine {
         let mut guard = self.active.lock_or_recover();
         if guard.is_some() {
             return Err(MeetingEngineError::AlreadyRecording);
+        }
+        if self.finalizing.lock_or_recover().is_some() {
+            return Err(MeetingEngineError::StillFinishing);
         }
 
         let models_dir = config_dir.join("models");
@@ -418,11 +445,15 @@ impl MeetingEngine {
     /// Blocking, and deliberately so: the returned [`Meeting`] is complete,
     /// which is what lets the frontend navigate straight to it.
     pub fn stop(&self, app: Option<AppHandle>) -> Result<Meeting, MeetingEngineError> {
-        let mut active = self
-            .active
-            .lock_or_recover()
-            .take()
-            .ok_or(MeetingEngineError::NotRecording)?;
+        let mut active = {
+            let mut slot = self.active.lock_or_recover();
+            let active = slot.take().ok_or(MeetingEngineError::NotRecording)?;
+            // Claimed under the same lock, so there is no instant in which
+            // the meeting is neither recording nor finalizing.
+            *self.finalizing.lock_or_recover() = Some(active.id.clone());
+            active
+        };
+        let _finalizing = FinalizingGuard(&self.finalizing);
 
         let id = active.id.clone();
         let _ = self.store.update_meeting(&id, |record| {
@@ -452,6 +483,13 @@ impl MeetingEngine {
                 }
             }
         };
+
+        // The recording is on disk now. Record where, before the open-ended
+        // wait below, so a quit or crash during it leaves a playable meeting.
+        let _ = self.store.update_meeting(&id, |record| {
+            record.duration_seconds = pump.duration_seconds;
+            record.audio_path = pump.audio_path.clone();
+        });
 
         // 3. Let the decoder finish its backlog, then close its channel and
         //    join it.
