@@ -158,6 +158,24 @@ impl MemoryStore {
         Ok(updated)
     }
 
+    /// Marks a memory as current: the user confirmed it, so it is no longer
+    /// an unverified inference and joins what context packs and retrieval use.
+    pub fn mark_current(&self, id: &str) -> Result<MemoryItem, String> {
+        let mut items = self.items.write().map_err(|e| e.to_string())?;
+        let idx = items
+            .iter()
+            .position(|m| m.id == id)
+            .ok_or_else(|| format!("Memory {} not found", id))?;
+
+        let item = &mut items[idx];
+        item.epistemic_state = EpistemicState::Current;
+        item.updated_at = chrono::Utc::now().to_rfc3339();
+        let updated = item.clone();
+        drop(items);
+        self.persist()?;
+        Ok(updated)
+    }
+
     /// Marks a memory as known false backed by contradicting counter-evidence.
     pub fn mark_known_false(
         &self,

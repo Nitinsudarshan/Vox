@@ -32,6 +32,12 @@ pub struct SupabaseClient {
 }
 
 impl SupabaseClient {
+    /// Whether a real project is configured. The built-in URL and key are
+    /// placeholders: with them there is no cloud account to reach.
+    pub fn is_configured(&self) -> bool {
+        self.config.url != DEFAULT_SUPABASE_URL && self.config.anon_key != DEFAULT_SUPABASE_ANON_KEY
+    }
+
     pub fn new(custom_url: Option<String>, custom_anon_key: Option<String>) -> Self {
         let mut config = SupabaseConfig::default();
         if let Some(u) = custom_url.filter(|s| !s.trim().is_empty()) {

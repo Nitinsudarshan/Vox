@@ -34,11 +34,54 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
+/// How long sign-in waits for the browser to come back. Closing the consent
+/// tab used to leave "Signing in…" up forever, with a thread and a port held.
+const CALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Waits for the request to `/oauth/callback`, answering anything else with a
+/// 404 and waiting on: a browser preconnect or a stray local request arriving
+/// first used to end the flow with a state mismatch.
+fn await_callback_request(listener: &TcpListener) -> Result<(std::net::TcpStream, String), String> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("OAuth loopback listener error: {}", e))?;
+    let deadline = std::time::Instant::now() + CALLBACK_TIMEOUT;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err("Sign-in timed out waiting for the browser. Try again.".to_string());
+        }
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
+            Err(e) => return Err(format!("OAuth loopback listener error: {}", e)),
+        };
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+
+        let mut buffer = [0u8; 4096];
+        let Ok(bytes_read) = stream.read(&mut buffer) else { continue };
+        let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("/")
+            .to_string();
+        if path == "/oauth/callback" || path.starts_with("/oauth/callback?") {
+            return Ok((stream, path));
+        }
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    }
+}
+
 /// Executes the loopback Desktop OAuth 2.0 PKCE flow.
 /// 1. Binds ephemeral port on 127.0.0.1:0
 /// 2. Generates PKCE verifier + S256 challenge + random state
 /// 3. Opens default system browser to Google's consent screen
-/// 4. Listens for localhost callback with timeout
+/// 4. Listens for the localhost callback, giving up after [`CALLBACK_TIMEOUT`]
 /// 5. Validates state and exchanges authorization code + PKCE verifier for tokens
 /// 6. Optionally fetches user profile if identity scopes were requested
 pub async fn start_desktop_oauth_flow(
@@ -79,20 +122,8 @@ pub async fn start_desktop_oauth_flow(
     // 4. Await HTTP callback in blocking task with timeout
     let expected_state = pkce.state.clone();
     let auth_code = tokio::task::spawn_blocking(move || {
-        listener.set_nonblocking(false).ok();
-
-        let (mut stream, _) = listener
-            .accept()
-            .map_err(|e| format!("OAuth loopback listener error: {}", e))?;
-
-        let mut buffer = [0u8; 4096];
-        let bytes_read = stream
-            .read(&mut buffer)
-            .map_err(|e| format!("Failed to read OAuth callback response: {}", e))?;
-        let request_str = String::from_utf8_lossy(&buffer[..bytes_read]);
-
-        let first_line = request_str.lines().next().unwrap_or_default();
-        let path = first_line.split_whitespace().nth(1).unwrap_or("/");
+        let (mut stream, path) = await_callback_request(&listener)?;
+        let path = path.as_str();
 
         let mut code_opt = None;
         let mut state_opt = None;

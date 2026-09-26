@@ -279,6 +279,15 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        // First, so a second process exits before any other plugin or the
+        // setup below (meeting recovery, hotkeys, tray) runs in it.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window(hotkeys::MAIN_WINDOW_LABEL) {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -348,9 +357,9 @@ pub fn run() {
 
             let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = tauri::menu::MenuItem::with_id(app, "show", "Show Vox", true, None::<&str>)?;
-            let record_i = tauri::menu::MenuItem::with_id(app, "record", "Start Recording", true, None::<&str>)?;
-            
-            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &record_i, &quit_i])?;
+            // No "Start Recording" item: it only ever showed the window, the
+            // same as "Show Vox", while its label promised a recording.
+            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
             
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(icon) = app.default_window_icon() {
@@ -368,13 +377,6 @@ pub fn run() {
                         app.exit(0);
                     }
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "record" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.unminimize();
                             let _ = window.show();

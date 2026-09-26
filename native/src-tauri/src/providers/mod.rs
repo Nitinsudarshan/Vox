@@ -310,20 +310,21 @@ impl ProviderType {
 /// the user does not need, and the cost the other way is telling someone their
 /// transcript stays local when it does not.
 pub fn is_loopback_url(url: &str) -> bool {
-    let rest = match url.split_once("://") {
-        Some((_, rest)) => rest,
-        None => url,
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Credentials before an `@` are not the host: `localhost:1@remote.host`
+    // is remote.host, and used to count as this machine.
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or(""),
+        None => host_port.rsplit_once(':').map_or(host_port, |(host, _port)| host),
     };
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("")
-        .rsplit_once(':')
-        .map(|(host, _port)| host)
-        .unwrap_or_else(|| rest.split(['/', '?', '#']).next().unwrap_or(""));
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    matches!(host, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0")
-        || host.starts_with("127.")
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    // Parsed rather than prefix-matched: `127.example.com` is a domain name.
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,13 +377,44 @@ impl ProviderConfig {
     }
 
     /// The API key stored for one provider, if any.
+    ///
+    /// The legacy single key is a fallback for the hosted providers only. A
+    /// custom endpoint is whatever server the user typed in, and it used to be
+    /// sent the old key — usually an OpenAI one — as a bearer token.
     pub fn api_key_for(&self, provider: &ProviderType) -> Option<&str> {
+        let legacy = match provider {
+            ProviderType::Ollama | ProviderType::CustomOpenAI => None,
+            _ => self.cloud_api_key.as_deref(),
+        };
         self.provider_keys
             .get(provider.slug())
             .map(String::as_str)
-            .or(self.cloud_api_key.as_deref())
+            .or(legacy)
             .map(str::trim)
             .filter(|key| !key.is_empty())
+    }
+
+    /// Moves the legacy single key into the slot of the provider it was
+    /// being used for — the active one, when that is a hosted provider — so
+    /// it stops being offered to every other provider. Leaves it alone when
+    /// the active provider is local or custom, where it cannot have belonged.
+    pub fn adopt_legacy_key(&mut self) {
+        let Some(legacy) = self
+            .cloud_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+        else {
+            return;
+        };
+        if matches!(self.active_provider, ProviderType::Ollama | ProviderType::CustomOpenAI) {
+            return;
+        }
+        self.provider_keys
+            .entry(self.active_provider.slug().to_string())
+            .or_insert(legacy);
+        self.cloud_api_key = None;
     }
 
     /// Whether the active provider will keep the transcript on this machine.
@@ -1825,6 +1857,13 @@ mod tests {
         assert!(ProviderType::CustomOpenAI.is_local(Some("http://localhost:1234/v1")));
         assert!(ProviderType::CustomOpenAI.is_local(Some("http://127.0.0.1:8000/v1")));
         assert!(!ProviderType::CustomOpenAI.is_local(Some("https://models.example.com/v1")));
+        // Look-alikes that are somewhere else entirely.
+        assert!(!is_loopback_url("http://127.example.com/v1"));
+        assert!(!is_loopback_url("http://localhost:1@remote.host/v1"));
+        assert!(!is_loopback_url("http://localhost.example.com:11434"));
+        assert!(is_loopback_url("http://[::1]:11434"));
+        assert!(is_loopback_url("http://127.0.0.2:8080"));
+        assert!(is_loopback_url("localhost:11434"));
         // Unconfigured is not a promise that it stays here.
         assert!(!ProviderType::CustomOpenAI.is_local(None));
         assert!(!ProviderType::Groq.is_local(None));

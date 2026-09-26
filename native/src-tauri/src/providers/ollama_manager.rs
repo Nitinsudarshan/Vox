@@ -54,11 +54,24 @@ fn ollama_command() -> Command {
         .ok()
         .and_then(|guard| guard.clone())
         .filter(|path| path.is_file());
-    match managed {
+    let command = match managed {
         Some(path) => Command::new(path),
         None => Command::new("ollama"),
-    }
+    };
+    // Vox is a windowed app; without this, Windows gives the child its own
+    // console window, and closing that window kills the server.
+    #[cfg(windows)]
+    let command = {
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    command
 }
+
+/// Windows' `CREATE_NO_WINDOW` process-creation flag.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub async fn ensure_ollama_ready(host: &str, model: &str) -> OllamaStatus {
     if ping(host).await {
@@ -74,6 +87,9 @@ pub async fn ensure_ollama_ready(host: &str, model: &str) -> OllamaStatus {
 
     match ollama_command()
         .arg("serve")
+        // Serve where Settings points, not on Ollama's default port: a
+        // configured `localhost:8080` otherwise started a server nobody pinged.
+        .env("OLLAMA_HOST", host)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -107,7 +123,8 @@ async fn ping(host: &str) -> bool {
 }
 
 fn is_local_host(host: &str) -> bool {
-    host.contains("localhost") || host.contains("127.0.0.1")
+    // Substring matching let `localhost.example.com` start a local server.
+    super::is_loopback_url(host)
 }
 
 /// Fire-and-forget: if `model` isn't already pulled, ask Ollama to pull it.

@@ -32,6 +32,11 @@ tauri-plugin-opener = "2"
 # because the interesting part of this feature is that the setting is finally
 # read at all, not the file formats.
 tauri-plugin-autostart = "2"
+# One Vox per user. A second launch (the Start-menu shortcut while Vox runs
+# minimised from autostart) used to run startup recovery against the live
+# instance's meeting, mark it recovered and delete its checkpoints; now it
+# only brings the running window forward.
+tauri-plugin-single-instance = "2"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

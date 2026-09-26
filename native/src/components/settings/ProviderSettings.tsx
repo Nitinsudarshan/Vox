@@ -365,7 +365,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       const updated = await invoke<RelayAccount>('delete_relay_account');
       setAccount(updated);
       window.dispatchEvent(new CustomEvent('relay-account-changed', { detail: updated }));
-      setDeleteAccountSuccess('Vox Cloud Account was deleted. All local markdown notes, scribbles, audio, and vectors remain 100% untouched.');
+      setDeleteAccountSuccess('Your Vox account was deleted and you are signed out. Your notes, scribbles, meetings and audio on this computer are untouched.');
       setDeleteAccountModalOpen(false);
       setDeleteAccountAck(false);
       setDeleteAccountInput('');

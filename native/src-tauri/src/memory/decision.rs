@@ -348,14 +348,17 @@ pub fn confirm_decision(
         )
         .map_err(DecisionError::Store)?;
 
-    let record = DecisionRecord::from_memory(&updated).ok_or(DecisionError::Incomplete)?;
-
     // Confirming settles the question, so a previously unverified guess
-    // stops being one.
-    if updated.epistemic_state != EpistemicState::Current {
-        let _ = store.update_memory(id, &updated.content, None);
-    }
+    // stops being one. (This used to call `update_memory`, which never
+    // touches the epistemic state, so a confirmed guess stayed out of every
+    // context pack.)
+    let updated = if updated.epistemic_state != EpistemicState::Current {
+        store.mark_current(id).map_err(DecisionError::Store)?
+    } else {
+        updated
+    };
 
+    let record = DecisionRecord::from_memory(&updated).ok_or(DecisionError::Incomplete)?;
     Ok(record)
 }
 
@@ -580,6 +583,11 @@ mod tests {
         assert_eq!(reread.len(), 1);
         assert_eq!(reread[0].provenance, DecisionProvenance::Captured);
         assert_eq!(reread[0].evidence.len(), 2, "both sources are kept");
+
+        // And it is now an active belief, so context packs and retrieval see it.
+        let memory = store.get_memory(&record.id).unwrap();
+        assert_eq!(memory.epistemic_state, EpistemicState::Current);
+        assert!(store.list_active(None).iter().any(|m| m.id == record.id));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

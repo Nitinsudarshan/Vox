@@ -332,6 +332,35 @@ mod tests {
         assert!(store.read().unwrap().unwrap().contains("sk-old"));
     }
 
+    /// The legacy key is never offered to a custom endpoint, and is adopted
+    /// by the hosted provider that was active when it was in use.
+    #[test]
+    fn the_legacy_key_stays_with_hosted_providers() {
+        use crate::providers::ProviderType;
+
+        let custom = ProviderConfig {
+            active_provider: ProviderType::CustomOpenAI,
+            cloud_api_key: Some("sk-old".into()),
+            ..Default::default()
+        };
+        assert_eq!(custom.api_key_for(&ProviderType::CustomOpenAI), None);
+        assert_eq!(custom.api_key_for(&ProviderType::Ollama), None);
+
+        let mut openai = ProviderConfig {
+            active_provider: ProviderType::CloudOpenAI,
+            cloud_api_key: Some("sk-old".into()),
+            ..Default::default()
+        };
+        openai.adopt_legacy_key();
+        assert_eq!(openai.cloud_api_key, None);
+        assert_eq!(openai.api_key_for(&ProviderType::CloudOpenAI), Some("sk-old"));
+        assert_eq!(openai.api_key_for(&ProviderType::CloudAnthropic), None);
+
+        let mut still_custom = custom.clone();
+        still_custom.adopt_legacy_key();
+        assert_eq!(still_custom.cloud_api_key.as_deref(), Some("sk-old"), "kept, not guessed");
+    }
+
     #[test]
     fn an_unchanged_save_does_not_rewrite_the_store() {
         let store = CachedStore::new(MemoryStore::default());

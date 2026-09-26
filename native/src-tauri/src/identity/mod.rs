@@ -268,10 +268,19 @@ pub async fn delete_relay_account(config_dir: &Path) -> Result<RelayAccount, Str
     let existing = load_relay_account(config_dir);
     let tokens = load_oauth_tokens(config_dir);
 
-    // 1. Delete cloud profile in Supabase if authenticated
+    // 1. Delete the cloud profile first. A failure stops here, before
+    //    anything local changes, so the user can try again rather than be
+    //    told a cloud account was deleted when it was not.
     if let (Some(user_id), Some(toks)) = (&existing.user_id, &tokens) {
         let supabase = SupabaseClient::new(None, None);
-        let _ = supabase.delete_account_profile(user_id, &toks.access_token).await;
+        if supabase.is_configured() {
+            supabase
+                .delete_account_profile(user_id, &toks.access_token)
+                .await
+                .map_err(|e| {
+                    format!("The Vox Cloud account could not be deleted, so nothing was changed: {e}")
+                })?;
+        }
     }
 
     // 2. Wipe secure keyring credentials

@@ -866,6 +866,7 @@ impl AppSettings {
             crate::providers::secrets::default_store(),
             &mut settings.provider,
         );
+        settings.provider.adopt_legacy_key();
         Ok(settings)
     }
 
