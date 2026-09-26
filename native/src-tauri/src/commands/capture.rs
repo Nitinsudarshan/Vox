@@ -418,7 +418,7 @@ pub struct AudioDeviceInfo {
 #[tauri::command]
 pub async fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
     use cpal::traits::{DeviceTrait, HostTrait};
-    let host = cpal::default_host();
+    let host = crate::capture::device::host();
     let default_device_name = host.default_input_device().and_then(|d| d.name().ok());
 
     let mut devices = Vec::new();
@@ -446,7 +446,7 @@ pub async fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
 #[tauri::command]
 pub async fn get_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, CommandError> {
     use cpal::traits::{DeviceTrait, HostTrait};
-    let host = cpal::default_host();
+    let host = crate::capture::device::host();
     let default_name = host.default_output_device().and_then(|d| d.name().ok());
 
     let mut devices = Vec::new();

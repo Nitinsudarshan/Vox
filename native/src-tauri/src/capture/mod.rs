@@ -461,7 +461,7 @@ fn spawn_warm_capture_thread(
     std::thread::spawn(move || {
         let _alive_guard = AliveGuard(alive.clone());
 
-        let host = cpal::default_host();
+        let host = device::host();
         let device = match device::open_preferred(&host) {
             Some(d) => d,
             None => {
@@ -585,29 +585,15 @@ fn spawn_warm_capture_thread(
         }
 
         let _ = init_tx.send(Ok(sample_rate));
-        let started = std::time::Instant::now();
 
         let _ = stop_rx.recv();
 
-        // Tearing down a WASAPI input stream milliseconds after `play()` crashed
-        // the process with an access violation on the Windows CI runner — every
-        // capture test that kept its stream alive passed, and the one that
-        // stopped at once did not. A dictation hotkey tapped and released
-        // straight away does the same thing. So a stream that is stopped almost
-        // as soon as it started is given a moment to settle, then paused (cpal
-        // releases a playing client without ever stopping it) before it is
-        // dropped. Only a near-instant stop pays for this.
-        if let Some(remaining) = MIN_STREAM_LIFETIME.checked_sub(started.elapsed()) {
-            std::thread::sleep(remaining);
-        }
+        // Stopped before it is released: cpal drops a playing client without
+        // stopping it.
         let _ = stream.pause();
         drop(stream);
     })
 }
-
-/// The shortest time an input stream lives before it is torn down; see the
-/// teardown in `spawn_warm_capture_thread`.
-const MIN_STREAM_LIFETIME: Duration = Duration::from_millis(100);
 
 fn compute_rms_f32(samples: &[f32]) -> f32 {
     if samples.is_empty() {
