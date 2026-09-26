@@ -70,6 +70,34 @@ const DOMAIN_TOPIC_PATTERNS: &[(&str, &str)] = &[
     ("architecture", "System Architecture"),
 ];
 
+/// Where `needle` first occurs in `haystack`, ignoring ASCII case, as a byte
+/// offset into `haystack` itself.
+///
+/// Finding a marker in `haystack.to_lowercase()` and slicing the original at
+/// that offset is wrong whenever lowercasing changes a character's length
+/// (`İ` becomes two characters, the Kelvin sign becomes `k`), and panics when
+/// the offset lands inside a character. The markers and fillers here are
+/// ASCII apart from exact punctuation such as `—`, so matching bytes with ASCII
+/// case folding finds the same text without changing a single offset.
+fn find_ignoring_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    if n.is_empty() || n.len() > h.len() {
+        return None;
+    }
+    (0..=h.len() - n.len())
+        .find(|&i| haystack.is_char_boundary(i) && h[i..i + n.len()].eq_ignore_ascii_case(n))
+}
+
+/// `text` without `prefix`, compared ignoring ASCII case; see
+/// [`find_ignoring_ascii_case`] for why not via `to_lowercase`.
+fn strip_prefix_ignoring_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let n = prefix.len();
+    (text.len() >= n
+        && text.as_bytes()[..n].eq_ignore_ascii_case(prefix.as_bytes())
+        && text.is_char_boundary(n))
+    .then(|| &text[n..])
+}
+
 /// Known technical entities for deterministic entity extraction.
 const KNOWN_ENTITIES: &[&str] = &[
     "Vox",
@@ -153,9 +181,8 @@ pub fn extract_deterministic_title(content: &str) -> String {
     }
 
     // 2. Look for strong insight lead-ins (e.g. "The important distinction is:", "Core Insight:", "Architecture:")
-    let lower = clean_text.to_lowercase();
     for marker in &["the important distinction is:", "core insight:", "architecture:", "key insight:", "the goal is:"] {
-        if let Some(pos) = lower.find(marker) {
+        if let Some(pos) = find_ignoring_ascii_case(clean_text, marker) {
             let after = &clean_text[pos + marker.len()..].trim_start();
             let first_sentence = after.split(&['.', '\n', ';', '!'][..]).next().unwrap_or(after).trim();
             let words: Vec<&str> = first_sentence.split_whitespace().take(8).collect();
@@ -173,11 +200,9 @@ pub fn extract_deterministic_title(content: &str) -> String {
             continue;
         }
 
-        let mut lower_line = line_clean.to_lowercase();
         for filler in FILLER_PREFIXES {
-            if lower_line.starts_with(filler) {
-                line_clean = line_clean[filler.len()..].trim_start_matches(&[' ', ',', '—', '-', ':'][..]).trim().to_string();
-                lower_line = line_clean.to_lowercase();
+            if let Some(rest) = strip_prefix_ignoring_ascii_case(&line_clean, filler) {
+                line_clean = rest.trim_start_matches(&[' ', ',', '—', '-', ':'][..]).trim().to_string();
             }
         }
 
@@ -1001,6 +1026,26 @@ pub async fn summarize_scribble(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_title_marker_after_text_that_changes_length_when_lowercased_does_not_panic() {
+        // "İ" lowercases to two characters, so an offset found in the
+        // lowercased copy points somewhere else in the original.
+        let text = "İstanbul notes. The important distinction is: keep the knowledge layer on the device";
+        assert_eq!(
+            extract_deterministic_title(text),
+            clean_title_formatting("keep the knowledge layer on the device")
+        );
+    }
+
+    #[test]
+    fn a_filler_prefix_is_matched_without_lowercasing_the_line() {
+        // The Kelvin sign lowercases to an ASCII "k" while being three bytes.
+        assert_eq!(strip_prefix_ignoring_ascii_case("So Basically ship it", "so basically"), Some(" ship it"));
+        assert_eq!(strip_prefix_ignoring_ascii_case("\u{212A}now this", "know"), None);
+        assert_eq!(find_ignoring_ascii_case("İİ Core Insight: x", "core insight:"), Some(5));
+        assert!(extract_deterministic_title("\u{212A}elvin readings drifted overnight in the lab").len() > 5);
+    }
 
     #[test]
     fn test_extract_deterministic_title_strips_conversational_fillers() {
