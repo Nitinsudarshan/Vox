@@ -31,8 +31,9 @@ merged_from: None
 Remind me to send the numbers to Priya before Friday.
 ```
 
-`type` is `voice_note` for every dictation, from the hotkey or the pill, and
-`scribble` for a note `PipelineEngine::process_scribble` wrote. Scribbles in
+`type` is `voice_note` for every dictation, from the hotkey or the pill.
+Notes of type `scribble` were written by a retired capture mode and still
+read. Scribbles in
 the knowledge layer are separate files, `<vault>/scribbles/<id>.md`, with
 their own frontmatter (`vault::scribble`).
 

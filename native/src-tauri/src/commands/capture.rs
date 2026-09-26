@@ -118,10 +118,12 @@ pub async fn start_capture(
     mode: String,
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
-    if mode.is_empty() {
+    // Only the modes a surface starts. A recording in any other mode would
+    // be transcribed and then written nowhere.
+    if mode != VOICE_NOTE_CAPTURE_MODE && mode != TODO_CAPTURE_MODE {
         return Err(CommandError::new(
             "INVALID_INPUT",
-            "Capture mode cannot be empty",
+            &format!("Unknown capture mode: {mode}"),
         ));
     }
 
@@ -226,6 +228,9 @@ pub fn save_voice_note(
 /// The capture mode the TODOs page records in.
 pub const TODO_CAPTURE_MODE: &str = "todo";
 
+/// The capture mode the pill's click-to-record uses: a Voice Note.
+pub const VOICE_NOTE_CAPTURE_MODE: &str = "voice_note";
+
 /// One spoken line, as a todo title.
 ///
 /// Click-to-record on the TODOs page is deliberately narrow: whatever was
@@ -268,11 +273,16 @@ pub async fn stop_capture(
         return Ok(None);
     }
 
-    emit_capture_status_event(&app, false, Some(captured.mode.clone()), "TRANSCRIBING", None);
+    let mode = captured.mode.clone();
+    emit_capture_status_event(&app, false, Some(mode.clone()), "TRANSCRIBING", None);
     let result = process_captured_audio(&app, &state, captured).await;
+    // Every stop that announced TRANSCRIBING ends with a final status, so
+    // the always-on-top pill does not stay on "Transcribing…" when the
+    // recording was started from another surface (the TODOs page).
     match &result {
         Ok(Some(processed)) => {
             let _ = app.emit(CAPTURE_PROCESSED_EVENT, processed);
+            emit_capture_status_event(&app, false, Some(mode), "SUCCESS", None);
         }
         Ok(None) => {
             // had_audio was true (real, sustained energy was captured) but
@@ -284,7 +294,9 @@ pub async fn stop_capture(
             tracing::info!("[Dictation] Transcription produced no usable text");
             emit_capture_status_event(&app, false, None, "NO_SPEECH", None);
         }
-        Err(_) => {}
+        Err(e) => {
+            emit_capture_status_event(&app, false, Some(mode), "ERROR", Some(e.message.clone()));
+        }
     }
     result
 }
@@ -375,8 +387,8 @@ async fn process_captured_audio(
                 spoken_audio_base64: None,
             }))
         }
-        "voice_note" => Ok(Some(ProcessedPipelineResult {
-            mode: "voice_note".to_string(),
+        VOICE_NOTE_CAPTURE_MODE => Ok(Some(ProcessedPipelineResult {
+            mode: VOICE_NOTE_CAPTURE_MODE.to_string(),
             transcript: transcript.clone(),
             note_id: voice_note_id,
             kanban_cards_created: 0,
@@ -384,13 +396,6 @@ async fn process_captured_audio(
             sources: Vec::new(),
             spoken_audio_base64: None,
         })),
-        "scribble" => {
-            let llm = LLMClient::new(settings.provider.clone());
-            PipelineEngine::process_scribble(&llm, &state.vault, &transcript)
-                .await
-                .map(Some)
-                .map_err(|e| CommandError::new("PIPELINE_ERROR", &e.to_string()))
-        }
         _ => Ok(Some(ProcessedPipelineResult {
             mode: captured.mode.clone(),
             transcript: transcript.clone(),

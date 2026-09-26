@@ -557,8 +557,10 @@ pub async fn enrich_scribble(
     let mut scribble = vault
         .get_scribble(scribble_id)
         .map_err(|e| format!("Scribble not found: {}", e))?;
+    let analyzed = scribble.clone();
+    let source = untrusted_source_description(&scribble);
 
-    let parsed_opt = match enrich_content(llm, &scribble.content).await {
+    let parsed_opt = match enrich_content_from(llm, &scribble.content, source.as_deref()).await {
         Ok(parsed) => Some(parsed),
         Err(err) => {
             tracing::warn!("AI enrichment LLM call failed for scribble {}: {}", scribble_id, err);
@@ -712,12 +714,67 @@ pub async fn enrich_scribble(
         }
     }
 
-    scribble.updated_at = chrono::Utc::now().to_rfc3339();
+    // The model call can take a minute on a local model; merge onto what is
+    // on disk now rather than writing back the copy read before it.
+    let mut current = vault
+        .get_scribble(scribble_id)
+        .map_err(|e| format!("Scribble not found: {}", e))?;
+    if !merge_enrichment(&analyzed, scribble, &mut current) {
+        return Ok(current);
+    }
+    current.updated_at = chrono::Utc::now().to_rfc3339();
     vault
-        .save_scribble(&scribble)
+        .save_scribble(&current)
         .map_err(|e| format!("Failed to save enriched scribble: {}", e))?;
 
-    Ok(scribble)
+    Ok(current)
+}
+
+/// How to describe a Scribble's origin to a model, when that origin is an
+/// external source whose text must be read as material rather than
+/// instructions. `None` for the user's own words.
+fn untrusted_source_description(scribble: &Scribble) -> Option<String> {
+    let meta = &scribble.source_metadata;
+    if meta.get("trust").and_then(|t| t.as_str()) != Some(crate::capture::web::TRUST_EXTERNAL_UNTRUSTED) {
+        return None;
+    }
+    let application = meta.get("application").and_then(|v| v.as_str()).unwrap_or("a website");
+    Some(match meta.get("url").and_then(|v| v.as_str()) {
+        Some(url) => format!("content captured from {application} at {url}"),
+        None => format!("content captured from {application}"),
+    })
+}
+
+/// Applies what enrichment produced from `analyzed` onto `current`, the
+/// Scribble as it is on disk after the model answered.
+///
+/// Only derived fields move: the summary, topics, entities, AI metadata and
+/// AI relationships, and the title unless the user renamed it meanwhile.
+/// PARA, tags, status and the user's own links stay as the user left them.
+/// Returns `false`, changing nothing, when the content itself was edited
+/// during the call — the analysis no longer describes it.
+fn merge_enrichment(analyzed: &Scribble, enriched: Scribble, current: &mut Scribble) -> bool {
+    if current.content != analyzed.content {
+        return false;
+    }
+    if current.title == analyzed.title {
+        current.title = enriched.title;
+    }
+    current.summary = enriched.summary;
+    current.topics = enriched.topics;
+    current.entities = enriched.entities;
+    current.ai_metadata = enriched.ai_metadata;
+
+    current.relationships.retain(|r| r.source == "user");
+    let user_targets: HashSet<String> =
+        current.relationships.iter().map(|r| r.target_id.clone()).collect();
+    current.relationships.extend(
+        enriched
+            .relationships
+            .into_iter()
+            .filter(|r| r.source != "user" && !user_targets.contains(&r.target_id)),
+    );
+    true
 }
 
 /// Enriches an imported vault file using the exact canonical Relay Analysis contract.
@@ -1006,19 +1063,26 @@ pub async fn summarize_scribble(
     }
 
     let bounded = bound_summary_content(&scribble.content, 12_000);
+    let source = untrusted_source_description(&scribble);
 
-    match summarize_content(llm, &bounded).await {
-        Ok(summary_text) => {
-            scribble.summary = Some(summary_text);
-            scribble.updated_at = chrono::Utc::now().to_rfc3339();
-            vault
-                .save_scribble(&scribble)
-                .map_err(|e| format!("Failed to save scribble summary: {}", e))?;
-        }
-        Err(err) => {
-            return Err(format!("LLM summarization failed: {}", err));
-        }
+    let summary_text = summarize_content_from(llm, &bounded, source.as_deref())
+        .await
+        .map_err(|err| format!("LLM summarization failed: {}", err))?;
+
+    // Re-read after the model call so edits made while it ran survive; a
+    // summary of content that has since changed is not saved at all.
+    let mut current = vault
+        .get_scribble(scribble_id)
+        .map_err(|e| format!("Scribble not found: {}", e))?;
+    if current.content != scribble.content {
+        return Ok(current);
     }
+    current.summary = Some(summary_text);
+    current.updated_at = chrono::Utc::now().to_rfc3339();
+    vault
+        .save_scribble(&current)
+        .map_err(|e| format!("Failed to save scribble summary: {}", e))?;
+    scribble = current;
 
     Ok(scribble)
 }
@@ -1026,6 +1090,64 @@ pub async fn summarize_scribble(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn relationship(target: &str, source: &str) -> ScribbleRelationship {
+        ScribbleRelationship {
+            id: format!("rel_{target}_{source}"),
+            target_id: target.to_string(),
+            relationship_type: REL_SAME_TOPIC.to_string(),
+            confidence: 0.85,
+            source: source.to_string(),
+        }
+    }
+
+    /// Edits the user saved while the model was running survive the merge;
+    /// only what enrichment derives is replaced.
+    #[test]
+    fn enrichment_merges_onto_the_scribble_as_it_is_now() {
+        let analyzed = Scribble::new_text("The body", Some("Old title"));
+        let mut enriched = analyzed.clone();
+        enriched.title = "AI title".to_string();
+        enriched.topics = vec!["Rust".to_string()];
+        enriched.relationships = vec![relationship("s_ai", "ai")];
+
+        let mut current = analyzed.clone();
+        current.tags = vec!["mine".to_string()];
+        current.relationships = vec![relationship("s_user", "user")];
+        assert!(merge_enrichment(&analyzed, enriched.clone(), &mut current));
+        assert_eq!(current.title, "AI title");
+        assert_eq!(current.topics, vec!["Rust"]);
+        assert_eq!(current.tags, vec!["mine"]);
+        let targets: Vec<&str> = current.relationships.iter().map(|r| r.target_id.as_str()).collect();
+        assert_eq!(targets, vec!["s_user", "s_ai"]);
+
+        let mut renamed = analyzed.clone();
+        renamed.title = "User title".to_string();
+        assert!(merge_enrichment(&analyzed, enriched.clone(), &mut renamed));
+        assert_eq!(renamed.title, "User title");
+
+        let mut edited = analyzed.clone();
+        edited.content = "A different body".to_string();
+        assert!(!merge_enrichment(&analyzed, enriched, &mut edited));
+        assert!(edited.topics.is_empty());
+    }
+
+    /// A Scribble promoted from a capture reaches the model framed as an
+    /// external source; the user's own Scribble does not.
+    #[test]
+    fn only_captured_scribbles_are_framed_as_external() {
+        let mut captured = Scribble::new_text("page text", None);
+        captured.source_metadata = serde_json::json!({
+            "trust": "external_untrusted",
+            "application": "GitHub",
+            "url": "https://github.com/a/b",
+        });
+        assert_eq!(
+            untrusted_source_description(&captured).as_deref(),
+            Some("content captured from GitHub at https://github.com/a/b")
+        );
+        assert_eq!(untrusted_source_description(&Scribble::new_text("mine", None)), None);
+    }
 
     #[test]
     fn a_title_marker_after_text_that_changes_length_when_lowercased_does_not_panic() {

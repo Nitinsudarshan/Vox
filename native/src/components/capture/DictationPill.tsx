@@ -97,7 +97,10 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
 
   // Audio Level & Mode-Aware Status
   const [levelHistory, setLevelHistory] = useState<number[]>(SILENT_LEVEL_HISTORY);
-  const [captureMode, setCaptureMode] = useState<string | null>(null);
+  // A ref, not state: it is read only inside the capture listener, and as an
+  // effect dependency it re-subscribed every listener (clearing the hover
+  // timers) whenever the mode changed.
+  const captureModeRef = useRef<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string>('Text inserted');
@@ -122,6 +125,15 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   const hoverLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsRef = useRef<AppSettings | null>(null);
   const isRecordingRef = useRef<boolean>(false);
+
+  /** Collapses a result message after `ms`, unless something replaced it. */
+  const collapseAfter = (ms: number) => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    successTimerRef.current = setTimeout(
+      () => setPhase((p) => (p === 'success' ? 'collapsed' : p)),
+      ms,
+    );
+  };
 
   const isExpanded = (phase !== 'collapsed' && phase !== 'hidden_notch' && phase !== 'error' && phase !== 'warning') || hovering || popoverOpen;
 
@@ -438,9 +450,13 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
 
     const unlistenState = listen<CaptureStatePayload>('capture-state-changed', ({ payload }) => {
       if (payload.mode) {
-        setCaptureMode(payload.mode);
+        captureModeRef.current = payload.mode;
       }
       if (payload.active) {
+        // A new recording outlives whatever was about to collapse the pill:
+        // the previous session's "Text inserted" timer and a hover-leave.
+        if (successTimerRef.current) clearTimeout(successTimerRef.current);
+        if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current);
         if (!isRecordingRef.current) {
           isRecordingRef.current = true;
           if (settingsRef.current?.sound?.dictation_sounds ?? true) {
@@ -471,19 +487,19 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           setProcessingMessage(payload.message || 'Waiting for tab...');
         } else if (payload.status === 'SUCCESS') {
           setPhase('success');
-          const isDictation = payload.mode === 'dictation' || captureMode === 'dictation';
-          if (isDictation) {
+          const mode = payload.mode ?? captureModeRef.current;
+          if (mode === 'dictation') {
             setSuccessMessage('Text inserted');
+          } else if (mode === 'todo') {
+            setSuccessMessage('Todo added');
           } else {
             setSuccessMessage('Voice note saved');
           }
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => setPhase('collapsed'), 2200);
+          collapseAfter(2200);
         } else if (payload.status === 'FOCUS_CHANGED') {
           setPhase('success');
           setSuccessMessage(payload.message || 'Copied (Ctrl+V)');
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => setPhase('collapsed'), 3200);
+          collapseAfter(3200);
         } else if (payload.status === 'ERROR' || payload.message) {
           setPhase('error');
           setErrorMessage(payload.message || 'Capture processing failed');
@@ -536,7 +552,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       if (hoverEnterTimerRef.current) clearTimeout(hoverEnterTimerRef.current);
       if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current);
     };
-  }, [captureMode]);
+  }, []);
 
   // Update Rust native window geometry
   useEffect(() => {
@@ -558,7 +574,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
     if (!hovering) {
       hoverEnterTimerRef.current = setTimeout(() => {
         setHovering(true);
-        if (phase === 'collapsed' || phase === 'hidden_notch') setPhase('expanded');
+        setPhase((p) => (p === 'collapsed' || p === 'hidden_notch' ? 'expanded' : p));
       }, HOVER_EXPAND_DELAY_MS);
     }
   };
@@ -569,7 +585,9 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
 
     hoverLeaveTimerRef.current = setTimeout(() => {
       setHovering(false);
-      if (phase === 'expanded') setPhase('collapsed');
+      // Read the phase when the timer fires, not when the mouse left: a
+      // recording may have started in between.
+      setPhase((p) => (p === 'expanded' ? 'collapsed' : p));
     }, HOVER_COLLAPSE_DELAY_MS);
   };
 
@@ -589,8 +607,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           setPhase('success');
           setSuccessMessage('Voice note saved');
           if (onProcessComplete) onProcessComplete(result);
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => setPhase('collapsed'), 2200);
+          collapseAfter(2200);
         } else {
           setPhase('collapsed');
         }
@@ -602,7 +619,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       try {
         setErrorMessage(null);
         setWarningMessage(null);
-        setCaptureMode('voice_note');
+        captureModeRef.current = 'voice_note';
         // No optimistic setPhase('listening') here either — the native
         // recorder is the source of truth for whether capture actually
         // started. Claiming "listening" before start_capture resolves (or

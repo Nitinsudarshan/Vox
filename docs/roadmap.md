@@ -78,7 +78,3 @@ the code disagree, the code is right and this file is the bug.
 - **Continuous background capture** is excluded on purpose (Decision 5 —
   push-to-talk and on-screen-triggered capture only, no meeting bot, no
   always-on recording). Listed so it is not mistaken for an oversight.
-- **The scribble capture mode** (`start_capture("scribble")`, which runs
-  `PipelineEngine::process_scribble`) is implemented and handled by
-  `stop_capture`, but no surface starts it. Whether to give it a surface or
-  remove it is an open product question, recorded here rather than guessed.

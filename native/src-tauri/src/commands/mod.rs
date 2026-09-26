@@ -8,7 +8,7 @@
 use crate::sync::MutexExt;
 use crate::capture::{AudioRecorder, SttEngine};
 use crate::hotkeys;
-use crate::pipeline::{PipelineEngine, ProcessedPipelineResult};
+use crate::pipeline::ProcessedPipelineResult;
 use crate::providers::{LLMClient, OllamaStatus, ProviderType};
 use crate::settings::{AppSettings, HotkeySettings, PillPosition};
 use crate::vault::{

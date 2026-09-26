@@ -37,10 +37,11 @@ interface CommandError {
   `status: "NO_SPEECH"` and returns `Ok(None)` **without invoking the STT
   engine**. Otherwise it emits `status: "TRANSCRIBING"` and runs the shared
   dictation pipeline (`capture::dictation`: transcribe, the deterministic
-  pass, then the opt-in cleanup — skipped for todos and scribbles). An empty
-  result returns `Ok(None)`. Every non-empty transcript is saved as a Voice
-  Note; `"todo"` also writes a Kanban card, and `"scribble"` runs
-  `PipelineEngine::process_scribble`.
+  pass, then the opt-in cleanup — skipped for todos). An empty result returns
+  `Ok(None)`. Every non-empty transcript is saved as a Voice Note, and
+  `"todo"` also writes a Kanban card. `start_capture` accepts only
+  `"voice_note"` and `"todo"`. Every stop that announced `TRANSCRIBING` ends
+  with `SUCCESS` or `ERROR`, so the pill never stays on "Transcribing…".
 
   Universal dictation (the global push-to-talk hotkey) does **not** go through
   these commands: `hotkeys::stop_dictation_session` stops the recorder, runs

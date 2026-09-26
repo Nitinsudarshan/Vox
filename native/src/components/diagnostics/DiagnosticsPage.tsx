@@ -236,10 +236,10 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
     }
   };
 
-  const handleSaveSettingsDirect = async () => {
-    if (!settings) return;
+  const handleSaveSettingsDirect = async (next: AppSettings | null = settings) => {
+    if (!next) return;
     try {
-      await invoke('save_settings', { settings });
+      await invoke('save_settings', { settings: next });
       await fetchSttModels();
     } catch (e) {
       console.error('Failed to save settings from diagnostics:', e);

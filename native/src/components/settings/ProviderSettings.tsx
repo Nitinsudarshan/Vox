@@ -572,6 +572,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     if (!loading && activeSection === 'general') {
       loadVaultLocation();
     }
+    if (!loading && activeSection === 'dictation') {
+      loadAudioDevices();
+    }
     if (!loading && activeSection === 'advanced') {
       if (settings.provider.active_provider === 'ollama') {
         checkLocalLlm();
@@ -601,14 +604,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
 
 
-  const handleSaveDirect = async () => {
+  const handleSaveDirect = async (next: AppSettings = settings) => {
     try {
-      await invoke('save_settings', { settings });
+      await invoke('save_settings', { settings: next });
       setSaved(true);
       setError('');
       setTimeout(() => setSaved(false), 2000);
       fetchSttModels();
-      if (settings.provider.active_provider === 'ollama') {
+      if (next.provider.active_provider === 'ollama') {
         fetchOllamaModels();
       }
     } catch (err) {
@@ -624,7 +627,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
   // Find default or active microphone
   const defaultDevice = audioDevices.find((d) => d.is_default) || audioDevices[0];
-  const activeDeviceName = settings.audio_input?.selected_device || defaultDevice?.name || 'Default Microphone Array';
+  const activeDeviceName = settings.audio_input?.selected_device || defaultDevice?.name || 'System default';
 
   if (loading) {
     return (

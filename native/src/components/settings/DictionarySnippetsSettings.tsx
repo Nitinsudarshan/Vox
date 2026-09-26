@@ -22,7 +22,8 @@ import { Switch } from '@/components/ui/switch';
 interface DictionarySnippetsSettingsProps {
   settings: AppSettings;
   onUpdateSettings: (updater: (prev: AppSettings) => AppSettings) => void;
-  onSaveDirect: () => Promise<void>;
+  /** Saves `next` when given, otherwise the settings as last rendered. */
+  onSaveDirect: (next?: AppSettings) => Promise<void>;
 }
 
 const DEFAULT_SYSTEM_WORDS = [
@@ -65,6 +66,15 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
   const words = rawWords.length > 0 ? rawWords : DEFAULT_SYSTEM_WORDS;
   const snippets = settings.snippets || [];
 
+  // Every edit saves the settings it produced. Updating the parent's state and
+  // then saving its `settings` sent the copy from before the edit, and the
+  // backend's settings-changed echo then took the edit off the screen.
+  const apply = async (updater: (prev: AppSettings) => AppSettings) => {
+    const next = updater(settings);
+    onUpdateSettings(() => next);
+    await onSaveDirect(next);
+  };
+
   // --- DICTIONARY HANDLERS ---
   const handleAddDictionaryWords = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -80,24 +90,22 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
     const currentWords = settings.dictionary || DEFAULT_SYSTEM_WORDS;
     const combined = Array.from(new Set([...currentWords, ...rawWords]));
 
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       dictionary: combined,
     }));
     setDictInput('');
     setDictMessage(`Added ${rawWords.length} word${rawWords.length > 1 ? 's' : ''}`);
     setTimeout(() => setDictMessage(null), 2500);
-    await onSaveDirect();
   };
 
   const handleDeleteDictionaryWord = async (wordToDelete: string) => {
     const currentWords = settings.dictionary || DEFAULT_SYSTEM_WORDS;
     const updated = currentWords.filter((w) => w.toLowerCase() !== wordToDelete.toLowerCase());
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       dictionary: updated,
     }));
-    await onSaveDirect();
   };
 
   // --- LEARNED CORRECTION HANDLERS ---
@@ -107,23 +115,21 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
   const corrections = settings.vocabulary_corrections || [];
 
   const handleToggleCorrection = async (source: string) => {
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       vocabulary_corrections: (prev.vocabulary_corrections || []).map((c) =>
         c.source === source ? { ...c, enabled: !c.enabled } : c,
       ),
     }));
-    await onSaveDirect();
   };
 
   const handleDeleteCorrection = async (source: string) => {
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       vocabulary_corrections: (prev.vocabulary_corrections || []).filter(
         (c) => c.source !== source,
       ),
     }));
-    await onSaveDirect();
   };
 
   const handleExportDictionary = () => {
@@ -152,13 +158,12 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
       if (imported.length > 0) {
         const currentWords = settings.dictionary || DEFAULT_SYSTEM_WORDS;
         const combined = Array.from(new Set([...currentWords, ...imported]));
-        onUpdateSettings((prev) => ({
+        await apply((prev) => ({
           ...prev,
           dictionary: combined,
         }));
         setDictMessage(`Imported ${imported.length} words`);
         setTimeout(() => setDictMessage(null), 2500);
-        await onSaveDirect();
       }
     };
     reader.readAsText(file);
@@ -188,7 +193,7 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
     };
 
     const updated = [...snippets, newSnippet];
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       snippets: updated,
     }));
@@ -196,7 +201,6 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
     setNewSnippetTitle('');
     setNewSnippetTrigger('');
     setNewSnippetText('');
-    await onSaveDirect();
   };
 
   const handleUpdateEditingSnippet = async (e: React.FormEvent) => {
@@ -204,30 +208,27 @@ export const DictionarySnippetsSettings: React.FC<DictionarySnippetsSettingsProp
     if (!editingSnippet || !editingSnippet.trigger.trim() || !editingSnippet.snippet_text.trim()) return;
 
     const updated = snippets.map((s) => (s.id === editingSnippet.id ? editingSnippet : s));
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       snippets: updated,
     }));
     setEditingSnippet(null);
-    await onSaveDirect();
   };
 
   const handleDeleteSnippet = async (id: string) => {
     const updated = snippets.filter((s) => s.id !== id);
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       snippets: updated,
     }));
-    await onSaveDirect();
   };
 
   const handleToggleSnippet = async (id: string, enabled: boolean) => {
     const updated = snippets.map((s) => (s.id === id ? { ...s, enabled } : s));
-    onUpdateSettings((prev) => ({
+    await apply((prev) => ({
       ...prev,
       snippets: updated,
     }));
-    await onSaveDirect();
   };
 
   const handleCopySnippetText = (id: string, text: string) => {
