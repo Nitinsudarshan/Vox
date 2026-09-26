@@ -217,18 +217,46 @@ pub fn parse_shortcut_to_vk_codes(shortcut: &str) -> Option<Vec<i32>> {
             "tab" => 0x09,              // VK_TAB
             "esc" | "escape" => 0x1B,   // VK_ESCAPE
             "backspace" => 0x08,        // VK_BACK
-            "f1" => 0x70,
-            "f2" => 0x71,
-            "f3" => 0x72,
-            "f4" => 0x73,
-            "f5" => 0x74,
-            "f6" => 0x75,
-            "f7" => 0x76,
-            "f8" => 0x77,
-            "f9" => 0x78,
-            "f10" => 0x79,
-            "f11" => 0x7A,
-            "f12" => 0x7B,
+            // Every name `HotkeyRecorder.tsx` can emit. An unknown name makes
+            // this return `None`, which silently turns off the stuck-key stop
+            // for that binding, so the two lists have to agree.
+            "up" | "arrowup" => 0x26,
+            "down" | "arrowdown" => 0x28,
+            "left" | "arrowleft" => 0x25,
+            "right" | "arrowright" => 0x27,
+            "insert" => 0x2D,
+            "delete" | "del" => 0x2E,
+            "home" => 0x24,
+            "end" => 0x23,
+            "pageup" => 0x21,
+            "pagedown" => 0x22,
+            "numdecimal" => 0x6E,
+            "numadd" => 0x6B,
+            "numsubtract" => 0x6D,
+            "nummultiply" => 0x6A,
+            "numdivide" => 0x6F,
+            "period" => 0xBE,
+            "comma" => 0xBC,
+            "semicolon" => 0xBA,
+            "slash" => 0xBF,
+            "backslash" => 0xDC,
+            "minus" => 0xBD,
+            "equal" => 0xBB,
+            "backquote" => 0xC0,
+            "bracketleft" => 0xDB,
+            "bracketright" => 0xDD,
+            "quote" => 0xDE,
+            // F1–F24 are VK_F1 (0x70) onwards.
+            f if f.len() >= 2
+                && f.starts_with('f')
+                && f[1..].parse::<i32>().is_ok_and(|n| (1..=24).contains(&n)) =>
+            {
+                0x6F + f[1..].parse::<i32>().unwrap_or(1)
+            }
+            // Num0–Num9 are VK_NUMPAD0 (0x60) onwards.
+            n if n.len() == 4 && n.starts_with("num") && n.as_bytes()[3].is_ascii_digit() => {
+                0x60 + i32::from(n.as_bytes()[3] - b'0')
+            }
             // Single character keys
             s if s.len() == 1 => {
                 let ch = s.chars().next().unwrap();
@@ -297,30 +325,68 @@ pub fn register_hotkeys(
     try_register_hotkeys(app, show_hide_hotkey, dictation_hotkey, capture_hotkey);
 }
 
+/// The three global bindings, in the order `apply_hotkeys` takes them.
+#[derive(Debug, Clone, Copy)]
+pub struct HotkeyBindings<'a> {
+    pub show_hide: &'a str,
+    pub dictation: &'a str,
+    pub capture: &'a str,
+}
+
+impl<'a> From<&'a crate::settings::HotkeySettings> for HotkeyBindings<'a> {
+    fn from(settings: &'a crate::settings::HotkeySettings) -> Self {
+        Self {
+            show_hide: &settings.show_hide_hotkey,
+            dictation: &settings.dictation_hotkey,
+            capture: &settings.capture_hotkey,
+        }
+    }
+}
+
 /// Re-registers hotkeys with new bindings, replacing whatever is
 /// currently bound. Used both at startup and whenever Settings saves new
 /// hotkeys — hotkeys take effect immediately, no app restart required.
+///
+/// When the new dictation or show/hide binding is refused and `previous` is
+/// given, the previous bindings are registered again before the error
+/// returns. Clearing everything first and then failing used to leave the app
+/// with no dictation hotkey at all until restart, while the error implied the
+/// old one still worked.
 pub fn apply_hotkeys(
     app: &AppHandle,
-    show_hide_hotkey: &str,
-    dictation_hotkey: &str,
-    capture_hotkey: &str,
+    bindings: HotkeyBindings<'_>,
+    previous: Option<HotkeyBindings<'_>>,
 ) -> Result<(), String> {
     app.global_shortcut()
         .unregister_all()
         .map_err(|e| format!("Could not clear existing hotkeys: {}", e))?;
-    let status = try_register_hotkeys(app, show_hide_hotkey, dictation_hotkey, capture_hotkey);
-    if !status.dictation_registered {
-        return Err(status
-            .dictation_error
-            .unwrap_or_else(|| "Dictation hotkey registration failed".to_string()));
+    let status = try_register_hotkeys(app, bindings.show_hide, bindings.dictation, bindings.capture);
+    let failure = if !status.dictation_registered {
+        Some(
+            status
+                .dictation_error
+                .unwrap_or_else(|| "Dictation hotkey registration failed".to_string()),
+        )
+    } else if !status.show_hide_registered {
+        Some(
+            status
+                .show_hide_error
+                .unwrap_or_else(|| "Show/hide hotkey registration failed".to_string()),
+        )
+    } else {
+        None
+    };
+    let Some(failure) = failure else {
+        return Ok(());
+    };
+    match previous {
+        Some(previous) => {
+            let _ = app.global_shortcut().unregister_all();
+            try_register_hotkeys(app, previous.show_hide, previous.dictation, previous.capture);
+            Err(format!("{failure}. Your previous hotkeys are still active."))
+        }
+        None => Err(failure),
     }
-    if !status.show_hide_registered {
-        return Err(status
-            .show_hide_error
-            .unwrap_or_else(|| "Show/hide hotkey registration failed".to_string()));
-    }
-    Ok(())
 }
 
 /// Registers each hotkey *independently* — one binding failing (e.g. a
@@ -449,23 +515,77 @@ fn on_dictation_pressed_with_mode(app: &AppHandle, dictation_state: &SharedDicta
         }
         PressOutcome::StartSession(generation) => {
             tracing::debug!("[Dictation] Start requested via hotkey for mode: {}", mode);
-            let audio_dir = state.config_dir.join("audio");
-            match state.recorder.start(mode, &audio_dir, Some(app.clone())) {
-                Ok(_) => {
-                    tracing::debug!("[Audio] Capture started for mode: {}", mode);
-                    emit_capture_state(app, &state.recorder);
-                    spawn_release_watchdog(
-                        app.clone(),
-                        dictation_state.clone(),
+            // Opening a cold microphone can take seconds, and this handler
+            // runs on the thread that pumps every window's messages: starting
+            // here froze the whole app until the device answered. The focus
+            // target was already taken synchronously in `on_press`.
+            let session_app = app.clone();
+            let session_state = dictation_state.clone();
+            let mode = mode.to_string();
+            let spawned = std::thread::Builder::new()
+                .name("vox-dictation-start".to_string())
+                .spawn(move || {
+                    start_dictation_capture(
+                        &session_app,
+                        &session_state,
+                        &mode,
                         generation,
                         dictation_hotkey,
                         toggle_to_talk,
-                    );
+                    )
+                });
+            if spawned.is_err() {
+                tracing::error!("[Dictation] Could not start the capture thread");
+                let mut guard = dictation_state.lock_or_recover();
+                if guard.generation == generation {
+                    guard.active = false;
                 }
-                Err(e) => {
-                    tracing::info!("Dictation hotkey could not start capture: {}", e);
-                    dictation_state.lock_or_recover().active = false;
-                }
+            }
+        }
+    }
+}
+
+/// Opens the microphone for a hotkey session, off the window thread.
+fn start_dictation_capture(
+    app: &AppHandle,
+    dictation_state: &SharedDictationState,
+    mode: &str,
+    generation: u64,
+    dictation_hotkey: String,
+    toggle_to_talk: bool,
+) {
+    let state = app.state::<AppState>();
+    let audio_dir = state.config_dir.join("audio");
+    match state.recorder.start(mode, &audio_dir, Some(app.clone())) {
+        Ok(_) => {
+            // A release, or a second toggle press, that arrived before the
+            // recorder took its lock found nothing to stop. Honour it now
+            // rather than leave the microphone open with no stop coming.
+            let still_live = {
+                let guard = dictation_state.lock_or_recover();
+                guard.active && guard.generation == generation
+            };
+            if !still_live {
+                tracing::debug!("[Dictation] Session {} ended while the microphone opened", generation);
+                let _ = tauri::async_runtime::block_on(state.recorder.stop());
+                emit_capture_state(app, &state.recorder);
+                return;
+            }
+            tracing::debug!("[Audio] Capture started for mode: {}", mode);
+            emit_capture_state(app, &state.recorder);
+            spawn_release_watchdog(
+                app.clone(),
+                dictation_state.clone(),
+                generation,
+                dictation_hotkey,
+                toggle_to_talk,
+            );
+        }
+        Err(e) => {
+            tracing::info!("Dictation hotkey could not start capture: {}", e);
+            let mut guard = dictation_state.lock_or_recover();
+            if guard.generation == generation {
+                guard.active = false;
             }
         }
     }
@@ -924,6 +1044,16 @@ mod tests {
             Some(vec![0x12, 0x41])
         );
         assert_eq!(parse_shortcut_to_vk_codes("UnknownNonExistentKey"), None);
+        // Names the recorder emits beyond letters, digits and F1–F12.
+        assert_eq!(parse_shortcut_to_vk_codes("Ctrl+Backquote"), Some(vec![0x11, 0xC0]));
+        assert_eq!(parse_shortcut_to_vk_codes("F13"), Some(vec![0x7C]));
+        assert_eq!(parse_shortcut_to_vk_codes("F24"), Some(vec![0x87]));
+        assert_eq!(parse_shortcut_to_vk_codes("F25"), None);
+        assert_eq!(parse_shortcut_to_vk_codes("Num0"), Some(vec![0x60]));
+        assert_eq!(parse_shortcut_to_vk_codes("Shift+PageUp"), Some(vec![0x10, 0x21]));
+        assert_eq!(parse_shortcut_to_vk_codes("Alt+Period"), Some(vec![0x12, 0xBE]));
+        assert_eq!(parse_shortcut_to_vk_codes("Up"), Some(vec![0x26]));
+        assert_eq!(parse_shortcut_to_vk_codes("F"), Some(vec![0x46]));
     }
 
     #[test]

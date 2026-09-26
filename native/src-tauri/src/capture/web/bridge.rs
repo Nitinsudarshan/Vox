@@ -33,10 +33,12 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::sync::MutexExt;
 
 use super::MAX_PAYLOAD_BYTES;
 
@@ -330,15 +332,24 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
 /// turns capture off.
 pub struct BridgeHandle {
     pub port: u16,
+    /// The port the settings asked for; `port` differs when it was taken.
+    pub preferred_port: u16,
     pub token: String,
     stop: Arc<AtomicBool>,
+    accept_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl BridgeHandle {
-    /// Signals the accept loop to exit. The loop notices within one accept
-    /// timeout, so this returns immediately rather than joining.
+    /// Stops the accept loop and waits for it to release the port.
+    ///
+    /// Joined, not only signalled: a restart binds straight afterwards, and
+    /// while the old loop still held the listener the new bind failed and
+    /// fell back to a random port the paired extension did not know.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.accept_thread.lock_or_recover().take() {
+            let _ = thread.join();
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -368,15 +379,12 @@ where
         .map_err(|e| format!("capture bridge could not configure its listener: {e}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
-    let handle = BridgeHandle {
-        port,
-        token: token.clone(),
-        stop: stop.clone(),
-    };
+    let handle_token = token.clone();
+    let handle_stop = stop.clone();
 
     let on_capture = Arc::new(on_capture);
     let active = Arc::new(AtomicUsize::new(0));
-    std::thread::Builder::new()
+    let accept_thread = std::thread::Builder::new()
         .name("vox-capture-bridge".to_string())
         .spawn(move || {
             tracing::info!("[Capture] Bridge listening on 127.0.0.1:{}", port);
@@ -416,7 +424,13 @@ where
         })
         .map_err(|e| format!("capture bridge thread could not start: {e}"))?;
 
-    Ok(handle)
+    Ok(BridgeHandle {
+        port,
+        preferred_port,
+        token: handle_token,
+        stop: handle_stop,
+        accept_thread: Mutex::new(Some(accept_thread)),
+    })
 }
 
 /// Binds loopback only, falling back to an ephemeral port if the preferred
@@ -708,5 +722,18 @@ mod tests {
         assert!(response.contains("PAIRING_TOKEN_INVALID"));
 
         handle.stop();
+    }
+
+    /// Restarting (every settings save used to) gets the same port back: the
+    /// old listener is released before the new one binds.
+    #[test]
+    fn a_restarted_bridge_keeps_its_port() {
+        let first = start(0, generate_token(), |_| (200, "{}".to_string())).unwrap();
+        let port = first.port;
+        first.stop();
+
+        let second = start(port, generate_token(), |_| (200, "{}".to_string())).unwrap();
+        assert_eq!(second.port, port);
+        second.stop();
     }
 }

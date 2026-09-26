@@ -57,6 +57,12 @@ fn find_enclosing_sentence(text: &str, match_pos: usize) -> String {
     sentence.trim().to_string()
 }
 
+// The catalog keywords are ASCII, so they are matched with ASCII case folding
+// at offsets into `content` itself. Offsets found in `content.to_lowercase()`
+// overran the original after a character whose lowercase is longer (`İ`), and
+// slicing it for the evidence sentence panicked.
+use crate::pipeline::find_ignoring_ascii_case;
+
 pub struct EntityExtractor;
 
 impl EntityExtractor {
@@ -69,7 +75,6 @@ impl EntityExtractor {
             return results;
         }
 
-        let lower_content = content.to_lowercase();
 
         // 1. Extract URLs
         for word in content.split_whitespace() {
@@ -120,17 +125,17 @@ impl EntityExtractor {
         // 3. Extract Technologies from catalog
         for (keyword, canonical) in TECH_CATALOG {
             let mut search_from = 0;
-            while let Some(pos) = lower_content[search_from..].find(keyword) {
+            while let Some(pos) = find_ignoring_ascii_case(&content[search_from..], keyword) {
                 let actual_pos = search_from + pos;
                 search_from = actual_pos + keyword.len();
 
                 // Check word boundaries
                 let before_char = if actual_pos > 0 {
-                    lower_content[..actual_pos].chars().last()
+                    content[..actual_pos].chars().last()
                 } else {
                     None
                 };
-                let after_char = lower_content[actual_pos + keyword.len()..].chars().next();
+                let after_char = content[actual_pos + keyword.len()..].chars().next();
 
                 let left_boundary = before_char.map(|c| !c.is_alphanumeric()).unwrap_or(true);
                 let right_boundary = after_char.map(|c| !c.is_alphanumeric()).unwrap_or(true);
@@ -154,16 +159,16 @@ impl EntityExtractor {
         // 4. Extract Orgs and Products
         for (keyword, canonical, category) in KNOWN_ORGS_PRODUCTS {
             let mut search_from = 0;
-            while let Some(pos) = lower_content[search_from..].find(keyword) {
+            while let Some(pos) = find_ignoring_ascii_case(&content[search_from..], keyword) {
                 let actual_pos = search_from + pos;
                 search_from = actual_pos + keyword.len();
 
                 let before_char = if actual_pos > 0 {
-                    lower_content[..actual_pos].chars().last()
+                    content[..actual_pos].chars().last()
                 } else {
                     None
                 };
-                let after_char = lower_content[actual_pos + keyword.len()..].chars().next();
+                let after_char = content[actual_pos + keyword.len()..].chars().next();
 
                 let left_boundary = before_char.map(|c| !c.is_alphanumeric()).unwrap_or(true);
                 let right_boundary = after_char.map(|c| !c.is_alphanumeric()).unwrap_or(true);
@@ -217,6 +222,15 @@ impl EntityExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `İ` lowercases to a longer string; the evidence slice used to overrun
+    /// the original text and panic.
+    #[test]
+    fn text_with_characters_that_grow_when_lowercased_does_not_panic() {
+        let entities = EntityExtractor::extract_deterministic("n1", "İSTANBUL EKİBİ İÇİN: Rust ve GitHub.");
+        let rust = entities.iter().find(|e| e.name == "Rust").expect("Rust is found");
+        assert!(rust.evidence.contains("Rust"));
+    }
 
     #[test]
     fn test_extract_evidence_grounded_entities() {

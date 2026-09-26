@@ -13,8 +13,8 @@
 
 import type { CapturePayload } from './types';
 import type { ContentCaptureResult } from './content';
+import { CONTENT_BUNDLE_FILE as CONTENT_BUNDLE } from './bundle';
 
-const CONTENT_BUNDLE = 'relay-extract.js';
 const DEFAULT_PORT = 8765;
 const REQUEST_TIMEOUT_MS = 20_000;
 /**

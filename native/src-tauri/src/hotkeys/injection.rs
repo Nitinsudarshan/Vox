@@ -58,8 +58,11 @@ pub fn is_same_tab_or_document(title_a: &str, title_b: &str) -> bool {
     let clean = |s: &str| -> String {
         let mut s = s.trim();
         // Strip leading dirty markers (e.g. VS Code "* file.rs" or "● file.rs")
-        if s.starts_with('*') || s.starts_with('●') {
-            s = s[1..].trim();
+        // `●` is three bytes, so strip by character, not by byte index — a
+        // byte slice here panicked on every unsaved VS Code file whose dirty
+        // state changed while the user was dictating.
+        if let Some(rest) = s.strip_prefix(['*', '●']) {
+            s = rest.trim();
         }
         // Strip leading unread badges like "(1) " or "[2] "
         if let Some(stripped) = s.strip_prefix('(') {
@@ -604,6 +607,8 @@ mod tests {
         assert!(is_same_tab_or_document("ChatGPT - Google Chrome", "ChatGPT - Google Chrome"));
         // Dirty / unread markers
         assert!(is_same_tab_or_document("* file.rs - VS Code", "file.rs - VS Code"));
+        // VS Code's multi-byte dirty dot, which used to panic the byte slice.
+        assert!(is_same_tab_or_document("● main.rs - Vox - Visual Studio Code", "main.rs - Vox - Visual Studio Code"));
         assert!(is_same_tab_or_document("(1) Inbox - Gmail", "(2) Inbox - Gmail"));
         assert!(is_same_tab_or_document("[99+] Slack | Channel", "Slack | Channel"));
 

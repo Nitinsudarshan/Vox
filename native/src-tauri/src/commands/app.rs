@@ -41,6 +41,22 @@ pub async fn save_settings(
         state.ensure_vault_can_move()?;
     }
 
+    // Hotkeys that the OS refuses are not saved: the previous bindings are
+    // restored and kept, and the settings-changed echo puts them back on
+    // screen. Saving the refused value made it the binding at next launch.
+    let stored_hotkeys = state.settings.lock_or_recover().hotkeys.clone();
+    let hotkeys_changed = settings.hotkeys.show_hide_hotkey != stored_hotkeys.show_hide_hotkey
+        || settings.hotkeys.dictation_hotkey != stored_hotkeys.dictation_hotkey
+        || settings.hotkeys.capture_hotkey != stored_hotkeys.capture_hotkey;
+    if hotkeys_changed {
+        if let Err(e) = hotkeys::apply_hotkeys(&app, (&settings.hotkeys).into(), Some((&stored_hotkeys).into())) {
+            tracing::warn!("[Hotkey] Keeping the previous hotkeys: {}", e);
+            settings.hotkeys.show_hide_hotkey = stored_hotkeys.show_hide_hotkey.clone();
+            settings.hotkeys.dictation_hotkey = stored_hotkeys.dictation_hotkey.clone();
+            settings.hotkeys.capture_hotkey = stored_hotkeys.capture_hotkey.clone();
+        }
+    }
+
     settings
         .save(&state.settings_path())
         .map_err(|e| CommandError::new("CONFIG_SAVE_FAILED", &e.to_string()))?;
@@ -57,14 +73,6 @@ pub async fn save_settings(
         .set_keep_warm_duration(settings.audio_input.parse_keep_warm_duration());
     crate::capture::device::set_preference(&settings.audio_input);
     *state.settings.lock_or_recover() = settings.clone();
-
-    // Re-register hotkeys dynamically with the OS immediately
-    let _ = hotkeys::apply_hotkeys(
-        &app,
-        &settings.hotkeys.show_hide_hotkey,
-        &settings.hotkeys.dictation_hotkey,
-        &settings.hotkeys.capture_hotkey,
-    );
 
     // The bridge's lifetime follows the setting: turning capture off closes
     // the socket immediately rather than at the next launch.

@@ -43,13 +43,9 @@ pub async fn update_hotkeys(
     hotkeys: HotkeySettings,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    hotkeys::apply_hotkeys(
-        &app,
-        &hotkeys.show_hide_hotkey,
-        &hotkeys.dictation_hotkey,
-        &hotkeys.capture_hotkey,
-    )
-    .map_err(|e| CommandError::new("HOTKEY_REGISTER_FAILED", &e))?;
+    let previous = state.settings.lock_or_recover().hotkeys.clone();
+    hotkeys::apply_hotkeys(&app, (&hotkeys).into(), Some((&previous).into()))
+        .map_err(|e| CommandError::new("HOTKEY_REGISTER_FAILED", &e))?;
 
     let mut settings = state.settings.lock_or_recover();
     settings.hotkeys = hotkeys;

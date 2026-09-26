@@ -1,9 +1,10 @@
 /// <reference types="node" />
 import { defineConfig } from 'vite';
 import path from 'path';
+import { CONTENT_BUNDLE_NAME } from './src/webcapture/bundle';
 
 /**
- * Builds the Relay browser extension's three entry points.
+ * Builds the Vox browser extension's three entry points.
  *
  * Three separate builds rather than one: the content bundle must be a
  * self-contained classic script (it is injected with
@@ -23,7 +24,7 @@ import path from 'path';
  * nothing in CI would ever look at.
  */
 const TARGETS = {
-  content: { entry: 'src/webcapture/content.ts', fileName: 'vox-extract', format: 'iife' },
+  content: { entry: 'src/webcapture/content.ts', fileName: CONTENT_BUNDLE_NAME, format: 'iife' },
   background: { entry: 'src/webcapture/background.ts', fileName: 'background', format: 'es' },
   options: { entry: 'src/webcapture/options.ts', fileName: 'options', format: 'es' },
 } as const;

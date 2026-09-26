@@ -187,6 +187,13 @@ pub fn apply_capture_bridge(app: &AppHandle, state: &AppState) {
     };
 
     let mut bridge = state.capture_bridge.lock_or_recover();
+    // Every settings save comes through here; a bridge already serving the
+    // same port and token keeps running rather than dropping connections.
+    if let (true, Some(existing), Some(token)) = (enabled, bridge.as_ref(), token.as_deref()) {
+        if existing.is_running() && existing.preferred_port == port && existing.token == token {
+            return;
+        }
+    }
     if let Some(existing) = bridge.take() {
         existing.stop();
     }
