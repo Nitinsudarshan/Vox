@@ -582,7 +582,7 @@ live in their own directory (`vault/captures/`) rather than mixed into
 its text-extraction path exactly as they were.
 
 ```text
-.Vox/vault/captures/<capture_id>/
+<vault>/captures/<capture_id>/
   metadata.json                     # VaultFile: normalized markdown + provenance
   original/<Sanitized-Title>.json   # the raw structured payload, written once
 ```

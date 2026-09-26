@@ -228,7 +228,7 @@ pub const TODO_CAPTURE_MODE: &str = "todo";
 
 /// One spoken line, as a todo title.
 ///
-/// Press-and-hold on the TODOs page is deliberately narrow: whatever was
+/// Click-to-record on the TODOs page is deliberately narrow: whatever was
 /// said becomes one todo, not an extraction pass that might yield three or
 /// none. Newlines are collapsed so the title stays one line, and a long
 /// utterance is truncated for the title while the full text is kept as the
@@ -338,7 +338,7 @@ async fn process_captured_audio(
     let transcript = cleanup.text;
 
     match captured.mode.as_str() {
-        // Press-and-hold on the TODOs page. Reuses this whole path —
+        // Click-to-record on the TODOs page. Reuses this whole path —
         // recorder, STT, normalisation, dictionary — and differs only in
         // what it writes at the end. Everything upstream that can fail
         // (no audio, STT error, an empty transcript) has already returned

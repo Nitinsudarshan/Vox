@@ -1,62 +1,84 @@
-﻿# Vox — Roadmap & Competitive Gap Backlog
+# Vox — Roadmap & Competitive Gap Backlog
 
-This tracks what's real vs. stubbed today, and what should come next. It
-exists so "not implemented yet" is written down explicitly instead of silently
-implied by absence — see `rules/version-and-changelog.md`'s spirit of keeping
-the living spec honest.
+What is real today, what is not, and what should come next. It exists so "not
+implemented yet" is written down instead of implied by absence. Where this and
+the code disagree, the code is right and this file is the bug.
 
-## Shipped this round (real, not mocked)
-- Real microphone capture (`cpal`, resampled to 16kHz mono) — previously wrote an empty WAV placeholder.
-- Real local transcription (`whisper-rs` / whisper.cpp) — previously returned a hardcoded fake transcript string.
-- Global show/hide hotkey and push-to-talk universal dictation with OS-wide text injection (`enigo`) and a listening indicator window.
-- Persisted settings (provider/STT/hotkeys) — previously the settings UI didn't call the backend at all.
-- Keyword-ranked note retrieval (`VaultManager::search_notes`) as real (if simple) grounding for voice chat.
+## Real today
 
-## Still stubbed / not real yet — prioritized backlog
+- **Dictation.** Push-to-talk (hold, or toggle-to-talk) records the microphone
+  (`cpal`, resampled to 16 kHz mono) and transcribes locally — whisper.cpp
+  through `whisper-rs`, or Parakeet TDT through ONNX Runtime when selected and
+  installed. The text goes into the field that had focus: clipboard plus a
+  Win32 `SendInput` Ctrl+V by default, `enigo` keystrokes as the alternative,
+  with a focus guard that leaves the text on the clipboard rather than type
+  into a window the user has left. An AI cleanup pass is opt-in; the default
+  sends nothing to a model (Decision 71). The hotkey and the pill share one
+  pipeline (`capture::dictation`, Decision 72).
+- **Voice notes, todos, scribbles and the knowledge graph** in a local
+  Markdown vault, with keyword-ranked retrieval (`VaultManager::search_notes`,
+  `retrieval::`).
+- **Meetings.** Dual-stream capture (microphone plus system loopback),
+  streaming segmentation, a serial decoder with hallucination screening
+  (`capture::speech_health`), 30-second checkpoints and crash recovery,
+  templated reports, audio import and re-transcription. Lines are labelled
+  You / Others by capture channel, and turns are grouped into proposed
+  speakers by MFCC statistics for the user to name (`meetings::voiceprint`,
+  `meetings::speakers`). See `docs/meetings.md`.
+- **Calendar.** Read-only Google Calendar sync across accounts, recordings
+  matched to their events, series identity, and meeting reminders in their own
+  window (`calendar::reminders`, Decision 63).
+- **Web capture** through the browser extension and a loopback bridge, and
+  AI-conversation import from export packages. See `docs/capture.md`.
+- **Model providers.** Ollama (which Vox can install, start and pull models
+  for), OpenAI, Anthropic, Gemini, Groq, OpenRouter, and any OpenAI-compatible
+  server. API keys live in the OS credential store (Decision 73).
+- **CI** runs clippy and the Rust tests on Linux and Windows, the frontend
+  tests and build, the extension build, a frontend-to-backend command contract
+  check, and a weekly dependency-advisory audit.
 
-1. **Embedded vector RAG (LanceDB)** — `docs/decisions.md` Decision 6 already
-   commits to this; today's `search_notes` is plain keyword/term-overlap
-   scoring, not embeddings. This is the highest-priority follow-up since
-   voice chat and future semantic search depend on retrieval quality.
-   Competitive research flags LightRAG as the cheaper alternative to full
-   GraphRAG if/when note volume grows past ~1K documents.
+## Not real yet — prioritized backlog
 
-2. **Real MCP client wiring** — `McpRouter::dispatch_action` (`native/src-tauri/src/mcp/mod.rs`)
-   returns hardcoded success strings for every action type; no MCP server is
-   actually called. Decision 8 names the three servers to reuse as-is
-   (`nspady/google-calendar-mcp`, `makenotion/notion-mcp-server`,
-   `isaacphi/mcp-gdrive`) — none are wired up yet. This is the "live external
-   connectors" gap relative to Onyx-style tools; Calendar is the MVP target,
-   Notion/Drive are explicitly Post-MVP per `docs/product.md`.
+1. **Embedded vector retrieval (LanceDB).** Decision 6 commits to it; today's
+   retrieval is keyword and term overlap, not embeddings. The highest-value
+   follow-up, since semantic search and any grounded Q&A depend on retrieval
+   quality. LightRAG is the cheaper alternative to full GraphRAG if note volume
+   grows past about a thousand documents.
 
-3. **Telling two remote participants apart** — meetings label the capture
-   channel (`You` / `Others`), which is a measurement rather than an
-   inference, and is all Decision 68 claims. Two people on the far end of a
-   call are both `Others`. The acoustic diarization `meetings_v2` shipped in
-   0.31.0 was removed with the rest of that subsystem and has not been
-   restored; the voiceprint library above it (`maybe_later.md` item 11) and
-   calendar attendees (item 12) remain deferred, as does calendar matching and
-   meeting reminders.
+2. **Proving ONNX Runtime survives Windows packaging.** Parakeet is on by
+   default, and `docs/spikes/onnx-windows.md` — written, never run — is what
+   would show it works in an installed build rather than only in the one that
+   built it. The same run unblocks the ONNX-based items in `maybe_later.md`
+   item 1. Building installers in CI (`maybe_later.md` item 21) is the natural
+   place to run it.
 
-4. **Multi-user / team features** — explicitly flagged in `docs/decisions.md`
-   as "noted for later, not decided," and the IDE Build Prompt calls scope
-   creep toward this a named product risk. Decision 12's Supabase-based real
-   auth is a reasonable foundation to extend into this later, but no sharing
-   model, permissions, or shared-vault schema exists.
+3. **External actions.** There is no outbound MCP client and Vox writes to
+   nothing outside itself; Decision 8 names the servers to reuse. The trigger
+   engine that would have fed it, and stubs that reported success without
+   doing anything, were removed (Decision 75). Voice-triggered actions are
+   designed as a new feature in `maybe_later.md` item 19.
 
-5. **Continuous background capture** — structurally excluded on purpose
-   (Decision 5 — PTT/on-screen-triggered capture only, no meeting-bot or
-   always-on recording). Not a gap to close; listed here only so it isn't
-   mistaken for an oversight.
+4. **Telling similar voices apart, and remembering them.** Acoustic grouping
+   can merge two similar voices on one channel, and nothing persists a voice
+   across meetings. A neural speaker embedding and an opt-in voice library are
+   `maybe_later.md` item 11; calendar attendees as a speaker-count hint are
+   item 12.
 
-## Explicitly not gaps (already real)
-- Global hotkey and universal dictation — shipped, not stubs.
-- Meeting recording, transcription and reports — real. Dual-stream capture,
-  streaming segmentation, durable checkpointing, crash recovery, templated
-  summarization, audio import and re-transcription. See `docs/meetings.md`.
-- Hallucination screening on transcripts — real. Every meeting segment is
-  measured for voiced time before decoding and screened for decoder loops and
-  subtitle filler after (`capture::speech_health`); a rejected span is
-  discarded with its reason recorded.
-- Configurable trigger-phrase matching (`TriggerEngine`) — real, just its
-  downstream MCP dispatch (item 2 above) is the stub.
+5. **Streaming dictation.** Dictation decodes the whole utterance after the
+   key is released, so the wait grows with how long the user spoke.
+   `capture::streaming_pipeline` exists as a measurement instrument only
+   (`maybe_later.md` item 18).
+
+6. **Multi-user / team features.** Noted for later, not decided. Decision 12's
+   Supabase auth is a foundation to extend; no sharing model, permissions or
+   shared-vault schema exists.
+
+## Explicitly not gaps
+
+- **Continuous background capture** is excluded on purpose (Decision 5 —
+  push-to-talk and on-screen-triggered capture only, no meeting bot, no
+  always-on recording). Listed so it is not mistaken for an oversight.
+- **The scribble capture mode** (`start_capture("scribble")`, which runs
+  `PipelineEngine::process_scribble`) is implemented and handled by
+  `stop_capture`, but no surface starts it. Whether to give it a surface or
+  remove it is an open product question, recorded here rather than guessed.

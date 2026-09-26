@@ -1,58 +1,43 @@
 ﻿# Vox — User Flows
 
-## Flow 1: Push-to-Talk Capture to Kanban Card
-1. User presses and holds global hotkey (or clicks and holds floating PTT widget).
-2. PTT widget changes visual state to "Recording..." with audio level animation.
-3. User speaks meeting notes or task items and releases hotkey.
-4. Audio recording stops; WAV file is sent to local STT engine (Whisper/Parakeet).
-5. STT returns raw transcript.
-6. Pipeline module routes transcript to `Meeting -> Kanban` LLM prompt.
-7. LLM extracts array of structured action items.
-8. Vault module writes each item as a markdown card in `.Vox/vault/kanban/` (real-time indexing into an embedded vector store is decided but not yet built — see `docs/roadmap.md`; notes are searchable today via keyword-ranked retrieval).
-9. Native UI updates Kanban Board view immediately.
+## Flow 1: Universal Dictation (Type Anywhere)
+1. User places their text cursor in any other application (email, Slack, an IDE, a browser form field).
+2. User presses and holds `Ctrl+Space` (configurable), or presses it once with toggle-to-talk on.
+3. The always-on-top, non-focus-stealing dictation pill shows it is listening; Vox's main window never needs to be visible. Audio capture starts immediately, and the window that had focus is remembered.
+4. User speaks and releases the hotkey (or presses it again with toggle-to-talk).
+5. The audio is transcribed locally — Whisper, or Parakeet TDT when selected and installed — then tidied by the deterministic pass: bracketed tags and decoder stutters removed, the user's dictionary and learned corrections applied, snippets expanded, the output script applied.
+6. Only if the user chose a cleanup style (Faithful, Clean, Polished, Concise) does the configured model rewrite the text, for at most five seconds; the default, Raw, asks no model.
+7. The text is put into the remembered field — pasted through the clipboard by default, or typed key by key with the keystrokes method. If focus moved to another window or tab, Vox waits up to 15 seconds for the user to come back; otherwise it leaves the text on the clipboard and says so in a notification.
+8. The dictation is saved as a Voice Note, keeping the pre-cleanup text beside the cleaned text when a style changed it, so the change can be reviewed.
 
-## Flow 2: Audio Scribble to Structured Markdown Note
-1. User selects "Scribble Mode" on floating widget and records audio thoughts.
-2. STT engine generates transcript.
-3. Pipeline module applies `Scribble -> Structured Output` LLM template.
-4. LLM outputs formatted markdown document with title, summary bullet points, and key takeaways.
-5. Note is saved to `.Vox/vault/notes/` and indexed in LanceDB.
-6. Note preview modal opens in native app for quick review/edit.
-
-## Flow 3: Configurable Trigger Phrase Execution
-1. User configures a custom trigger: `"Schedule meeting"` -> mapped to `Google Calendar MCP (create_event)`.
-2. User captures voice: `"Schedule meeting with Design Team tomorrow at 3pm"`.
-3. Intent classifier identifies trigger match `"Schedule meeting"`.
-4. Trigger engine extracts arguments (`title: Design Team`, `time: tomorrow 3pm`) and executes MCP tool call.
-5. OS notification displays confirmation: `"Calendar event created for Design Team tomorrow at 3pm"`.
-
-## Flow 4: Global Show/Hide Hotkey
+## Flow 2: Global Show/Hide Hotkey
 1. User presses `Ctrl+Shift+Space` (configurable) while any other application is focused.
 2. The OS-level `tauri-plugin-global-shortcut` hotkey fires regardless of which window has focus.
 3. Vox's main window is shown and given focus if it was hidden, or hidden if it was already visible.
 
-## Flow 5: Universal Dictation (Type Anywhere)
-1. User places their text cursor in any other application (email, Slack, an IDE, a browser form field).
-2. User presses and holds `Ctrl+Space` (configurable).
-3. A small always-on-top, non-focus-stealing "🎙 Listening…" indicator appears; Vox's own window never needs to be visible. Audio capture starts immediately.
-4. User speaks and releases the hotkey; the indicator disappears immediately.
-5. Captured audio is transcribed locally (Whisper only — no LLM pipeline, no vault write).
-6. The transcript is typed into whatever field currently has OS focus via simulated keystrokes (`enigo`), exactly as if the user had typed it themselves.
+## Flow 3: Speaking a Todo
+1. On the TODOs page, the user clicks the microphone, says the task, and clicks again to stop.
+2. The recording goes through the same pipeline as dictation, without the cleanup rewrite.
+3. The transcript is saved as a Voice Note and becomes one todo — a Kanban card in `<vault>/kanban/` whose title is the spoken line (truncated if long, with the full text kept as its description) and whose source points back at that Voice Note.
+4. If nothing was heard, or the transcript came back empty, no todo is created and the page says which of those happened.
 
-## Flow 6: Voice Chat Over Vault Notes
-1. User opens the "Voice Chat" tab and clicks the mic button.
-2. User asks a question out loud (e.g. "What did we decide about the Kanban schema?") and clicks stop.
-3. Audio is transcribed locally.
-4. Vault module ranks notes by keyword overlap with the question and returns the top matches as grounding context.
-5. The configured LLM provider answers the question using only that grounding context, instructed to say so honestly if the notes don't contain the answer.
-6. The answer is shown in the chat thread along with the source note titles used.
+## Flow 4: From a Voice Note to the Knowledge Graph
+1. The user opens a Voice Note — one dictated through the hotkey, or recorded with the pill's click-to-record — and chooses to add it to Scribbles.
+2. `promote_voice_note_to_scribble` saves it as a Scribble in `<vault>/scribbles/`, and enrichment runs in the background: title, summary, topics and entities from the configured provider, with a deterministic fallback when no model is configured.
+3. The Scribble appears in Scribbles and in the knowledge graph, linked to the topics and entities it shares with other notes.
 
-## Flow 7: Capturing a Web Page or AI Conversation
+## Flow 5: Recording a Meeting
+1. The user starts a recording from the Meetings page, from a reminder's **Record**, or with **Join and record** on a calendar event.
+2. Vox records the microphone and the system audio together; the meeting pill on the screen edge shows the elapsed time and a live waveform, with pause and stop.
+3. The transcript fills in while the meeting runs, labelled You / Others by capture channel, and a checkpoint is written every 30 seconds so a crash costs seconds rather than the meeting.
+4. On stop, the transcript is completed and a report is generated from the chosen template through the configured provider. See `docs/meetings.md`.
+
+## Flow 6: Capturing a Web Page or AI Conversation
 1. One-time setup: the user builds the extension (`npm --prefix native run build:extension`), loads `native/browser-extension` unpacked, turns **Browser capture** on in Vox's Capture settings, and pastes the port and pairing token into the extension's Options.
 2. On any page, the user presses the extension's shortcut (`Ctrl+Shift+Y`) or clicks the Vox toolbar button. That gesture is what grants the extension access to this one tab — nothing before it did.
 3. The extension injects its extractor into the tab, which reads the rendered document: a site-specific extractor for ChatGPT, Claude or GitHub; otherwise the generic article extractor; otherwise the page's visible text. The toolbar badge shows `…`.
 4. The extractor returns a structured, text-only payload — blocks or conversation turns, plus `<head>` metadata and a coverage verdict saying how much of the page it could honestly claim. Nothing is sent if there was nothing readable; the badge shows `✕` with the reason.
 5. The extension posts the payload to `http://127.0.0.1:<port>/v1/capture` with the pairing token in a header. Vox checks the origin, the token and the size before reading the body.
-6. Vox derives provenance from the URL itself — application, domain, capture type — never from what the payload claimed. It then sanitizes every string, normalizes into markdown, and writes the artifact **and the raw payload** into `.Vox/vault/captures/<id>/`. The badge shows `✓`, and Vox's Captures surface shows *Saved*.
+6. Vox derives provenance from the URL itself — application, domain, capture type — never from what the payload claimed. It then sanitizes every string, normalizes into markdown, and writes the artifact **and the raw payload** into `<vault>/captures/<id>/`. The badge shows `✓`, and Vox's Captures surface shows *Saved*.
 7. Only now does analysis run, in the background: a summary, topics and entities, using the configured provider. If it fails, the surface says the capture is intact and offers *Analyse* again — the captured content is never at risk.
 8. The user can open the capture to read it, see exactly where it came from and what was left out, read the raw stored payload, or add it to Scribbles — which is what carries it into search and the knowledge graph.

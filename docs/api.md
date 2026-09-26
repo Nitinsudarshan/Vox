@@ -4,13 +4,20 @@ Per `rules/api-conventions.md`, all Tauri IPC commands return consistent, typed 
 
 
 
-## 1. Tauri Commands API (`native/src-tauri/src/commands.rs`)
+## 1. Tauri Commands API (`native/src-tauri/src/commands/`)
+
+Commands live in one module per surface under `commands/` (capture, notes,
+vault, models, app, diagnostics, account, web_capture, knowledge, test_lab),
+plus `meetings::commands` and `calendar::commands`. All of them are registered
+in the `generate_handler!` list in `lib.rs`, and `npm run verify:invoke` fails
+CI when a frontend `invoke()` names a command that list does not contain, or
+passes arguments it does not take.
 
 ### Common Response Shape
 All Rust Tauri commands return `Result<T, CommandError>` where `CommandError` serializes to:
 ```typescript
 interface CommandError {
-  code: string;     // e.g. "CAPTURE_FAILED", "STT_ERROR", "PIPELINE_ERROR"
+  code: string;     // e.g. "CAPTURE_START_FAILED", "STT_FAILED", "VAULT_BUSY"
   message: string;  // User-facing descriptive message
 }
 ```
@@ -19,30 +26,33 @@ interface CommandError {
 
 #### Capture Commands
 - `start_capture(mode: String) -> Result<String, CommandError>`
-  Starts audio capture for mode `"meeting" | "scribble" | "chat"`. Returns capture session ID.
+  Starts audio capture and returns the session id. Modes in use: `"voice_note"`
+  (the dictation pill's click-to-record) and `"todo"` (press-and-hold on the
+  TODOs page). `"scribble"` is still handled by `stop_capture` but no surface
+  starts it.
 - `stop_capture() -> Result<Option<ProcessedPipelineResult>, CommandError>`
-  Stops audio capture. `AudioRecorder::stop` reports `had_audio: bool` — whether any captured chunk actually crossed the mic input threshold while the session was recording — and this command gates on it: if `had_audio` is `false` (silence/no input the whole time), it emits a `capture-state-changed` event with `status: "NO_SPEECH"` and returns `Ok(None)` **without ever invoking the STT engine**. Only when `had_audio` is `true` does it emit `status: "TRANSCRIBING"` and proceed to transcribe via the configured local Whisper model, then:
-  - for `"meeting"`/`"scribble"`, first checks trigger phrases (returning mode `"trigger"` on a match), then runs the meeting->Kanban or scribble->structured-note pipeline;
-  - for `"chat"`, skips trigger matching and runs `pipeline::process_chat` (vault-grounded Q&A with optional spoken answer) instead.
+  Stops audio capture. `AudioRecorder::stop` reports `had_audio` — whether
+  sustained, above-ambient input arrived while recording — and this command
+  gates on it: without it, it emits `capture-state-changed` with
+  `status: "NO_SPEECH"` and returns `Ok(None)` **without invoking the STT
+  engine**. Otherwise it emits `status: "TRANSCRIBING"` and runs the shared
+  dictation pipeline (`capture::dictation`: transcribe, the deterministic
+  pass, then the opt-in cleanup — skipped for todos and scribbles). An empty
+  result returns `Ok(None)`. Every non-empty transcript is saved as a Voice
+  Note; `"todo"` also writes a Kanban card, and `"scribble"` runs
+  `PipelineEngine::process_scribble`.
 
-  `ProcessedPipelineResult` additionally carries `sources: string[]` (vault note titles used as grounding, populated for chat) and `spoken_audio_base64?: string | null` (base64 WAV of the answer, if local TTS is configured).
+  Universal dictation (the global push-to-talk hotkey) does **not** go through
+  these commands: `hotkeys::stop_dictation_session` stops the recorder, runs
+  the same `capture::dictation` pipeline, and delivers the text into the field
+  that had focus (`hotkeys::injection`), bypassing Tauri IPC.
 
-  Universal dictation (the global push-to-talk hotkey) does **not** go through these commands — it calls `AudioRecorder`/`SttEngine` directly from the Rust hotkey handler and injects the transcript via OS keystroke simulation, bypassing Tauri IPC entirely (see `hotkeys::on_dictation_released`, which applies the same `had_audio` gate before transcribing).
-
-#### Pipeline Commands
-- `process_transcript(transcript: String, mode: String) -> Result<ProcessResult, CommandError>`
-  Manually triggers pipeline processing on raw transcript text.
-
-#### Kanban Commands
+#### Todo Commands (Kanban cards)
 - `get_kanban_cards() -> Result<Vec<KanbanCard>, CommandError>`
-  Reads all Kanban markdown card files from vault.
-- `update_card_status(card_id: String, status: String) -> Result<KanbanCard, CommandError>`
-  Updates frontmatter status in card file.
-
-#### Trigger Settings Commands
-- `get_triggers() -> Result<Vec<TriggerConfig>, CommandError>`
-- `save_trigger(trigger: TriggerConfig) -> Result<Vec<TriggerConfig>, CommandError>`
-- `delete_trigger(trigger_id: String) -> Result<Vec<TriggerConfig>, CommandError>`
+  Reads every card file in `<vault>/kanban/`; the TODOs surface lists them.
+- `create_manual_todo(title: String) -> Result<KanbanCard, CommandError>`
+- `set_todo_status(id: String, status: String) -> Result<KanbanCard, CommandError>`
+- `delete_todo(id: String) -> Result<(), CommandError>`
 
 #### Web Capture Commands
 Web capture (`docs/capture.md`) — distinct from the audio capture commands
@@ -90,7 +100,7 @@ Progress is broadcast on the `capture-progress` event with a `stage` of
 `SAVING | SAVED | ANALYSING | ANALYSED | FAILED`.
 
 #### Meeting Commands
-- `start_meeting(title?: string, captureSystemAudio?: bool) -> Result<Meeting, CommandError>`
+- `start_meeting(title?: string, captureSystemAudio?: bool, devices?: MeetingDevices) -> Result<Meeting, CommandError>`
   Opens the microphone and (unless disabled) the system loopback, and begins recording. Refuses with `MEETING_NO_SPEECH_MODEL` when no Whisper model is installed, rather than recording audio that can never become a transcript, and with `MEETING_ALREADY_RECORDING` when one is already in flight.
 - `pause_meeting()` / `resume_meeting() -> Result<(), CommandError>`
   Paused audio is discarded, not stored as silence, so a meeting's length matches the speech in it.
@@ -121,8 +131,18 @@ Events: `meeting-state-changed`, `meeting-audio-level`, `meeting-transcript-segm
 #### Settings Commands
 - `get_settings() -> Result<AppSettings, CommandError>`
   Returns the current provider/STT/meetings/hotkey configuration (see `docs/data-model.md` §4).
+  Provider API keys arrive as the placeholder `__vox_stored_key__`, never as
+  their values; the keys themselves live in the OS credential store
+  (`providers::secrets`).
 - `save_settings(settings: AppSettings) -> Result<(), CommandError>`
-  Persists settings to `.Vox/config/settings.json` and updates the running app's in-memory config immediately (LLM provider, STT model path, TTS paths). Hotkey changes take effect on next launch — they're only read once at startup.
+  Persists settings to `<config>/settings.json` and updates the running app's
+  in-memory config immediately. A placeholder sent back for an API key keeps
+  the stored key. Changing the vault directory is refused with `VAULT_BUSY`
+  while a meeting is recording; otherwise every vault-backed store follows it.
+- `update_hotkeys(hotkeys: HotkeySettings) -> Result<(), CommandError>`
+  Re-registers the global hotkeys at once. Whether each one actually
+  registered — another application can hold the same combination — is
+  broadcast on the `hotkey-status-changed` event.
 
 ---
 

@@ -11,7 +11,7 @@ each file is for. `rules/` is the coding-convention layer underneath it.
 
 | Path | What it is |
 |---|---|
-| `native/src-tauri/` | Rust backend: capture, STT, vault, triggers, MCP wiring. |
+| `native/src-tauri/` | Rust backend: capture, STT and dictation, meetings, calendar, vault, providers. |
 | `native/src/` | React frontend rendered inside the Tauri window. |
 | `native/browser-extension/` | Browser extension for structured web and AI conversation capture into the vault. |
 

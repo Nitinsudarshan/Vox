@@ -10,6 +10,10 @@ later — each with enough context to pick it back up.
 > a `TODO(context):` comment next to it instead. See
 > [`rules/maybe-later.md`](rules/maybe-later.md).
 
+Item numbers are stable identifiers: decision records and other documents
+cite them (`maybe_later.md` §11), so an item keeps its number when others are
+merged or removed, and new items are appended.
+
 ---
 
 ## Backlog Items
@@ -57,7 +61,17 @@ later — each with enough context to pick it back up.
     cheaper option: let setup import a folder copied from another machine,
     verified against the same manifest checksums.
 
-### 2. Offer to Move a Legacy Data Folder
+### 2. A Second Local TTS Voice (Kokoro)
+
+- **Status**: Merged into item 1, which carries its research. The number is
+  kept because other documents cite it.
+
+### 3. Acoustic Echo Cancellation for Barge-In
+
+- **Status**: Merged into item 1, which carries its research. The number is
+  kept because other documents cite it.
+
+### 4. Offer to Move a Legacy Data Folder
 
 - **Status**: Deferred — the unsafe default is fixed; the migration is not
 - **Area**: Native backend (`native/src-tauri/src/lib.rs` —
@@ -82,10 +96,13 @@ later — each with enough context to pick it back up.
   - The Vault Directory Location setting already overrides the vault, so the
     copy mainly concerns `config/`: settings, models, the STT cache. Provider
     API keys live in the OS credential store and are unaffected.
-  - Separate from this, and marked in code: `TODO(vault-relocation)` in
-    `lib.rs` — `set_vault_dir` repoints the vault but not `meeting_store`.
 
-### 3. Capturing a Web Page From Vox's Own Hotkey
+### 5. Offline and ARM64 Voice Installation
+
+- **Status**: Merged into item 1, which carries its research. The number is
+  kept because other documents cite it.
+
+### 6. Capturing a Web Page From Vox's Own Hotkey
 
 - **Status**: Deferred — blocked by the browser permission model, not by missing code
 - **Area**: Native backend (`native/src-tauri/src/capture/web/bridge.rs`, `hotkeys/mod.rs`), browser extension (`native/src/webcapture/background.ts`)
@@ -112,7 +129,7 @@ later — each with enough context to pick it back up.
     options page with the trade stated plainly.
   - Keep today's behaviour as the default and the fallback.
 
-### 4. Screenshot and OCR Fallback for Unreadable Pages
+### 7. Screenshot and OCR Fallback for Unreadable Pages
 
 - **Status**: Deferred — deliberately not a rung on the capture ladder
 - **Area**: Native backend (`native/src-tauri/src/capture/web/`), browser extension
@@ -133,7 +150,7 @@ later — each with enough context to pick it back up.
     exists), never a substitute that lets `coverage` claim more than the text
     extraction earned.
 
-### 5. Firefox Support for the Capture Extension
+### 8. Firefox Support for the Capture Extension
 
 - **Status**: Deferred — structurally compatible, not validated
 - **Area**: `native/browser-extension/manifest.json`, `native/src/webcapture/background.ts`
@@ -152,7 +169,7 @@ later — each with enough context to pick it back up.
     call `permissions.request`.
   - The bridge already accepts `moz-extension://` origins, with a test.
 
-### 6. Capturing File Bytes and Image Data
+### 9. Capturing File Bytes and Image Data
 
 - **Status**: Deferred — technically possible, deliberately refused for v2
 - **Area**: `native/src/webcapture/dom.ts`, `native/src/webcapture/types.ts`, `native/src-tauri/src/capture/web/`
@@ -174,7 +191,7 @@ later — each with enough context to pick it back up.
     and a note on every file a limit rejected. `sandbox:/mnt/data/…`
     references stay metadata-only.
 
-### 7. A Configurable Traversal Budget
+### 10. A Configurable Traversal Budget
 
 - **Status**: Deferred — the budget is a constant per source, and hitting it is reported
 - **Area**: `native/src/webcapture/traversal/budget.ts`, `native/src-tauri/src/settings/`, `native/src/components/settings/CaptureSettingsView.tsx`
@@ -192,7 +209,7 @@ later — each with enough context to pick it back up.
   - A longer budget may change how much is read, never what a capture is
     allowed to claim.
 
-### 8. Neural Speaker Embeddings and a Voice Library
+### 11. Neural Speaker Embeddings and a Voice Library
 
 - **Status**: Backlog (acoustic speaker grouping ships; embeddings do not)
 - **Area**: Native backend (`native/src-tauri/src/meetings/voiceprint.rs`, `native/src-tauri/src/meetings/speakers.rs`)
@@ -216,7 +233,7 @@ later — each with enough context to pick it back up.
   - Separately, keeping the microphone and loopback streams apart on disk would
     take the local user's voice out of the clustering problem entirely.
 
-### 9. Calendar Attendees as a Speaker Hint
+### 12. Calendar Attendees as a Speaker Hint
 
 - **Status**: Backlog (calendar sync ships; the speaker hint does not)
 - **Area**: Native backend (`native/src-tauri/src/calendar/agenda.rs`, `native/src-tauri/src/meetings/speakers.rs`)
@@ -235,7 +252,7 @@ later — each with enough context to pick it back up.
     `SpeakerPanel`'s rename field. Calendar text is external data, never an
     instruction (`rules/security.md`).
 
-### 10. Auto-Learning Dictionary Words From Corrections Made in Other Apps
+### 13. Auto-Learning Dictionary Words From Corrections Made in Other Apps
 
 - **Status**: Removed — the setting existed, the mechanism could not
 - **Area**: Native backend (`native/src-tauri/src/settings/mod.rs`), Settings › Engine
@@ -255,7 +272,7 @@ later — each with enough context to pick it back up.
     would be reading the user's other applications, a different promise from
     recording their microphone when they press a key.
 
-### 11. A Summary Across a Whole Series
+### 14. A Summary Across a Whole Series
 
 - **Status**: Backlog — the series object it needs exists; this does not
 - **Area**: Native backend (`native/src-tauri/src/meetings/summary/processor.rs`, `native/src-tauri/src/meetings/series.rs`)
@@ -272,7 +289,7 @@ later — each with enough context to pick it back up.
     takes minutes — and a cache keyed on the set of meeting ids, so a seventh
     occurrence visibly invalidates it.
 
-### 12. Retire the Knowledge Graph's Node-Position Cache
+### 15. Retire the Knowledge Graph's Node-Position Cache
 
 - **Status**: Deferred — superseded, not yet removed
 - **Area**: Native frontend (`native/src/components/knowledge/graph/graphStorage.ts` — `loadNodePositions`, `saveNodePositions`, `clearNodePositions`, `GraphPositionMap`; the "Reset layout" affordance in `KnowledgeGraphView`)
@@ -286,7 +303,7 @@ later — each with enough context to pick it back up.
     the three functions, `POSITIONS_STORAGE_KEY`, `GraphPositionMap`, and the
     "Reset layout" flow. Leave the stored key unread rather than migrating it.
 
-### 13. Action-Item Extraction for Meetings, Voice Notes and Scribbles
+### 16. Action-Item Extraction for Meetings, Voice Notes and Scribbles
 
 - **Status**: Deferred — the TODOs surface exists; three of its feeds do not
 - **Area**: Native backend (`native/src-tauri/src/meetings/summary/`, `native/src-tauri/src/pipeline/enrichment.rs`), feeding `vault::VaultManager::record_extracted_todos`
@@ -310,7 +327,7 @@ later — each with enough context to pick it back up.
   - Watch the false-positive rate: "I should probably look at that" is not a
     commitment.
 
-### 14. Reviewing a Dictation Cleanup After It Lands
+### 17. Reviewing a Dictation Cleanup After It Lands
 
 - **Status**: Removed — dead code; cleanup now runs before injection
 - **Area**: Native backend (`native/src-tauri/src/commands.rs`, `hotkeys/injection.rs`, `capture/text_normalize.rs`)
@@ -331,7 +348,7 @@ later — each with enough context to pick it back up.
     use so a double press cannot delete twice; nothing is selected unless the
     focus context still matches the one captured at injection.
 
-### 15. Streaming Dictation
+### 18. Streaming Dictation
 
 - **Status**: Backlog — the pipeline exists as a measurement instrument; production decodes after release
 - **Area**: Native backend (`native/src-tauri/src/capture/streaming_pipeline.rs`, `capture/eligibility.rs`, `meetings/segmenter.rs`, the recorder callback in `capture/mod.rs`, `hotkeys/mod.rs`)
@@ -356,7 +373,7 @@ later — each with enough context to pick it back up.
     release. Dictation and meetings share the Whisper lock, so measure the
     backlog while a meeting records.
 
-### 16. Voice Triggers That Run Actions
+### 19. Voice Triggers That Run Actions
 
 - **Status**: Removed — nothing ever executed a trigger
 - **Area**: Former `native/src-tauri/src/triggers/` and `native/src/components/settings/TriggerSettings.tsx`; `native/src-tauri/src/mcp/mod.rs`; `native/src-tauri/src/actions/`
@@ -378,7 +395,7 @@ later — each with enough context to pick it back up.
     consent.
   - Never log transcript text.
 
-### 17. Per-Window Command Permissions
+### 20. Per-Window Command Permissions
 
 - **Status**: Backlog — hardening
 - **Area**: `native/src-tauri/capabilities/`, `native/src-tauri/build.rs`, `native/src-tauri/src/lib.rs`
@@ -396,7 +413,7 @@ later — each with enough context to pick it back up.
   - A missing permission fails at run time, not compile time, so every window's
     flows need exercising on Windows before this ships.
 
-### 18. Building Installers in the Release Pipeline
+### 21. Building Installers in the Release Pipeline
 
 - **Status**: Backlog
 - **Area**: `.github/workflows/release.yml`

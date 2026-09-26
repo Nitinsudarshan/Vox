@@ -27,7 +27,7 @@ Vox uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** serv
              │                             │
              ▼                             ▼
     OS Keyring:                   OS Keyring:
-    com.Vox.app.identity        com.Vox.app.calendar
+    com.vox.app.identity        com.vox.app.calendar
 ```
 
 ### Key Security & Architectural Invariants
@@ -40,9 +40,9 @@ Vox uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** serv
    - **Vox Sign-In**: Requests `openid`, `userinfo.email`, and `userinfo.profile` only.
    - **Google Calendar Sync**: Requests `calendar.events.readonly` separately only when explicitly initiated by the user.
 3. **Isolated Keyring Namespaces**:
-   - Identity tokens: stored under `com.Vox.app.identity` / `google_account_tokens`.
-   - Calendar tokens: stored under `com.Vox.app.calendar` / `google_calendar_tokens`.
-   - Fallback stores located in `.Vox/config/` (never in the user's markdown `vault/`).
+   - Identity tokens: stored under `com.vox.app.identity` / `google_account_tokens`.
+   - Calendar tokens: stored under `com.vox.app.calendar` / `google_calendar_tokens`.
+   - When no credential store is available, an obfuscated (not encrypted) fallback file in `<config>/` (never in the user's markdown vault).
 4. **Independent Lifecycle**:
    - Disconnecting Calendar revokes calendar tokens without signing out of Vox.
    - Signing out of Vox revokes identity tokens without deleting local meetings or vault data.

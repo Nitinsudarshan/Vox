@@ -20,7 +20,7 @@ Vox/
         pipeline/              Kanban parser, scribble->structured-output
         triggers/              Configurable trigger-phrase system
         providers/             Local / cloud LLM providers
-        vault/                 Local markdown vault + LanceDB access
+        vault/                 Local markdown vault (and LanceDB, once built)
         identity/              Native telemetry and anonymous identity
         updates/               Native update checks
         commands.rs            #[tauri::command] entry points (thin, see rust-backend.md)
