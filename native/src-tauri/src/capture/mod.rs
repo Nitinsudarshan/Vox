@@ -169,6 +169,29 @@ struct ActiveStream {
     input_rate: u32,
     generation: u64,
     alive: Arc<AtomicBool>,
+    /// The thread that owns the cpal stream; joined when this is dropped.
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Closing a stream finishes before anything else can open one.
+///
+/// The capture thread owns the cpal stream and drops it when told to stop.
+/// Left detached, that teardown overlapped whatever came next — a new
+/// session opening the device a moment later — and on Windows an input
+/// stream torn down while another was being opened crashed the process with
+/// an access violation (the first Windows CI run found it). Joining here makes
+/// every way a stream ends — keep-warm off, the warm timer, the recorder
+/// being dropped — wait for the old stream to be gone. Teardown takes
+/// milliseconds, and the thread touches none of the locks held around this.
+impl Drop for ActiveStream {
+    fn drop(&mut self) {
+        let _ = self.stop_tx.send(());
+        if let Some(thread) = self.thread.take() {
+            if thread.thread().id() != std::thread::current().id() {
+                let _ = thread.join();
+            }
+        }
+    }
 }
 
 struct AliveGuard(Arc<AtomicBool>);
@@ -268,7 +291,7 @@ impl AudioRecorder {
             let app_handle_store = Arc::new(Mutex::new(app));
             let alive = Arc::new(AtomicBool::new(true));
 
-            spawn_warm_capture_thread(
+            let thread = spawn_warm_capture_thread(
                 stop_rx,
                 init_tx,
                 is_recording.clone(),
@@ -293,6 +316,7 @@ impl AudioRecorder {
                 input_rate,
                 generation: current_gen,
                 alive,
+                thread: Some(thread),
             });
         }
 
@@ -336,8 +360,9 @@ impl AudioRecorder {
                     tokio::time::sleep(duration).await;
                     recorder_clone.close_warm_stream_if_idle(stream_gen);
                 });
-            } else if let Some(stream) = inner.active_stream.take() {
-                let _ = stream.stop_tx.send(());
+            } else {
+                // Dropping it stops the stream and waits for the teardown.
+                inner.active_stream = None;
             }
 
             (session, samples, detection, rate)
@@ -414,10 +439,9 @@ impl AudioRecorder {
         if inner.active_session.is_none() {
             if let Some(ref stream) = inner.active_stream {
                 if stream.generation == target_gen {
-                    if let Some(stream) = inner.active_stream.take() {
-                        let _ = stream.stop_tx.send(());
-                        tracing::info!("[AudioRecorder] Warm idle stream closed after timeout (gen {})", target_gen);
-                    }
+                    // Dropping it stops the stream and waits for the teardown.
+                    inner.active_stream = None;
+                    tracing::info!("[AudioRecorder] Warm idle stream closed after timeout (gen {})", target_gen);
                 }
             }
         }
@@ -433,7 +457,7 @@ fn spawn_warm_capture_thread(
     detection: Arc<Mutex<AudioDetectionState>>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     alive: Arc<AtomicBool>,
-) {
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let _alive_guard = AliveGuard(alive.clone());
 
@@ -564,7 +588,7 @@ fn spawn_warm_capture_thread(
 
         let _ = stop_rx.recv();
         drop(stream);
-    });
+    })
 }
 
 fn compute_rms_f32(samples: &[f32]) -> f32 {
