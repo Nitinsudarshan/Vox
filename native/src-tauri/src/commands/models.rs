@@ -110,6 +110,47 @@ pub async fn test_llm_prompt(
     Ok(crate::providers::test_ollama_prompt(&host, &model, &prompt).await)
 }
 
+/// Sends one short prompt through the configured provider — cloud or local —
+/// and reports what came back.
+///
+/// Reads the saved configuration, so Settings saves before calling it. A
+/// provider that is not ready, or answers with nothing, is a failed test with
+/// its reason; the button this backs used to report "Configuration verified"
+/// after only saving the settings, whatever the key.
+#[tauri::command]
+pub async fn test_active_provider(
+    state: State<'_, AppState>,
+) -> Result<crate::providers::OllamaPromptTestResult, CommandError> {
+    let config = state.settings.lock_or_recover().provider.clone();
+    let llm = crate::providers::LLMClient::new(config);
+    let model = llm.model_name();
+    let started = std::time::Instant::now();
+    let failed = |error: String| crate::providers::OllamaPromptTestResult {
+        success: false,
+        latency_ms: started.elapsed().as_millis() as u64,
+        response: None,
+        error: Some(error),
+        model: model.clone(),
+    };
+
+    if let Err(reason) = crate::providers::check_ready(llm.config()).await {
+        return Ok(failed(reason.to_string()));
+    }
+    match llm
+        .complete_verified("Reply with exactly: Vox AI ready", None, llm.default_options())
+        .await
+    {
+        Ok(response) => Ok(crate::providers::OllamaPromptTestResult {
+            success: true,
+            latency_ms: started.elapsed().as_millis() as u64,
+            response: Some(response.text.trim().to_string()),
+            error: None,
+            model: model.clone(),
+        }),
+        Err(e) => Ok(failed(e.to_string())),
+    }
+}
+
 #[tauri::command]
 pub async fn get_available_stt_models(
     state: State<'_, AppState>,

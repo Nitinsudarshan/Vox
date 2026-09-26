@@ -442,6 +442,7 @@ pub fn run() {
             commands::get_ollama_install_plan,
             commands::install_ollama,
             commands::test_llm_prompt,
+            commands::test_active_provider,
             commands::ensure_stt_model_ready,
             commands::get_dictation_model_status,
             commands::get_stt_decode_summary,

@@ -145,11 +145,14 @@ export const MeetingSettingsView: React.FC = () => {
   }, []);
 
   const update = async (patch: Partial<MeetingSettingsShape>) => {
-    const next = { ...settings, ...patch };
-    setSettings(next);
+    setSettings((prev) => ({ ...prev, ...patch }));
     try {
+      // Merge the patch into the meetings settings as stored now, not into
+      // this view's copy from page load: the device picker and the reminder
+      // card below save the same object, and the stale copy reverted them.
       const all = await invoke<Record<string, unknown>>('get_settings');
-      await invoke('save_settings', { settings: { ...all, meetings: next } });
+      const stored = (all?.meetings ?? {}) as Record<string, unknown>;
+      await invoke('save_settings', { settings: { ...all, meetings: { ...stored, ...patch } } });
       setError(null);
     } catch (err) {
       setError(meetings.meetingErrorMessage(err));

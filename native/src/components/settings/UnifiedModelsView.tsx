@@ -476,11 +476,16 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
           setTestResponse(res?.error || 'Failed to receive completion');
         }
       } else {
-        // Test Cloud Provider
-        const start = Date.now();
+        // Cloud providers: save first, since the backend tests the saved
+        // configuration, then send one real prompt through it.
         await onSaveDirect();
-        setTestLatency(Date.now() - start);
-        setTestResponse(`Connected to ${activeP}. Configuration verified.`);
+        const res = await invoke<OllamaPromptTestResult>('test_active_provider');
+        if (res.success) {
+          setTestResponse(res.response || 'Success');
+          setTestLatency(res.latency_ms);
+        } else {
+          setTestResponse(res.error || 'The provider did not answer');
+        }
       }
     } catch (err) {
       setTestResponse(describeError(err, 'Connection test failed'));

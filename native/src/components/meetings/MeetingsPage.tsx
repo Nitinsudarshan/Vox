@@ -267,17 +267,17 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
         });
       }),
       listen<SummaryProgress>(MEETING_EVENTS.summaryProgress, (event) => {
-        if (event.payload.meeting_id !== selectedIdRef.current) return;
-        setSummaryProgress(event.payload);
-        if (
-          event.payload.status === 'completed' ||
-          event.payload.status === 'failed' ||
-          event.payload.status === 'cancelled'
-        ) {
-          setSummaryProgress(null);
-          void refreshDetail(event.payload.meeting_id);
+        const { meeting_id: meetingId, status } = event.payload;
+        const finished = status === 'completed' || status === 'failed' || status === 'cancelled';
+        if (finished) {
+          // A report can finish while another meeting is open; its progress
+          // must still clear, or every meeting would look busy.
+          setSummaryProgress((current) => (current?.meeting_id === meetingId ? null : current));
+          if (meetingId === selectedIdRef.current) void refreshDetail(meetingId);
           void refreshList();
+          return;
         }
+        if (meetingId === selectedIdRef.current) setSummaryProgress(event.payload);
       }),
       listen<TranscriptionWarning>(MEETING_EVENTS.transcriptionWarning, (event) => {
         notify('error', event.payload.message);
@@ -604,7 +604,9 @@ export const MeetingsPage: React.FC<MeetingsPageProps> = ({
             templates={templates}
             templateId={templateId}
             onTemplateChange={setTemplateId}
-            summaryProgress={summaryProgress}
+            summaryProgress={
+              summaryProgress?.meeting_id === detail.meeting.id ? summaryProgress : null
+            }
             live={live}
             busy={busy}
             onBack={() => setSelectedId(null)}
