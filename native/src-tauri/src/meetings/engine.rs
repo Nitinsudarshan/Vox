@@ -210,6 +210,19 @@ pub struct MeetingEngine {
     /// vault or starting another recording in that window split or
     /// resurrected the meeting.
     finalizing: Mutex<Option<String>>,
+    /// Set while `start` opens devices. Opening can take seconds (a Bluetooth
+    /// headset), and holding the recording lock through it froze every
+    /// caller of `status`, the overlay's once-a-second poll included.
+    starting: AtomicBool,
+}
+
+/// Clears the starting flag however `start` returns.
+struct StartingGuard<'a>(&'a AtomicBool);
+
+impl Drop for StartingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Clears the finalizing slot however `stop` returns.
@@ -227,6 +240,7 @@ impl MeetingEngine {
             store,
             active: Mutex::new(None),
             finalizing: Mutex::new(None),
+            starting: AtomicBool::new(false),
         }
     }
 
@@ -236,7 +250,9 @@ impl MeetingEngine {
 
     /// Whether a meeting is recording, or still being finished by `stop`.
     pub fn is_recording(&self) -> bool {
-        self.active.lock_or_recover().is_some() || self.finalizing.lock_or_recover().is_some()
+        self.starting.load(Ordering::SeqCst)
+            || self.active.lock_or_recover().is_some()
+            || self.finalizing.lock_or_recover().is_some()
     }
 
     /// The meeting `stop` is still finishing, if any.
@@ -288,13 +304,21 @@ impl MeetingEngine {
             capture_system_audio,
             devices,
         } = request;
-        let mut guard = self.active.lock_or_recover();
-        if guard.is_some() {
-            return Err(MeetingEngineError::AlreadyRecording);
+        {
+            let guard = self.active.lock_or_recover();
+            if guard.is_some() {
+                return Err(MeetingEngineError::AlreadyRecording);
+            }
+            if self.finalizing.lock_or_recover().is_some() {
+                return Err(MeetingEngineError::StillFinishing);
+            }
+            // Claimed under the lock, then the lock is released: devices
+            // open below without it.
+            if self.starting.swap(true, Ordering::SeqCst) {
+                return Err(MeetingEngineError::AlreadyRecording);
+            }
         }
-        if self.finalizing.lock_or_recover().is_some() {
-            return Err(MeetingEngineError::StillFinishing);
-        }
+        let _starting = StartingGuard(&self.starting);
 
         let models_dir = config_dir.join("models");
         let model_path =
@@ -390,7 +414,7 @@ impl MeetingEngine {
             record.system_audio_captured = binding.system_audio;
         })?;
 
-        *guard = Some(ActiveMeeting {
+        *self.active.lock_or_recover() = Some(ActiveMeeting {
             id: id.clone(),
             title,
             capture,
@@ -401,7 +425,6 @@ impl MeetingEngine {
             warning,
             started: Instant::now(),
         });
-        drop(guard);
 
         tracing::info!(
             "meeting {} recording (microphone: {}, system audio: {})",

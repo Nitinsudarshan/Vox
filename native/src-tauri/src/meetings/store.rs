@@ -618,19 +618,43 @@ impl MeetingStore {
 
         for meeting in self.list_meetings().unwrap_or_default() {
             if meeting.series_id.as_deref() == Some(id) {
-                let _ = self.update_meeting(&meeting.id, |record| record.series_id = None);
+                let _ = self.update_meeting(&meeting.id, |record| {
+                    record.series_id = None;
+                    record.series_opted_out = true;
+                });
             }
         }
         Ok(())
     }
 
-    /// Puts one meeting in a series, or takes it out of the one it is in.
+    /// The user's choice: puts one meeting in a series, or takes it out of the
+    /// one it is in. Taking it out is remembered, so a sync does not put it
+    /// back.
     pub fn set_meeting_series(
         &self,
         meeting_id: &str,
         series_id: Option<String>,
     ) -> Result<Meeting, MeetingStoreError> {
-        self.update_meeting(meeting_id, |record| record.series_id = series_id.clone())
+        self.update_meeting(meeting_id, |record| {
+            record.series_opted_out = series_id.is_none();
+            record.series_id = series_id.clone();
+        })
+    }
+
+    /// A sync's assignment from the calendar. Leaves alone a meeting the user
+    /// already placed in a series or took out of one; returns whether it
+    /// changed anything.
+    pub fn assign_series_from_calendar(
+        &self,
+        meeting_id: &str,
+        series_id: &str,
+    ) -> Result<bool, MeetingStoreError> {
+        let meeting = self.load_meeting(meeting_id)?;
+        if meeting.series_id.is_some() || meeting.series_opted_out {
+            return Ok(false);
+        }
+        self.update_meeting(meeting_id, |record| record.series_id = Some(series_id.to_string()))?;
+        Ok(true)
     }
 
     /// Deletes a meeting's entire directory, audio included.
@@ -1099,6 +1123,34 @@ mod tests {
         assert_eq!(meeting.state, MeetingState::Completed);
         assert!((meeting.duration_seconds - 3.0).abs() < 0.01);
         assert_eq!(meeting.audio_path.as_deref(), Some(merged.to_string_lossy().as_ref()));
+    }
+
+    /// Taking a recording out of its series, or deleting the series, is
+    /// remembered: a calendar sync does not put the recording back.
+    #[test]
+    fn a_series_opt_out_survives_the_next_sync() {
+        let vault = temp_vault("series-opt-out");
+        let store = MeetingStore::new(&vault);
+        for id in ["meeting-s1", "meeting-s2", "meeting-s3"] {
+            let meeting = Meeting::new(id.into(), "Standup".into(), MeetingSource::Recorded);
+            store.create(&meeting).expect("create");
+        }
+
+        assert!(store.assign_series_from_calendar("meeting-s1", "google:standup").unwrap());
+        store.set_meeting_series("meeting-s1", None).unwrap();
+        assert!(!store.assign_series_from_calendar("meeting-s1", "google:standup").unwrap());
+        assert_eq!(store.load_meeting("meeting-s1").unwrap().series_id, None);
+
+        store.set_meeting_series("meeting-s2", Some("google:standup".into())).unwrap();
+        store.delete_series("google:standup").unwrap();
+        assert!(!store.assign_series_from_calendar("meeting-s2", "google:standup").unwrap());
+
+        assert!(store.assign_series_from_calendar("meeting-s3", "google:standup").unwrap());
+        assert!(!store.assign_series_from_calendar("meeting-s3", "google:other").unwrap());
+        assert_eq!(
+            store.load_meeting("meeting-s3").unwrap().series_id.as_deref(),
+            Some("google:standup")
+        );
     }
 
     #[test]

@@ -308,6 +308,12 @@ pub struct Meeting {
     /// split a series silently the moment somebody renamed it.
     #[serde(default)]
     pub series_id: Option<String>,
+    /// The user took this recording out of its series, or deleted the series.
+    /// A sync never puts it back; without this, a meeting with no series was
+    /// indistinguishable from one never assigned, and the next sync undid the
+    /// user's choice within minutes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub series_opted_out: bool,
 }
 
 impl Meeting {
@@ -332,6 +338,7 @@ impl Meeting {
             error: None,
             tags: Vec::new(),
             series_id: None,
+            series_opted_out: false,
         }
     }
 
