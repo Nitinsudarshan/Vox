@@ -324,11 +324,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
           host: settings.provider.ollama_host || null,
         });
       } catch {
-        try {
-          models = await invoke<OllamaModelDetails[]>('list_installed_models');
-        } catch {
-          models = [];
-        }
+        models = [];
       }
       setOllamaModels(models || []);
     } catch (err) {

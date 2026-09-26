@@ -11,6 +11,7 @@
     "install:all": "npm --prefix native install",
     "verify:rules": "node scripts/verify-commit-rules.js",
     "verify:release": "node scripts/verify-commit-rules.js --mode=release",
+    "verify:invoke": "node scripts/verify-invoke-contract.mjs",
     "release:prepare": "node scripts/prepare-release.mjs",
     "test": "npm --prefix native test",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",

@@ -426,7 +426,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   const handleCheckUpdates = async () => {
     try {
       setCheckingUpdate(true);
-      const info = await invoke<UpdateInfo>('check_for_updates');
+      const info = await invoke<UpdateInfo>('check_for_app_updates');
       setUpdateInfo(info);
     } catch (err) {
       console.error('Update check failed:', err);
@@ -1909,7 +1909,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                         const dir = vaultLocation?.path;
                         if (dir) {
                           try {
-                            await invoke('open_vault_in_explorer');
+                            await invoke('open_vault_folder');
                           } catch {
                             alert(`Your vault is stored at: ${dir}`);
                           }

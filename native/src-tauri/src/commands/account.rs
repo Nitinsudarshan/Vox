@@ -182,3 +182,65 @@ pub async fn check_for_app_updates(
     let current_ver = env!("CARGO_PKG_VERSION");
     Ok(crate::updates::UpdateService::check_for_updates(current_ver).await)
 }
+
+/// A plain-text summary of this installation for a support request, as
+/// Settings › Diagnostics copies it to the clipboard.
+///
+/// Configuration only: no API key, no file path, no transcript and no note
+/// content, so it is safe to paste into an issue.
+#[tauri::command]
+pub async fn get_diagnostic_summary(state: State<'_, AppState>) -> Result<String, CommandError> {
+    let settings = state.settings.lock_or_recover().clone();
+    let installation =
+        crate::identity::get_or_create_installation_info(&state.config_dir, env!("CARGO_PKG_VERSION"));
+    Ok(diagnostic_summary(&settings, &installation.installation_id))
+}
+
+fn diagnostic_summary(settings: &AppSettings, installation_id: &str) -> String {
+    let provider = &settings.provider;
+    let on_off = |on: bool| if on { "on" } else { "off" };
+    [
+        format!("Vox {}", env!("CARGO_PKG_VERSION")),
+        format!("Platform: {} / {}", std::env::consts::OS, std::env::consts::ARCH),
+        format!("Installation: {installation_id}"),
+        format!(
+            "Language model: {} ({})",
+            provider.active_provider.slug(),
+            if provider.active_provider_is_local() { "on this machine" } else { "cloud" }
+        ),
+        format!(
+            "Dictation: engine {}, quality {:?}, cleanup {}",
+            settings.stt.dictation_engine.as_deref().unwrap_or("whisper"),
+            settings.stt.dictation_quality,
+            crate::capture::rewrite::CleanupStyle::from_setting(&settings.stt.cleanup_style).as_str()
+        ),
+        format!(
+            "Meeting model: {}",
+            settings.stt.meeting_model_id.as_deref().unwrap_or("best installed")
+        ),
+        format!("Web capture: {}", on_off(settings.capture.bridge_enabled)),
+        format!(
+            "Anonymous crash reports: {}",
+            on_off(settings.diagnostics.allow_anonymous_diagnostics)
+        ),
+    ]
+    .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_diagnostic_summary_carries_no_secret_or_path() {
+        let mut settings = AppSettings::default();
+        settings.provider.provider_keys.insert("groq".into(), "gsk-secret".into());
+        settings.vault.directory = Some("C:/Users/asha/Vox".into());
+        let summary = diagnostic_summary(&settings, "inst-123");
+
+        assert!(summary.contains("Installation: inst-123"));
+        assert!(summary.contains("cleanup raw"));
+        assert!(!summary.contains("gsk-secret"));
+        assert!(!summary.contains("asha"));
+    }
+}

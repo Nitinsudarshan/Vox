@@ -36,6 +36,12 @@ jobs:
       - name: Test the release scripts
         run: npm run test:scripts
 
+      # Every `invoke()` in the frontend must name a real backend command with
+      # the arguments it takes; unit tests mock `invoke`, so nothing else would
+      # notice a button whose command does not exist.
+      - name: Verify frontend commands exist in the backend
+        run: npm run verify:invoke
+
       # The transcription harness is Python and had no failing direction in CI
       # until it had one. These tests do not need a model or a corpus: they
       # cover the audio gate that decides whether a corpus is usable, and the

@@ -509,3 +509,32 @@ pub async fn set_dictation_engine(
     };
     persist_settings(&app, &state, settings)
 }
+
+/// Pulls a model into the local Ollama, waiting until it is available.
+///
+/// `host` defaults to the configured one. Only a host on this machine is
+/// accepted: pulling is a local-install action, and a remote address here
+/// would make Vox start a multi-gigabyte download on someone else's server.
+#[tauri::command]
+pub async fn pull_ollama_model(
+    model_name: String,
+    host: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let model = model_name.trim();
+    if model.is_empty() {
+        return Err(CommandError::new("INVALID_MODEL", "Name a model to pull."));
+    }
+    let host = host
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| state.settings.lock_or_recover().provider.ollama_host.clone());
+    if !crate::providers::is_loopback_url(&host) {
+        return Err(CommandError::new(
+            "OLLAMA_HOST_NOT_LOCAL",
+            "Models can only be pulled into an Ollama running on this machine.",
+        ));
+    }
+    crate::providers::pull_model(&host, model)
+        .await
+        .map_err(|e| CommandError::new("OLLAMA_PULL_FAILED", &e))
+}

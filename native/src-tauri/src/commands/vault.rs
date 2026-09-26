@@ -309,3 +309,13 @@ pub async fn set_vault_location(
         accessible: true,
     })
 }
+
+/// Opens the vault's root folder in the system file manager.
+#[tauri::command]
+pub async fn open_vault_folder(app: AppHandle, state: State<'_, AppState>) -> Result<(), CommandError> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = state.vault.vault_dir();
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| CommandError::new("OPEN_FAILED", &e.to_string()))
+}

@@ -85,9 +85,11 @@ export const KnowledgeArchitectureDiagnostics: React.FC = () => {
     setContextPack(null);
     try {
       const [retrieval, pack] = await Promise.all([
+        // `unified_retrieve(query: RetrievalQuery)` — the argument is `query`
+        // and the text field is `text`, as `retrieval::RetrievalQuery` names them.
         invoke<RetrievalResult>('unified_retrieve', {
-          request: {
-            query: searchQuery,
+          query: {
+            text: searchQuery,
             limit: 10,
             char_budget: 15000,
             include_evidence: true,
@@ -96,7 +98,6 @@ export const KnowledgeArchitectureDiagnostics: React.FC = () => {
         invoke<ContextPack>('assemble_context_pack', {
           packType: 'general',
           query: searchQuery,
-          intent: 'diagnostic_query',
           charBudget: 15000,
         }),
       ]);

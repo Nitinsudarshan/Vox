@@ -4,7 +4,7 @@ pub mod secrets;
 pub mod ollama_install;
 
 pub use ollama_manager::{
-    ensure_ollama_ready, model_is_present, set_managed_binary, list_installed_models, test_ollama_prompt, OllamaModelDetails,
+    ensure_ollama_ready, model_is_present, pull_model, set_managed_binary, list_installed_models, test_ollama_prompt, OllamaModelDetails,
     OllamaPromptTestResult, OllamaStatus,
 };
 use serde::{Deserialize, Serialize};
@@ -309,7 +309,7 @@ impl ProviderType {
 /// as remote, because the cost of being wrong in that direction is a warning
 /// the user does not need, and the cost the other way is telling someone their
 /// transcript stays local when it does not.
-fn is_loopback_url(url: &str) -> bool {
+pub fn is_loopback_url(url: &str) -> bool {
     let rest = match url.split_once("://") {
         Some((_, rest)) => rest,
         None => url,
