@@ -125,7 +125,7 @@ jobs:
       # and a native crash then names the test that caused it: libtest prints
       # each test's name before running it only when it runs them serially.
       - name: Test
-        run: cargo test -- --test-threads=1
+        run: cargo test -- --test-threads=1 --nocapture
 
   native-frontend:
     name: Native frontend
