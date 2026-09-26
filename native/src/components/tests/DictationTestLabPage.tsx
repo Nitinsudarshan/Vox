@@ -43,6 +43,7 @@ import type {
   DiffSpan,
 } from '@/types/benchmark';
 import type { AppSettings } from '@/types';
+import { describeError } from '@/lib/errors';
 
 export const DictationTestLabPage: React.FC = () => {
   // Available hardware/engine discovery
@@ -125,8 +126,8 @@ export const DictationTestLabPage: React.FC = () => {
         if (defaultStyles.length > 0) {
           setSelectedCleanupStyles(defaultStyles);
         }
-      } catch (err: any) {
-        setErrorMessage(err?.message || 'Failed to discover speech models');
+      } catch (err) {
+        setErrorMessage(describeError(err, 'Failed to discover speech models'));
       } finally {
         setLoadingDiscovery(false);
       }
@@ -216,8 +217,8 @@ export const DictationTestLabPage: React.FC = () => {
       setIsRecording(true);
       setCurrentRun(null);
       setProgressiveResults([]);
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to start test recording');
+    } catch (err) {
+      setErrorMessage(describeError(err, 'Failed to start test recording'));
     }
   };
 
@@ -246,8 +247,8 @@ export const DictationTestLabPage: React.FC = () => {
         setSelectedModelTab(run.model_results[0].target_id);
       }
       loadHistory();
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Benchmarking failed');
+    } catch (err) {
+      setErrorMessage(describeError(err, 'Benchmarking failed'));
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
@@ -265,8 +266,8 @@ export const DictationTestLabPage: React.FC = () => {
   const handleInject = async (text: string) => {
     try {
       await invoke('inject_dictation_test_result', { text });
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to inject text');
+    } catch (err) {
+      setErrorMessage(describeError(err, 'Failed to inject text'));
     }
   };
 
@@ -286,8 +287,8 @@ export const DictationTestLabPage: React.FC = () => {
       a.download = `dictation_benchmark_${currentRun.test_id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to export report');
+    } catch (err) {
+      setErrorMessage(describeError(err, 'Failed to export report'));
     }
   };
 
@@ -303,8 +304,8 @@ export const DictationTestLabPage: React.FC = () => {
         }
         setShowHistory(false);
       }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to load test run');
+    } catch (err) {
+      setErrorMessage(describeError(err, 'Failed to load test run'));
     }
   };
 
@@ -317,8 +318,8 @@ export const DictationTestLabPage: React.FC = () => {
         setCurrentRun(null);
         setProgressiveResults([]);
       }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to delete test run');
+    } catch (err) {
+      setErrorMessage(describeError(err, 'Failed to delete test run'));
     }
   };
 

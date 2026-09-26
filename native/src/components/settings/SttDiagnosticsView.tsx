@@ -29,6 +29,7 @@ import {
   EvaluationResult,
   SttDiagnosticSnapshot,
 } from '../../types';
+import { describeError } from '@/lib/errors';
 
 interface SttDiagnosticsViewProps {
   settings: AppSettings;
@@ -119,9 +120,9 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
         customModelPath: settings.stt.whisper_model_path || null,
       });
       setEvalResult(res);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Evaluation run failed:', err);
-      setEvalError(err?.message || String(err));
+      setEvalError(describeError(err, String(err)));
     } finally {
       setRunningEval(false);
     }
@@ -554,7 +555,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
             </label>
             <select
               value={testVariant}
-              onChange={(e: any) => setTestVariant(e.target.value)}
+              onChange={(e) => setTestVariant(e.target.value as typeof testVariant)}
               className="w-full h-8 px-2 text-xs rounded-lg bg-background border border-border text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
             >
               <option value="baseline">Baseline (Greedy, best_of=1)</option>

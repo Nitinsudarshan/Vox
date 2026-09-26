@@ -9,59 +9,71 @@ pub enum SttModelStatus {
     Failed { message: String },
 }
 
-/// Removes "go find and download a GGML model yourself" as a prerequisite:
-/// downloads the default one now if nothing is configured, and reports
-/// where things stand so Settings can show real status instead of the
-/// user finding out only when a capture silently fails.
+/// Where dictation's speech model stands, without downloading anything.
+///
+/// Surfaces that only need to show status call this on open. Fetching a
+/// model is always the user's explicit choice — [`ensure_stt_model_ready`] —
+/// never a side effect of opening a window.
 #[tauri::command]
-pub async fn ensure_stt_model_ready(state: State<'_, AppState>) -> Result<SttModelStatus, CommandError> {
+pub async fn get_dictation_model_status(state: State<'_, AppState>) -> Result<SttModelStatus, CommandError> {
     let models_dir = state.config_dir.join("models");
-    let configured = state
-        .settings
-        .lock_or_recover()
-        .stt
-        .whisper_model_path
-        .clone()
-        .filter(|p| !p.trim().is_empty());
+    let stt = state.settings.lock_or_recover().stt.clone();
 
-    if let Some(ref path_str) = configured {
-        let path = std::path::Path::new(path_str);
-        if path.exists() {
-            if !crate::capture::stt::is_legacy_default_model(path) {
-                // User has an explicit custom model that exists
-                return Ok(SttModelStatus::Ready {
-                    path: path_str.clone(),
-                });
-            }
-            // If it's a legacy default model (e.g. ggml-base.bin), proceed to ensure production ggml-small.bin
-        } else {
-            return Ok(SttModelStatus::Failed {
-                message: format!(
-                    "Configured model path not found: '{}'. Expected production model: '{}'.",
-                    path_str,
-                    crate::capture::stt::DEFAULT_MODEL_FILENAME
-                ),
+    if stt.dictation_engine.as_deref() == Some("parakeet") {
+        let parakeet_dir = models_dir.join("parakeet");
+        if crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir) {
+            return Ok(SttModelStatus::Ready {
+                path: parakeet_dir.to_string_lossy().to_string(),
             });
         }
     }
 
-    match crate::capture::stt::ensure_default_model(&models_dir).await {
-        Ok(path) => {
-            let path_str = path.to_string_lossy().to_string();
-            let mut settings = state.settings.lock_or_recover();
-            settings.stt.whisper_model_path = Some(path_str.clone());
-            let _ = settings.save(&state.settings_path());
-            Ok(SttModelStatus::Ready { path: path_str })
-        }
-        Err(e) => Ok(SttModelStatus::Failed {
-            message: e.to_string(),
-        }),
-    }
+    Ok(match crate::capture::stt::installed_dictation_model_path(&models_dir, &stt) {
+        Some(path) => SttModelStatus::Ready { path },
+        None => SttModelStatus::Failed {
+            message: "No dictation model is installed yet.".to_string(),
+        },
+    })
 }
 
-/// Removes the "install and manually start Ollama" step for local mode:
-/// starts it and pulls the configured model if needed. A no-op for the
-/// Cloud API path, which is unaffected.
+/// Makes sure dictation has a speech model, downloading the one its quality
+/// preset names (`ggml-base.bin` for Fast, `ggml-small.bin` for Accurate) if
+/// none is installed. Called when the user asks for the download.
+///
+/// The model is not written into `whisper_model_path`: the preset resolves it
+/// on every dictation, and pinning it here used to turn a Fast install into a
+/// permanent `ggml-small` one. A configured model that no longer exists is
+/// reported by name rather than replaced; the retired `ggml-tiny.en` default
+/// is cleared so the preset decides again.
+#[tauri::command]
+pub async fn ensure_stt_model_ready(state: State<'_, AppState>) -> Result<SttModelStatus, CommandError> {
+    let models_dir = state.config_dir.join("models");
+    let mut stt = state.settings.lock_or_recover().stt.clone();
+
+    if let Some(configured) = stt.whisper_model_path.clone().filter(|p| !p.trim().is_empty()) {
+        let path = std::path::Path::new(&configured);
+        if crate::capture::stt::is_legacy_default_model(path) {
+            stt.whisper_model_path = None;
+            let mut settings = state.settings.lock_or_recover();
+            settings.stt.whisper_model_path = None;
+            let _ = settings.save(&state.settings_path());
+        } else if !path.exists() {
+            return Ok(SttModelStatus::Failed {
+                message: format!("The configured speech model is missing: '{configured}'."),
+            });
+        }
+    }
+
+    Ok(
+        match crate::capture::stt::resolve_dictation_model_path(&models_dir, &stt).await {
+            Some(path) if std::path::Path::new(&path).exists() => SttModelStatus::Ready { path },
+            _ => SttModelStatus::Failed {
+                message: "The dictation speech model could not be downloaded.".to_string(),
+            },
+        },
+    )
+}
+
 #[tauri::command]
 pub async fn ensure_local_llm_ready(state: State<'_, AppState>) -> Result<OllamaStatus, CommandError> {
     let settings = state.settings.lock_or_recover().clone();

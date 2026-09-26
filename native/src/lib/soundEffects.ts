@@ -10,7 +10,7 @@ let sharedAudioCtx: AudioContext | null = null;
 function getAudioContext(): AudioContext | null {
   try {
     if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioContextClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (AudioContextClass) {
         sharedAudioCtx = new AudioContextClass();
       }

@@ -57,10 +57,13 @@ import type {
   SpeechModelDownloadProgress,
   SpeechModelTier,
   OllamaModelDetails,
+  OllamaPromptTestResult,
+  OllamaStatus,
 } from '@/types/models';
-import type { AppSettings, ProviderConfig, MainTabType } from '@/types';
+import type { AppSettings, ProviderConfig, MainTabType, ProviderSlug } from '@/types';
 import { CloudProviderSettings } from './CloudProviderSettings';
 import { invoke } from '@tauri-apps/api/core';
+import { describeError } from '@/lib/errors';
 
 interface UnifiedModelsViewProps {
   settings: AppSettings;
@@ -261,7 +264,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       setParakeetStatus(pStatus);
       setSttError(null);
     } catch (err) {
-      setSttError(err instanceof Error ? err.message : String(err));
+      setSttError(describeError(err));
     } finally {
       setSttLoading(false);
     }
@@ -310,10 +313,10 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
   const refreshOllama = useCallback(async () => {
     setLoadingOllama(true);
     try {
-      const res = await invoke<any>('ensure_local_llm_ready');
-      if (res?.state === 'running' || res === 'running' || res?.state === 'started') {
+      const res = await invoke<OllamaStatus>('ensure_local_llm_ready');
+      if (res.state === 'running' || res.state === 'started') {
         setOllamaStatus('running');
-      } else if (res?.state === 'not_installed') {
+      } else if (res.state === 'not_installed') {
         setOllamaStatus('not_installed');
       } else {
         setOllamaStatus('unreachable');
@@ -367,7 +370,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
     } catch (err) {
       setDownloads((prev) => ({
         ...prev,
-        [id]: { kind: 'failed', message: err instanceof Error ? err.message : String(err) },
+        [id]: { kind: 'failed', message: describeError(err) },
       }));
     }
     await refreshStt();
@@ -379,7 +382,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       await deleteSpeechModel(model.id);
       await refreshStt();
     } catch (err) {
-      setSttError(err instanceof Error ? err.message : String(err));
+      setSttError(describeError(err));
     } finally {
       setSttBusyId(null);
     }
@@ -391,7 +394,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       await setMeetingSpeechModel(id);
       await refreshStt();
     } catch (err) {
-      setSttError(err instanceof Error ? err.message : String(err));
+      setSttError(describeError(err));
     } finally {
       setSttBusyId(null);
     }
@@ -403,7 +406,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       await setDictationSpeechModel(id);
       await refreshStt();
     } catch (err) {
-      setSttError(err instanceof Error ? err.message : String(err));
+      setSttError(describeError(err));
     } finally {
       setSttBusyId(null);
     }
@@ -421,7 +424,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
         ...prev,
         'parakeet-tdt': {
           kind: 'failed',
-          message: err instanceof Error ? err.message : String(err),
+          message: describeError(err),
         },
       }));
     }
@@ -435,7 +438,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       await setDictationEngine(newEngine);
       await refreshStt();
     } catch (err) {
-      setSttError(err instanceof Error ? err.message : String(err));
+      setSttError(describeError(err));
     } finally {
       setParakeetBusy(false);
     }
@@ -447,7 +450,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       await deleteParakeetModel();
       await refreshStt();
     } catch (err) {
-      setSttError(err instanceof Error ? err.message : String(err));
+      setSttError(describeError(err));
     } finally {
       setParakeetBusy(false);
     }
@@ -462,7 +465,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       const activeP = settings.provider.active_provider;
       if (activeP === 'ollama') {
         const model = settings.provider.ollama_model || 'llama3.2:latest';
-        const res = await invoke<any>('test_llm_prompt', {
+        const res = await invoke<OllamaPromptTestResult>('test_llm_prompt', {
           model,
           prompt: "Say 'Vox AI ready' in under 5 words.",
         });
@@ -479,8 +482,8 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
         setTestLatency(Date.now() - start);
         setTestResponse(`Connected to ${activeP}. Configuration verified.`);
       }
-    } catch (err: any) {
-      setTestResponse(err?.message || 'Connection test failed');
+    } catch (err) {
+      setTestResponse(describeError(err, 'Connection test failed'));
     } finally {
       setTestingLlm(false);
     }
@@ -497,8 +500,8 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
       });
       setPullModelName('');
       await refreshOllama();
-    } catch (err: any) {
-      alert(`Pull failed: ${err?.message || err}`);
+    } catch (err) {
+      alert(`Pull failed: ${describeError(err, 'unknown error')}`);
     } finally {
       setPulling(false);
     }
@@ -1118,7 +1121,7 @@ export const UnifiedModelsView: React.FC<UnifiedModelsViewProps> = ({
                           ...prev,
                           provider: {
                             ...prev.provider,
-                            active_provider: p.id as any,
+                            active_provider: p.id as ProviderSlug,
                           },
                         }));
                       }}

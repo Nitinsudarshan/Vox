@@ -66,6 +66,9 @@ import { SpeechModelsView } from './SpeechModelsView';
 import { CloudProviderSettings } from './CloudProviderSettings';
 import { OllamaInstallCard } from './OllamaInstallCard';
 import { UnifiedModelsView } from './UnifiedModelsView';
+import { describeError } from '@/lib/errors';
+import type { SttModelStatus } from '@/types/models';
+import type { CleanupStyle } from '../capture/PillTypes';
 
 export type SettingsSection =
   | 'account'
@@ -292,7 +295,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       }
       await fetchSttModels();
     } catch (e) {
-      setModelDownloadError(e instanceof Error ? e.message : String(e));
+      setModelDownloadError(describeError(e));
     } finally {
       setDownloadingModel(null);
     }
@@ -308,27 +311,6 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       console.error('Failed to query STT models', err);
     } finally {
       setLoadingSttModels(false);
-    }
-  };
-
-  type SttModelStatus =
-    | { state: 'checking' }
-    | { state: 'ready'; path: string }
-    | { state: 'failed'; message: string };
-  const [sttModelStatus, setSttModelStatus] = useState<SttModelStatus>({ state: 'checking' });
-
-  const checkSttModel = async () => {
-    setSttModelStatus({ state: 'checking' });
-    try {
-      const status = await invoke<SttModelStatus>('ensure_stt_model_ready');
-      setSttModelStatus(status);
-      if (status.state === 'ready') {
-        setSettings((prev) => ({ ...prev, stt: { ...prev.stt, whisper_model_path: status.path } }));
-      }
-      await fetchSttModels();
-    } catch (err) {
-      console.error('Failed to check local Whisper model status', err);
-      setSttModelStatus({ state: 'failed', message: 'Could not reach the backend' });
     }
   };
 
@@ -506,9 +488,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         ...prev,
         vault: { ...prev.vault, directory: picked },
       }));
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to set Vault Directory Location', err);
-      setVaultError(err?.message || "Couldn't use that folder — choose another.");
+      setVaultError(describeError(err, "Couldn't use that folder — choose another."));
     } finally {
       setVaultBusy(false);
     }
@@ -549,19 +531,19 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             ...(loaded.language || {}),
             spoken_languages:
               loaded.language?.spoken_languages ||
-              (loaded.language as any)?.spokenLanguages ||
+              loaded.language?.spokenLanguages ||
               DEFAULT_LANGUAGE_SETTINGS.spoken_languages,
             primary_dictation_language:
               loaded.language?.primary_dictation_language ||
-              (loaded.language as any)?.primaryDictationLanguage ||
+              loaded.language?.primaryDictationLanguage ||
               DEFAULT_LANGUAGE_SETTINGS.primary_dictation_language,
             notes_language:
               loaded.language?.notes_language ||
-              (loaded.language as any)?.notesLanguage ||
+              loaded.language?.notesLanguage ||
               DEFAULT_LANGUAGE_SETTINGS.notes_language,
             output_script:
               loaded.language?.output_script ||
-              (loaded.language as any)?.outputScript ||
+              loaded.language?.outputScript ||
               DEFAULT_LANGUAGE_SETTINGS.output_script,
           },
         });
@@ -595,7 +577,6 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         checkLocalLlm();
         fetchOllamaModels();
       }
-      checkSttModel();
       fetchSttModels();
     }
     if (!loading && (activeSection === 'about' || activeSection === 'privacy')) {
@@ -612,9 +593,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     try {
       await invoke('update_hotkeys', { hotkeys: updatedHotkeys });
       setError('');
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to apply hotkey', err);
-      setError(err?.message || 'Failed to apply hotkey — it may already be in use by another app');
+      setError(describeError(err, 'Failed to apply hotkey — it may already be in use by another app'));
     }
   };
 
@@ -987,8 +968,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                             ...settings,
                             stt: {
                               ...settings.stt,
-                              cleanup_style: item.id as any,
-                              cleanupStyle: item.id as any,
+                              cleanup_style: item.id as CleanupStyle,
+                              cleanupStyle: item.id as CleanupStyle,
                             },
                           };
                           setSettings(updated);

@@ -34,6 +34,26 @@ export interface OllamaModelDetails {
   family?: string | null;
 }
 
+/** `providers::OllamaStatus`, as `ensure_local_llm_ready` returns it. */
+export type OllamaStatus =
+  | { state: 'running' }
+  | { state: 'started' }
+  | { state: 'not_installed' }
+  | { state: 'unreachable'; message: string };
+
+/** `commands::SttModelStatus`: where dictation's speech model stands. */
+export type SttModelStatus =
+  | { state: 'ready'; path: string }
+  | { state: 'failed'; message: string };
+
+/** `commands::CaptureStatus`, as `get_capture_status` returns it. */
+export interface CaptureStatusPayload {
+  active: boolean;
+  mode?: string | null;
+  status: string;
+  message?: string | null;
+}
+
 export interface OllamaPromptTestResult {
   success: boolean;
   latency_ms: number;

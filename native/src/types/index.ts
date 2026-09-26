@@ -1033,7 +1033,7 @@ export interface RetrievedItem {
   provenance: RetrievalProvenance;
   topics: string[];
   explainability?: Explainability | null;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RetrievalResult {
@@ -1059,7 +1059,7 @@ export interface RelationshipRecord {
   confidence: number;
   created_at: string;
   provenance?: string | null;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export type EntityCategory =
@@ -1124,7 +1124,7 @@ export interface MemoryItem {
   supersedes_id?: string | null;
   created_at: string;
   updated_at: string;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export type ContextPackType =
@@ -1181,11 +1181,11 @@ export interface UniversalAction {
   action_type: ActionType;
   intent?: string | null;
   target: string;
-  parameters: any;
+  parameters: Record<string, unknown>;
   source_context?: string | null;
   requires_confirmation: boolean;
   status: ActionStatus;
-  result?: any;
+  result?: unknown;
   error_message?: string | null;
   provenance?: string | null;
   created_at: string;

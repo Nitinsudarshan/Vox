@@ -443,6 +443,7 @@ pub fn run() {
             commands::install_ollama,
             commands::test_llm_prompt,
             commands::ensure_stt_model_ready,
+            commands::get_dictation_model_status,
             commands::get_stt_decode_summary,
             commands::get_available_stt_models,
             commands::download_stt_model,

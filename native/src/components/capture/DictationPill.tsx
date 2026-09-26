@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { cn, applyThemeWithoutTransition } from '@/lib/utils';
 import { playDictationStartSound, playDictationStopSound } from '@/lib/soundEffects';
+import { describeError } from '@/lib/errors';
+import type { CaptureStatusPayload, OllamaStatus, SttModelStatus } from '@/types/models';
 
 export function getPillLanguageFromSettings(lang?: LanguageSettings): SpeechLanguage {
   if (!lang) return 'auto';
@@ -363,25 +365,27 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       }
 
       try {
-        const sttResult = await invoke<any>('ensure_stt_model_ready');
-        if (sttResult.state === 'ready' || sttResult.Ready) {
-          setWhisperStatus({ status: 'ready', modelPath: sttResult.Ready?.path || sttResult.path });
+        // Status only. Opening the pill must never start a download; that is
+        // handleDownloadWhisper, behind the user's click.
+        const sttResult = await invoke<SttModelStatus>('get_dictation_model_status');
+        if (sttResult.state === 'ready') {
+          setWhisperStatus({ status: 'ready', modelPath: sttResult.path });
         } else {
-          setWhisperStatus({ status: 'download_required', message: 'Whisper model required' });
+          setWhisperStatus({ status: 'download_required', message: 'Speech model required' });
         }
       } catch {
         setWhisperStatus({ status: 'download_required', message: 'Whisper check failed' });
       }
 
       try {
-        const llmResult = await invoke<any>('ensure_local_llm_ready');
+        const llmResult = await invoke<OllamaStatus>('ensure_local_llm_ready');
         if (appSettings.provider.active_provider !== 'ollama') {
           setOllamaStatus({
             status: 'cloud_active',
             host: 'cloud',
             model: appSettings.provider.cloud_model || 'cloud',
           });
-        } else if (llmResult === 'Running' || llmResult.state === 'running') {
+        } else if (llmResult.state === 'running' || llmResult.state === 'started') {
           setOllamaStatus({
             status: 'ready',
             host: appSettings.provider.ollama_host,
@@ -409,11 +413,11 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   const handleDownloadWhisper = async () => {
     setWhisperStatus({ status: 'downloading' });
     try {
-      const res = await invoke<any>('ensure_stt_model_ready');
-      if (res.state === 'ready' || res.Ready) {
-        setWhisperStatus({ status: 'ready', modelPath: res.Ready?.path || res.path });
+      const res = await invoke<SttModelStatus>('ensure_stt_model_ready');
+      if (res.state === 'ready') {
+        setWhisperStatus({ status: 'ready', modelPath: res.path });
       } else {
-        setWhisperStatus({ status: 'failed', message: 'Download failed' });
+        setWhisperStatus({ status: 'failed', message: res.message });
       }
     } catch {
       setWhisperStatus({ status: 'failed', message: 'Download failed' });
@@ -423,7 +427,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   useEffect(() => {
     refreshDependencies();
 
-    invoke<any>('get_capture_status')
+    invoke<CaptureStatusPayload>('get_capture_status')
       .then((status) => {
         if (status.active) {
           isRecordingRef.current = true;
@@ -590,8 +594,8 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
         } else {
           setPhase('collapsed');
         }
-      } catch (err: any) {
-        setErrorMessage(err.message || 'Audio capture failed');
+      } catch (err) {
+        setErrorMessage(describeError(err, 'Audio capture failed'));
         setPhase('error');
       }
     } else {
@@ -607,8 +611,8 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
         // anything was actually recording. The capture-state-changed
         // listener above flips this to 'listening' once Rust confirms it.
         await invoke('start_capture', { mode: 'voice_note' });
-      } catch (err: any) {
-        setErrorMessage(err.message || 'Failed to start capture');
+      } catch (err) {
+        setErrorMessage(describeError(err, 'Failed to start capture'));
         setPhase('error');
       }
     }
