@@ -13,7 +13,7 @@ use crate::capture::web::{
     CaptureContent, CaptureContentKind, CaptureDiagnostics, CaptureMessage,
     ContentBlock, ExtractorInfo, WebCapturePayload, PROTOCOL_VERSION,
 };
-use super::text_to_blocks;
+use super::{safe_asset_file_name, text_to_blocks};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatGptExportConversation {
@@ -206,7 +206,8 @@ pub fn chatgpt_to_capture_payload(
                 let mime = att.get("mime_type").and_then(|m| m.as_str()).map(|s| s.to_string());
 
                 let mut saved_to_disk = false;
-                if let (Some(filename), Some(dir)) = (&name, assets_dir) {
+                let safe_name = name.as_deref().and_then(safe_asset_file_name);
+                if let (Some(filename), Some(dir)) = (&safe_name, assets_dir) {
                     if let Some(bytes) = available_assets.get(filename) {
                         let asset_path = dir.join(filename);
                         if std::fs::write(&asset_path, bytes).is_ok() {

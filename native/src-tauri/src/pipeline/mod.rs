@@ -15,6 +15,7 @@ pub use enrichment::{
     AiEnrichmentResponse, CANONICAL_ANALYSIS_SYSTEM_PROMPT, CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS,
     CANONICAL_SUMMARY_SYSTEM_PROMPT,
 };
+pub(crate) use enrichment::find_ignoring_ascii_case;
 
 #[derive(Error, Debug)]
 pub enum PipelineError {

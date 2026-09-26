@@ -79,7 +79,7 @@ const DOMAIN_TOPIC_PATTERNS: &[(&str, &str)] = &[
 /// the offset lands inside a character. The markers and fillers here are
 /// ASCII apart from exact punctuation such as `—`, so matching bytes with ASCII
 /// case folding finds the same text without changing a single offset.
-fn find_ignoring_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+pub(crate) fn find_ignoring_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
     let (h, n) = (haystack.as_bytes(), needle.as_bytes());
     if n.is_empty() || n.len() > h.len() {
         return None;

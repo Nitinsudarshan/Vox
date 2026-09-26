@@ -231,13 +231,9 @@ impl Scribble {
     }
 
     pub fn parse_markdown(raw: &str) -> Option<Self> {
-        let parts: Vec<&str> = raw.splitn(3, "---").collect();
-        if parts.len() < 3 {
-            return None;
-        }
-
-        let frontmatter_str = parts[1].trim();
-        let body = parts[2].trim_start_matches('\n').to_string();
+        let (frontmatter_str, body) = super::frontmatter::split(raw)?;
+        let frontmatter_str = frontmatter_str.trim();
+        let body = body.trim_start_matches(['\r', '\n']).to_string();
 
         let meta: ScribbleFrontmatter = serde_json::from_str(frontmatter_str).ok()?;
 

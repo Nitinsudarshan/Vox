@@ -12,7 +12,7 @@ use crate::capture::web::{
     CaptureContent, CaptureContentKind, CaptureDiagnostics, CaptureMessage,
     ContentBlock, ExtractorInfo, WebCapturePayload, PROTOCOL_VERSION,
 };
-use super::text_to_blocks;
+use super::{safe_asset_file_name, text_to_blocks, truncate_chars};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaudeExportConversation {
@@ -93,7 +93,8 @@ pub fn claude_to_capture_payload(
         for file in &msg.files {
             let name = file.file_name.clone();
             let mut saved = false;
-            if let (Some(filename), Some(dir)) = (&name, assets_dir) {
+            let safe_name = name.as_deref().and_then(safe_asset_file_name);
+            if let (Some(filename), Some(dir)) = (&safe_name, assets_dir) {
                 if let Some(bytes) = available_assets.get(filename) {
                     let dest = dir.join(filename);
                     if std::fs::write(&dest, bytes).is_ok() {
@@ -124,7 +125,8 @@ pub fn claude_to_capture_payload(
             let name = att.file_name.clone();
             let mut saved = false;
 
-            if let (Some(filename), Some(dir)) = (&name, assets_dir) {
+            let safe_name = name.as_deref().and_then(safe_asset_file_name);
+            if let (Some(filename), Some(dir)) = (&safe_name, assets_dir) {
                 if let Some(bytes) = available_assets.get(filename) {
                     let dest = dir.join(filename);
                     if std::fs::write(&dest, bytes).is_ok() {
@@ -140,13 +142,7 @@ pub fn claude_to_capture_payload(
                 }
             }
 
-            let preview = att.extracted_content.as_ref().map(|c| {
-                if c.len() > 300 {
-                    format!("{}…", &c[..300])
-                } else {
-                    c.clone()
-                }
-            });
+            let preview = att.extracted_content.as_deref().map(|c| truncate_chars(c, 300));
 
             blocks.push(ContentBlock::Attachment {
                 name,
@@ -167,11 +163,7 @@ pub fn claude_to_capture_payload(
             // If extracted content is substantial, add a blockquote block to make it immediately searchable
             if let Some(extracted) = &att.extracted_content {
                 if !extracted.trim().is_empty() {
-                    let snippet = if extracted.len() > 2000 {
-                        format!("Attached document extract:\n\n{}…", &extracted[..2000])
-                    } else {
-                        format!("Attached document extract:\n\n{}", extracted)
-                    };
+                    let snippet = format!("Attached document extract:\n\n{}", truncate_chars(extracted, 2000));
                     blocks.push(ContentBlock::Quote { text: snippet });
                 }
             }
@@ -282,5 +274,79 @@ mod tests {
         assert_eq!(payload.content.messages[1].role, "assistant");
         assert_eq!(payload.content.messages[1].ordinal, Some(2));
         assert!(payload.content.messages[0].blocks.iter().any(|b| matches!(b, ContentBlock::Attachment { .. })));
+    }
+
+    fn conversation_with_attachment(file_name: &str, extracted: &str) -> ClaudeExportConversation {
+        ClaudeExportConversation {
+            uuid: "c1".to_string(),
+            name: None,
+            created_at: None,
+            updated_at: None,
+            chat_messages: vec![ClaudeChatMessage {
+                uuid: None,
+                text: "See attached".to_string(),
+                sender: "human".to_string(),
+                created_at: None,
+                updated_at: None,
+                index: None,
+                files: vec![],
+                attachments: vec![ClaudeAttachment {
+                    file_name: Some(file_name.to_string()),
+                    file_size: None,
+                    file_type: None,
+                    extracted_content: Some(extracted.to_string()),
+                }],
+            }],
+        }
+    }
+
+    /// An attachment name from the export cannot place a file outside the
+    /// capture's assets directory.
+    #[test]
+    fn attachment_names_cannot_escape_the_assets_directory() {
+        let root = std::env::temp_dir().join(format!("vox_import_{}", uuid::Uuid::new_v4()));
+        let assets = root.join("vault").join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+
+        for name in ["../../escaped", "..\\..\\escaped", "/tmp/escaped", "C:\\escaped"] {
+            let conv = conversation_with_attachment(name, "payload");
+            claude_to_capture_payload(&conv, Some(&assets), &HashMap::new());
+        }
+
+        assert!(!root.join("escaped.txt").exists());
+        assert!(!root.join("vault").join("escaped.txt").exists());
+        let written: Vec<String> = std::fs::read_dir(&assets)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!written.is_empty());
+        assert!(written.iter().all(|n| n == "escaped.txt"), "{written:?}");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Extracts are cut by characters: a multi-byte character across byte
+    /// 300 or 2000 used to panic, and the conversation could never import.
+    #[test]
+    fn long_non_ascii_extracts_are_truncated_without_panicking() {
+        let extract = "क्या हाल है ".repeat(400);
+        let conv = conversation_with_attachment("notes.txt", &extract);
+        let payload = claude_to_capture_payload(&conv, None, &HashMap::new());
+        let preview = payload.content.messages[0].blocks.iter().find_map(|b| match b {
+            ContentBlock::Attachment { preview, .. } => preview.clone(),
+            _ => None,
+        });
+        assert_eq!(preview.unwrap().chars().count(), 301);
+    }
+
+    #[test]
+    fn asset_names_reduce_to_one_plain_component() {
+        assert_eq!(safe_asset_file_name("files/spec.md").as_deref(), Some("spec.md"));
+        assert_eq!(safe_asset_file_name("a\\..\\..\\evil.exe").as_deref(), Some("evil.exe"));
+        assert_eq!(safe_asset_file_name("C:evil.exe").as_deref(), Some("Cevil.exe"));
+        assert_eq!(safe_asset_file_name("report.pdf:stream").as_deref(), Some("report.pdfstream"));
+        for unsafe_name in ["", "..", "...", ". .", "dir/", "a/..", "a\\.."] {
+            assert_eq!(safe_asset_file_name(unsafe_name), None, "{unsafe_name:?}");
+        }
     }
 }

@@ -153,6 +153,36 @@ pub fn text_to_blocks(text: &str) -> Vec<ContentBlock> {
     blocks
 }
 
+/// An attachment name from an export, reduced to one plain file name.
+///
+/// Names come from the export's JSON and from its zip entries, and are
+/// joined onto the capture's assets directory: a `..`, a separator of either
+/// kind, or a drive prefix would write outside the vault. Returns `None` when
+/// nothing safe is left.
+pub(crate) fn safe_asset_file_name(name: &str) -> Option<String> {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = last
+        .chars()
+        .filter(|c| !c.is_control() && *c != ':')
+        .collect();
+    // Windows drops trailing dots and spaces, so `..` in disguise is still `..`.
+    let cleaned = cleaned.trim_end_matches(['.', ' ']).trim_start();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        return None;
+    }
+    Some(cleaned.to_string())
+}
+
+/// The first `max_chars` characters of `text`, with an ellipsis if any were
+/// left out. Export text is untrusted and multilingual, so this never cuts
+/// at a byte count.
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_string(),
+    }
+}
+
 type ExtractedArchive = (Vec<u8>, Option<HashMap<String, Vec<u8>>>);
 
 /// Reads file bytes either from raw JSON or from a ZIP archive containing `conversations.json`.
@@ -183,7 +213,7 @@ fn extract_conversations_json(path: &Path) -> Result<ExtractedArchive, CommandEr
                 }
             } else if !entry.is_dir() && entry.size() > 0 && entry.size() < 50_000_000 {
                 // Buffer assets (up to 50MB per file)
-                let base_name = name.split('/').next_back().unwrap_or(&name).to_string();
+                let Some(base_name) = safe_asset_file_name(&name) else { continue };
                 let mut buf = Vec::new();
                 if entry.read_to_end(&mut buf).is_ok() {
                     assets.insert(base_name, buf);
