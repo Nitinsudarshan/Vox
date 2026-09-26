@@ -101,9 +101,14 @@ function pageTitle(doc: Document): string | undefined {
  * does for a chat log.
  */
 function extractThread(doc: Document): ExtractionResult | null {
-  const containers = firstMatch(doc, COMMENT_SELECTORS)
+  const matched = firstMatch(doc, COMMENT_SELECTORS)
     ? Array.from(doc.querySelectorAll(COMMENT_SELECTORS.join(',')))
     : [];
+  // Classic markup nests `.timeline-comment` inside `.js-comment-container`;
+  // counting both put every comment in the thread twice.
+  const containers = matched.filter(
+    (el) => !matched.some((other) => other !== el && other.contains(el)),
+  );
   if (!containers.length) return null;
 
   const messages: CaptureMessage[] = [];

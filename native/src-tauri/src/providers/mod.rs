@@ -1086,8 +1086,11 @@ impl LLMClient {
             }
         } else {
             let markdown = format!(
-                "# Executive Summary\n- {}\n\n## Key Decisions & Context\n- Recorded via Relay push-to-talk voice capture.\n- Saved to local vault (.relay/vault/notes).\n\n## Next Steps\n- Review extracted tasks and notes.",
-                if prompt.trim().is_empty() { "Voice scribble captured" } else { prompt.trim() }
+                // States only what is true: no model answered. The filler it
+                // replaces asserted where the text came from and where it was
+                // saved, facts it could not know.
+                "# Summary unavailable\n\nNo language model answered, so this is the original text.\n\n{}",
+                if prompt.trim().is_empty() { "(empty)" } else { prompt.trim() }
             );
 
             LLMResponse {

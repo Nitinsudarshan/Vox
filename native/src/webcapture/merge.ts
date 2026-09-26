@@ -110,14 +110,50 @@ export interface MergeResult {
  */
 export class SampleMerger {
   private readonly byKey = new Map<string, Accumulated>();
+  /** Storage keys already holding items with a given text fingerprint. */
+  private readonly byFingerprint = new Map<string, string[]>();
   private order = 0;
   private duplicates = 0;
+
+  /**
+   * Where an item is stored.
+   *
+   * The page's identity when it has one. Without it, two items with the same
+   * text in one sample are two turns — "continue" said twice — and keying on
+   * text alone merged them into one while the payload still claimed the
+   * whole conversation. Such an item is matched to the stored copy nearest
+   * its offset that this sample has not already claimed. (Ordinals are not
+   * used as identity: some pages repeat them.)
+   */
+  private keyFor(item: HarvestedItem, claimed: Set<string>): string {
+    if (item.identity) return `id:${item.identity}`;
+
+    const stored = this.byFingerprint.get(item.fingerprint) ?? [];
+    let nearest: string | undefined;
+    let distance = Infinity;
+    for (const key of stored) {
+      if (claimed.has(key)) continue;
+      const offset = this.byKey.get(key)?.item.offset ?? 0;
+      const gap = Math.abs(offset - item.offset);
+      if (gap < distance) {
+        distance = gap;
+        nearest = key;
+      }
+    }
+    if (nearest) return nearest;
+
+    const fresh = `text:${item.fingerprint}#${stored.length}`;
+    this.byFingerprint.set(item.fingerprint, [...stored, fresh]);
+    return fresh;
+  }
 
   /** Adds one sample's worth of items. Returns how many were new. */
   add(items: HarvestedItem[]): number {
     let added = 0;
+    const claimed = new Set<string>();
     for (const item of items) {
-      const key = item.identity ?? item.fingerprint;
+      const key = this.keyFor(item, claimed);
+      claimed.add(key);
       const existing = this.byKey.get(key);
 
       if (!existing) {
@@ -189,23 +225,34 @@ export class SampleMerger {
  *
  * Blocks have no identity of their own, so the key is the whole block's text
  * and the order is first-seen — which is reading order, given that traversal
- * runs top to bottom. Repeated identical blocks are collapsed, exactly as the
- * single-pass extractor already collapses them.
+ * runs top to bottom.
  */
 export class BlockMerger {
-  private readonly seen = new Set<string>();
+  /** How many copies of each block are stored. */
+  private readonly stored = new Map<string, number>();
   private readonly blocks: ContentBlock[] = [];
   private duplicates = 0;
 
+  /**
+   * A block repeated within one sample is kept as often as it appears
+   * there: a heading or code block the author wrote twice is on the page
+   * twice, and collapsing every repeat across the document lost it. Blocks
+   * carry no position, so a repeat seen only in different samples still
+   * collapses — TODO(capture): record each block's offset so those can be
+   * told apart too.
+   */
   add(blocks: ContentBlock[]): number {
     let added = 0;
+    const inSample = new Map<string, number>();
     for (const block of blocks) {
       const key = fingerprint(block.type, [block]);
-      if (this.seen.has(key)) {
+      const occurrence = (inSample.get(key) ?? 0) + 1;
+      inSample.set(key, occurrence);
+      if (occurrence <= (this.stored.get(key) ?? 0)) {
         this.duplicates += 1;
         continue;
       }
-      this.seen.add(key);
+      this.stored.set(key, occurrence);
       this.blocks.push(block);
       added += 1;
     }

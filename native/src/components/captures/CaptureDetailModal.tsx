@@ -229,10 +229,10 @@ export const CaptureDetailModal: React.FC<CaptureDetailModalProps> = ({
                   <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-foreground">
                     <Sparkles className="h-3.5 w-3.5 text-primary" /> Summary
                   </h3>
-                  <MarkdownView content={capture.summary} className="text-xs" />
+                  <MarkdownView content={capture.summary} className="text-xs" untrusted />
                 </section>
               )}
-              <MarkdownView content={capture.content} />
+              <MarkdownView content={capture.content} untrusted />
             </>
           )}
 
@@ -336,8 +336,9 @@ export const CaptureDetailModal: React.FC<CaptureDetailModalProps> = ({
             <>
               <p className="mb-3 flex items-start gap-2 text-xs text-muted-foreground">
                 <FileJson className="mt-px h-3.5 w-3.5 shrink-0 text-primary" />
-                The structured payload exactly as it was captured. It is written once and never
-                rewritten, so it stays a faithful record even after summaries and tags change.
+                The structured payload as Vox stored it at capture time, after sanitizing. It is
+                written once and never rewritten, so it stays a faithful record even after
+                summaries and tags change.
               </p>
               {payloadError && (
                 <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-400">

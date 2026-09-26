@@ -161,7 +161,7 @@ fn spawn_capture_analysis(app: AppHandle, capture_id: String) {
                         title: None,
                         application: None,
                         message: Some(
-                            "Saved, but Relay could not analyse it. The capture is intact — try \
+                            "Saved, but Vox could not analyse it. The capture is intact — try \
                              Analyse again from the capture."
                                 .to_string(),
                         ),
@@ -268,7 +268,7 @@ pub async fn set_capture_bridge_enabled(
     if enabled && !status.running {
         return Err(CommandError::new(
             "CAPTURE_BRIDGE_START_FAILED",
-            "Relay could not open a local port for capture. Another program may be using it — \
+            "Vox could not open a local port for capture. Another program may be using it — \
              try a different port in Capture settings.",
         ));
     }

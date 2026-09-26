@@ -143,12 +143,18 @@ export function blocksForTurn(el: Element, spec: ConversationSpec): ContentBlock
   // The rich pass and the block walk can both see the same image; the walk
   // finds `<img>` elements and the rich pass classifies them, so a turn that
   // has both keeps the classified one.
+  //
+  // Only images and attachments are collapsed. Text blocks are never the
+  // same element seen twice here, so an identical paragraph, list or code
+  // block is repetition the author wrote, and dropping it lost content.
   const seen = new Set<string>();
   const deduped: ContentBlock[] = [];
   for (const block of usable.slice().reverse()) {
-    const key = fingerprint(block.type, [block]);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (block.type === 'image' || block.type === 'attachment') {
+      const key = fingerprint(block.type, [block]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
     deduped.unshift(block);
   }
   return deduped;

@@ -60,8 +60,8 @@ pub enum WebCaptureError {
     MalformedPayload(String),
 
     #[error(
-        "This capture uses protocol version {0}, but this Relay build speaks version \
-         {PROTOCOL_VERSION}. Update Relay or the Relay browser extension."
+        "This capture uses protocol version {0}, but this Vox build speaks version \
+         {PROTOCOL_VERSION}. Update Vox or the Vox browser extension."
     )]
     UnsupportedProtocol(u32),
 

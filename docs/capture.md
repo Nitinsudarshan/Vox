@@ -302,7 +302,10 @@ traversal runs top to bottom.
 Items are recognised by the page's stable identity where it has one, and by a
 hash of their **whole** text otherwise. Never a prefix: two distinct turns that
 open with the same sentence collapse into one under prefix keying, and the
-capture silently loses a message. When the same item is seen twice, the version
+capture silently loses a message. Two items with the same text in one sample
+are two items ("continue" said twice); a later sample's copy is matched to the
+stored one nearest its offset. Document blocks carry no offset, so a block the
+author repeated is kept as often as it appears within one sample. When the same item is seen twice, the version
 carrying more content wins and keeps the earlier one's position — which is how
 an expanded message replaces its truncated form.
 
@@ -313,7 +316,7 @@ the one above it.
 
 | Rung | Strategy | Fidelity | When |
 |---|---|---|---|
-| 1 | A site extractor recognised the page | `structured` | ChatGPT, Claude, GitHub |
+| 1 | A site extractor recognised the page | `structured` | ChatGPT, Claude, Gemini, GitHub |
 | 2 | Generic main-content extraction | `generic` | Anything with an article region |
 | 3 | The page's visible text | `text_only` | No recognisable structure |
 | 4 | Refuse | — | Nothing readable: no artifact is created |
@@ -343,8 +346,8 @@ provider, captured content never leaves the machine at all.
 a fresh install opens no socket, because capture cannot work before an
 extension is installed and paired anyway.
 
-**Authentication.** Every route — including `/v1/health` — requires a 256-bit
-pairing token in an `X-Vox-Token` header, compared in constant time. The
+**Authentication.** Every route — including `/v1/health` — requires a random
+pairing token (two v4 UUIDs, 244 random bits) in an `X-Vox-Token` header, compared in constant time. The
 token is generated when capture is first enabled, is displayed in Settings
 for copy-paste pairing, and is never logged. Regenerating it unpairs every
 browser immediately.
@@ -389,7 +392,11 @@ On the way in, `normalize.rs`:
 - **downgrades `mermaid` code fences to `text`** — Vox's markdown view
   renders mermaid to SVG and injects the result with `dangerouslySetInnerHTML`,
   so a captured page must never reach that renderer. The diagram source is
-  still preserved, as text;
+  still preserved, as text. The view enforces the same boundary on its side:
+  a capture, and a Scribble promoted from one, render with `untrusted`, which
+  never runs Mermaid on any fence or bare text, closes a fence only on a
+  backtick run at least as long as the one that opened it, and does not load
+  a remote image until the reader asks;
 - escapes `|` in table cells, and caps every string, list, table and block
   count;
 - validates the closed vocabularies (`origin`, `kind`, the traversal plan and
@@ -584,7 +591,7 @@ its text-extraction path exactly as they were.
 ```text
 <vault>/captures/<capture_id>/
   metadata.json                     # VaultFile: normalized markdown + provenance
-  original/<Sanitized-Title>.json   # the raw structured payload, written once
+  original/<Sanitized-Title>.json   # the sanitized structured payload, written once
 ```
 
 Layout and schema: `docs/data-model.md` §6. Commands: `docs/api.md`.
@@ -616,6 +623,7 @@ a page that changed is new information, not a duplicate.
 |---|---|---|---|
 | ChatGPT (`chatgpt.com`, `chat.openai.com`) | `chatgpt` v2 | Rewind + expand; virtualization expected | Conversation keyed on the `conversation-turn-N` wrapper, with the role read from the descendant `[data-message-author-role]` and the ordinal from the wrapper. Generated images, uploaded images, and `sandbox:` file references. |
 | Claude (`claude.ai`) | `claude` v2 | Rewind + expand; everything mounted | Conversation, roles from which selector matched, artifact cards as generated files, uploads as images. |
+| Gemini (`gemini.google.com`) | `gemini` v1 | Rewind + expand | Conversation from the `user-query` and `model-response` turns, with images and attachments inside turns. |
 | GitHub (`github.com`) | `github` | Rewind + expand, with verified "Load more" selectors | Repository (description + README), issue/PR/discussion as a conversation, a single file as one code block |
 | Everything else | `generic` | Rewind + expand, shorter budget | Article: headings, paragraphs, lists, code, quotes, tables, images, download links, plus `<head>` metadata |
 

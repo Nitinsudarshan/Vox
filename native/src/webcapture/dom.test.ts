@@ -112,6 +112,34 @@ describe('extractBlocks', () => {
     expect(blocks).toHaveLength(2);
   });
 
+  it('keeps repetition the author wrote when it is not back to back', () => {
+    const blocks = blocksOf('<p>Chorus line.</p><p>Verse one.</p><p>Chorus line.</p>');
+    expect(blocks).toHaveLength(3);
+    const shared = 'x'.repeat(220);
+    expect(blocksOf(`<p>${shared} ends one way.</p><p>${shared} ends another.</p>`)).toHaveLength(2);
+  });
+
+  it('resolves relative image and download targets against the page', () => {
+    const doc = pageFrom('<img src="/img/a.png"><a download href="files/r.pdf">Report</a>', {
+      head: '<base href="https://example.com/post/">',
+    });
+    const blocks = extractBlocks(doc.body).blocks;
+    const image = blocks.find((b) => b.type === 'image');
+    const attachment = blocks.find((b) => b.type === 'attachment');
+    expect(image && 'src' in image && image.src).toBe('https://example.com/img/a.png');
+    expect(attachment && 'href' in attachment && attachment.href).toBe('https://example.com/post/files/r.pdf');
+  });
+
+  it('survives a malformed escape and an empty download attribute', () => {
+    const doc = pageFrom('<a download="" title="Quarterly" href="https://e.com/dl/report%zz">Download</a>');
+    const blocks = extractBlocks(doc.body).blocks;
+    const attachment = blocks.find((b) => b.type === 'attachment');
+    expect(attachment && 'name' in attachment && attachment.name).toBe('Quarterly');
+    const bare = pageFrom('<a download href="https://e.com/dl/report%zz">Download</a>');
+    const named = extractBlocks(bare.body).blocks.find((b) => b.type === 'attachment');
+    expect(named && 'name' in named && named.name).toBe('report%zz');
+  });
+
   it('survives malformed and unclosed markup', () => {
     const doc = documentFrom('<body><div><p>One<p>Two<ul><li>a<li>b</div>');
     const { blocks } = extractBlocks(doc.body);

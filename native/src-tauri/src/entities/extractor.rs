@@ -35,7 +35,7 @@ const KNOWN_ORGS_PRODUCTS: &[(&str, &str, EntityCategory)] = &[
     ("anthropic", "Anthropic", EntityCategory::Organization),
     ("openai", "OpenAI", EntityCategory::Organization),
     ("google", "Google", EntityCategory::Organization),
-    ("relay", "Relay", EntityCategory::Product),
+    ("vox", "Vox", EntityCategory::Product),
     ("orca", "Orca", EntityCategory::Product),
     ("claude code", "Claude Code", EntityCategory::Product),
     ("claudecode", "Claude Code", EntityCategory::Product),

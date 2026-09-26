@@ -272,6 +272,26 @@ pub fn error_body(code: &str, message: &str) -> String {
     .unwrap_or_else(|_| r#"{"ok":false,"code":"INTERNAL","message":"error"}"#.to_string())
 }
 
+/// Reads one line of at most `limit` bytes.
+///
+/// Bounded while reading: an unbounded `read_line` buffered whatever a local
+/// process sent before any newline, so a request line with none could grow
+/// until memory ran out — before the pairing token was ever checked.
+fn read_capped_line(
+    reader: &mut BufReader<&TcpStream>,
+    line: &mut String,
+    limit: usize,
+) -> Result<usize, String> {
+    let read = reader
+        .take(limit as u64 + 1)
+        .read_line(line)
+        .map_err(|e| e.to_string())?;
+    if read > limit {
+        return Err("request headers exceeded the size limit".to_string());
+    }
+    Ok(read)
+}
+
 /// Reads and parses one HTTP request, enforcing the header and body caps
 /// while reading rather than after.
 fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
@@ -280,10 +300,8 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
     let mut header_bytes = 0usize;
 
     let mut line = String::new();
-    reader
-        .read_line(&mut line)
+    header_bytes += read_capped_line(&mut reader, &mut line, MAX_HEADER_BYTES)
         .map_err(|e| format!("could not read request line: {e}"))?;
-    header_bytes += line.len();
 
     let mut parts = line.split_whitespace();
     request.method = parts.next().unwrap_or_default().to_uppercase();
@@ -292,13 +310,9 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
 
     loop {
         let mut header = String::new();
-        let read = reader
-            .read_line(&mut header)
+        let read = read_capped_line(&mut reader, &mut header, MAX_HEADER_BYTES - header_bytes)
             .map_err(|e| format!("could not read headers: {e}"))?;
         header_bytes += read;
-        if header_bytes > MAX_HEADER_BYTES {
-            return Err("request headers exceeded the size limit".to_string());
-        }
         if read == 0 || header.trim().is_empty() {
             break;
         }
@@ -720,6 +734,35 @@ mod tests {
         stream.read_to_string(&mut response).unwrap();
         assert!(response.starts_with("HTTP/1.1 401"), "got: {response}");
         assert!(response.contains("PAIRING_TOKEN_INVALID"));
+
+        handle.stop();
+    }
+
+    /// A request line with no end is refused once it passes the header cap,
+    /// instead of being buffered until memory runs out.
+    #[test]
+    fn an_endless_request_line_is_refused_at_the_header_cap() {
+        use std::io::Write as _;
+        use std::net::TcpStream;
+
+        let handle = start(0, generate_token(), |_| (200, "{}".to_string())).unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port)).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let flood = vec![b'A'; MAX_HEADER_BYTES * 4];
+        let _ = stream.write_all(&flood);
+
+        // The server answers 400 and closes. Closing with unread input sends
+        // a reset on some platforms, which can discard the answer before it
+        // is read; what matters is that the connection ends instead of the
+        // server buffering on.
+        let mut response = String::new();
+        match stream.read_to_string(&mut response) {
+            Ok(_) => assert!(response.starts_with("HTTP/1.1 400"), "got: {response:.80}"),
+            Err(e) => assert!(
+                !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+                "the server kept the connection open: {e}"
+            ),
+        }
 
         handle.stop();
     }
