@@ -4,7 +4,7 @@
 //! processes turns and attachments, preserves embedded document content, and
 //! outputs a canonical `WebCapturePayload`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,21 @@ pub fn parse_claude_conversations(bytes: &[u8]) -> Result<Vec<ClaudeExportConver
         return Ok(vec![single]);
     }
     Err("Failed to parse Claude conversations JSON".to_string())
+}
+
+/// The attachment names this conversation refers to, reduced the way asset
+/// names are, so only those files are read out of the archive.
+pub fn referenced_asset_names(conv: &ClaudeExportConversation) -> HashSet<String> {
+    conv.chat_messages
+        .iter()
+        .flat_map(|msg| {
+            msg.files
+                .iter()
+                .filter_map(|f| f.file_name.as_deref())
+                .chain(msg.attachments.iter().filter_map(|a| a.file_name.as_deref()))
+        })
+        .filter_map(safe_asset_file_name)
+        .collect()
 }
 
 /// Converts a Claude conversation into canonical `WebCapturePayload`.

@@ -529,6 +529,23 @@ pub async fn pick_ai_conversation_export_file(app: AppHandle) -> Result<Option<S
     picked_path(picked)
 }
 
+/// Writes a dropped export to a private temp file.
+///
+/// The file name comes from the webview; it is reduced to one plain name so
+/// a `..` or a separator cannot place the bytes anywhere but the staging
+/// folder.
+fn stage_dropped_export(filename: &str, bytes: &[u8]) -> Result<std::path::PathBuf, CommandError> {
+    let temp_dir = std::env::temp_dir().join("vox_import_staging");
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| CommandError::new("TEMP_FILE_WRITE_FAILED", &e.to_string()))?;
+    let name = crate::capture::web::importer::safe_asset_file_name(filename)
+        .unwrap_or_else(|| "export".to_string());
+    let temp_file = temp_dir.join(format!("{}_{}", uuid::Uuid::new_v4(), name));
+    std::fs::write(&temp_file, bytes)
+        .map_err(|e| CommandError::new("TEMP_FILE_WRITE_FAILED", &e.to_string()))?;
+    Ok(temp_file)
+}
+
 /// Inspects an exported AI conversation archive (.zip or .json) from ChatGPT or Claude.
 #[tauri::command]
 pub async fn inspect_ai_conversation_export(
@@ -539,7 +556,7 @@ pub async fn inspect_ai_conversation_export(
     if !p.exists() {
         return Err(CommandError::new("FILE_NOT_FOUND", "Selected export file does not exist"));
     }
-    crate::capture::web::importer::inspect_export_file(&p, &state.vault)
+    crate::capture::web::importer::inspect_export_file(&p, &state.vault).await
 }
 
 /// Inspects exported AI conversation archive bytes staged directly from drag-and-drop.
@@ -549,18 +566,14 @@ pub async fn inspect_ai_conversation_export_bytes(
     bytes: Vec<u8>,
     state: State<'_, AppState>,
 ) -> Result<crate::capture::web::importer::ExportInspection, CommandError> {
-    let temp_dir = std::env::temp_dir().join("relay_import_staging");
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let temp_file = temp_dir.join(format!("{}_{}", uuid::Uuid::new_v4(), filename));
-    std::fs::write(&temp_file, &bytes)
-        .map_err(|e| CommandError::new("TEMP_FILE_WRITE_FAILED", &e.to_string()))?;
+    let temp_file = stage_dropped_export(&filename, &bytes)?;
 
-    let res = crate::capture::web::importer::inspect_export_file(&temp_file, &state.vault);
+    let res = crate::capture::web::importer::inspect_export_file(&temp_file, &state.vault).await;
     let _ = std::fs::remove_file(temp_file);
     res
 }
 
-/// Imports a chosen conversation from an AI export archive into Relay's vault.
+/// Imports a chosen conversation from an AI export archive into the vault.
 #[tauri::command]
 pub async fn import_ai_conversation_export(
     path: String,
@@ -592,11 +605,7 @@ pub async fn import_ai_conversation_export_bytes(
     duplicate_mode: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<crate::vault::VaultFile, CommandError> {
-    let temp_dir = std::env::temp_dir().join("relay_import_staging");
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let temp_file = temp_dir.join(format!("{}_{}", uuid::Uuid::new_v4(), filename));
-    std::fs::write(&temp_file, &bytes)
-        .map_err(|e| CommandError::new("TEMP_FILE_WRITE_FAILED", &e.to_string()))?;
+    let temp_file = stage_dropped_export(&filename, &bytes)?;
 
     let settings = state.settings.lock_or_recover().clone();
     let res = crate::capture::web::importer::import_export_conversation(

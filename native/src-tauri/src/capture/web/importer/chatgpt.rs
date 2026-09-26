@@ -125,6 +125,23 @@ pub fn linearize_chatgpt_conversation(conv: &ChatGptExportConversation) -> Vec<&
 }
 
 /// Converts a linearized ChatGPT conversation into canonical `WebCapturePayload`.
+/// The attachment names this conversation refers to, reduced the way asset
+/// names are, so only those files are read out of the archive.
+pub fn referenced_asset_names(conv: &ChatGptExportConversation) -> HashSet<String> {
+    linearize_chatgpt_conversation(conv)
+        .into_iter()
+        .filter_map(|node| node.message.as_ref())
+        .filter_map(|msg| msg.metadata.get("attachments").and_then(|a| a.as_array()))
+        .flatten()
+        .filter_map(|att| {
+            att.get("name")
+                .and_then(|n| n.as_str())
+                .or_else(|| att.get("file_name").and_then(|n| n.as_str()))
+        })
+        .filter_map(safe_asset_file_name)
+        .collect()
+}
+
 pub fn chatgpt_to_capture_payload(
     conv: &ChatGptExportConversation,
     assets_dir: Option<&Path>,
