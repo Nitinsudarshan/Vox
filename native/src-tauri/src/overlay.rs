@@ -30,7 +30,7 @@ pub fn ensure_pill_window(app: &AppHandle, visible: bool, position: PillPosition
         PILL_WINDOW_LABEL,
         WebviewUrl::App("index.html#/dictation-pill".into()),
     )
-    .title("Relay — Dictation")
+    .title("Vox — Dictation")
     .inner_size(RESTING_SIZE.0, RESTING_SIZE.1)
     .resizable(false)
     .decorations(false)

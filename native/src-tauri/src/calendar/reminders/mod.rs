@@ -25,7 +25,7 @@ pub mod detection;
 pub mod notification;
 pub mod scheduler;
 
-use crate::calendar::CalendarEvent;
+use crate::calendar::{Attendance, CalendarEvent};
 use crate::meetings::model::{Meeting, MeetingState};
 use crate::sync::MutexExt;
 use chrono::{DateTime, Duration, Utc};
@@ -142,6 +142,11 @@ const EXPIRE_AFTER_MINUTES: i64 = 10;
 /// call. Requiring it to persist across ticks is what keeps an interruption
 /// tied to evidence rather than to a single frame.
 const GENERIC_SIGHTINGS_REQUIRED: u32 = 2;
+
+/// How long an answered detection is remembered after its window leaves the
+/// screen. Looking at another tab for a few seconds used to forget the
+/// dismissal, and the same card fired again on the way back.
+const ANSWERED_DETECTION_MEMORY_MINUTES: i64 = 120;
 
 /// Confidence at or above which a detected window is specific enough to
 /// interrupt somebody on the first sighting.
@@ -347,6 +352,16 @@ fn is_in_progress(event: &CalendarEvent, now: DateTime<Utc>) -> bool {
     now >= start - grace && now <= end + grace
 }
 
+/// Whether an event is one the user could be reminded about at all.
+///
+/// An all-day event runs midnight to midnight and has no window to find, so it
+/// earned "starts in 5 minutes" at 23:55 and an "Unrecorded" card all day, and
+/// with a Meet link it vouched for every Meet call that day. A declined
+/// meeting is one the user said they are not going to.
+fn warrants_reminder(event: &CalendarEvent) -> bool {
+    !event.all_day && event.attendance != Attendance::Declined
+}
+
 /// Whether a live conferencing window plausibly belongs to this event.
 ///
 /// Matching on provider rather than on title: window titles and calendar titles
@@ -443,6 +458,9 @@ pub fn recompute(queue: &ReminderQueue, inputs: &ReminderInputs<'_>) -> (Vec<Rem
     let mut entries = queue.entries.lock_or_recover();
 
     for event in events {
+        if !warrants_reminder(event) {
+            continue;
+        }
         let Some(starts_at) = starts_at(event) else {
             continue;
         };
@@ -514,7 +532,7 @@ pub fn recompute(queue: &ReminderQueue, inputs: &ReminderInputs<'_>) -> (Vec<Rem
     // 11:59, and the calendar should not vouch for it.
     let scheduled_providers: Vec<String> = events
         .iter()
-        .filter(|event| is_in_progress(event, now))
+        .filter(|event| warrants_reminder(event) && is_in_progress(event, now))
         .map(provider_of)
         .collect();
 
@@ -604,7 +622,15 @@ pub fn recompute(queue: &ReminderQueue, inputs: &ReminderInputs<'_>) -> (Vec<Rem
         .map(|event| ReminderEvent::key_for_event(&event.id))
         .collect();
     entries.retain(|entry| match entry.kind {
-        ReminderKind::Detected => visible_keys.contains(&entry.key),
+        ReminderKind::Detected => {
+            let answered = matches!(
+                entry.status,
+                ReminderStatus::Dismissed | ReminderStatus::Actioned | ReminderStatus::Expired
+            );
+            visible_keys.contains(&entry.key)
+                || (answered
+                    && (now - entry.fire_at).num_minutes() < ANSWERED_DETECTION_MEMORY_MINUTES)
+        }
         _ => live_event_keys.contains(&entry.key),
     });
 
@@ -865,6 +891,40 @@ mod tests {
         // A second pass while still due must not raise a second notification.
         let (_, fired_again) = recompute(&queue, &inputs(&events, &[], &settings, false));
         assert!(fired_again.is_empty(), "already-fired reminders stay quiet");
+    }
+
+    /// All-day events and meetings the user declined never remind.
+    #[test]
+    fn all_day_and_declined_events_do_not_remind() {
+        let settings = settings_all_on();
+        let mut all_day = event_starting_in("evt_holiday", 120);
+        all_day.all_day = true;
+        let mut declined = event_starting_in("evt_declined", 120);
+        declined.attendance = Attendance::Declined;
+        let queue = ReminderQueue::default();
+
+        let (all, fired) = recompute(&queue, &inputs(&[all_day, declined], &[], &settings, false));
+
+        assert!(all.is_empty(), "{all:?}");
+        assert!(fired.is_empty());
+    }
+
+    /// A dismissed detection stays dismissed when its window briefly leaves
+    /// the screen, instead of firing again on the way back.
+    #[test]
+    fn a_dismissed_detection_survives_its_window_going_away() {
+        let settings = settings_all_on();
+        let queue = ReminderQueue::default();
+        let window = zoom_window("Quarterly planning with finance");
+
+        let (_, fired) = recompute(&queue, &inputs(&[], std::slice::from_ref(&window), &settings, false));
+        assert_eq!(fired.len(), 1);
+        dismiss(&queue, &fired[0].key, ReminderKind::Detected);
+
+        recompute(&queue, &inputs(&[], &[], &settings, false));
+        let (_, fired_again) = recompute(&queue, &inputs(&[], std::slice::from_ref(&window), &settings, false));
+
+        assert!(fired_again.is_empty(), "the dismissal is remembered");
     }
 
     #[test]

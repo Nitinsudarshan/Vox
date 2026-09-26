@@ -6,6 +6,7 @@ import { AlertTriangle, Check, Download, HardDrive } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { formatBytes } from '@/lib/speechModels';
+import { describeError } from '@/lib/errors';
 
 /** What installing Ollama on this machine involves. Mirrors the Rust struct. */
 interface InstallPlan {
@@ -139,7 +140,7 @@ export const OllamaInstallCard: React.FC = () => {
                   void invoke('install_ollama').catch((err) =>
                     setProgress({
                       state: 'failed',
-                      message: err instanceof Error ? err.message : String(err),
+                      message: describeError(err),
                     }),
                   );
                 }}

@@ -109,15 +109,14 @@ pub struct SttSettings {
     /// override and applies everywhere.
     #[serde(default, alias = "sttPreset")]
     pub preset: String,
-    /// Whether dictated text is offered to the Tier 2 cleanup layer.
+    /// Whether, and how far, dictated text is rewritten by the Tier 2 cleanup
+    /// layer — see `capture::rewrite::CleanupStyle`.
     ///
-    /// Off by default. The layer costs a model call before the text is usable
-    /// and may change words, so it is something the user turns on rather than
-    /// something they discover has been happening.
-    #[serde(default, alias = "textTransform")]
-    pub text_transform: bool,
-    /// How far that cleanup may go — see `capture::rewrite::CleanupStyle`.
-    /// Empty means `faithful`, the only style that cannot change meaning.
+    /// Empty (the default) and unrecognised values mean `raw`: no model is
+    /// asked. The layer costs a model call before the text is usable, may
+    /// change words, and with a cloud provider sends the dictation off the
+    /// machine, so it is something the user turns on rather than something
+    /// they discover has been happening.
     #[serde(default, alias = "cleanupStyle")]
     pub cleanup_style: String,
     /// Catalogue id of the model meetings are transcribed with.
@@ -153,11 +152,6 @@ pub struct SttSettings {
     /// what the toggle is for — turn it off and re-record to compare.
     #[serde(default = "default_trim_meeting_audio_context", alias = "meetingTrimAudioContext")]
     pub meeting_trim_audio_context: bool,
-    /// Feature flag for running the dictation streaming pipeline in shadow mode.
-    /// In shadow mode, live PCM is segmented and transcribed in the background to
-    /// collect latency, backlog, and accuracy telemetry, but never alters production output.
-    #[serde(default, alias = "dictationStreamingShadow")]
-    pub dictation_streaming_shadow: bool,
 }
 
 fn default_trim_meeting_audio_context() -> bool {
@@ -178,12 +172,10 @@ impl Default for SttSettings {
             enable_initial_prompt: false,
             custom_initial_prompt: None,
             preset: String::new(),
-            text_transform: false,
             cleanup_style: String::new(),
             meeting_model_id: None,
             dictation_engine: None,
             meeting_trim_audio_context: default_trim_meeting_audio_context(),
-            dictation_streaming_shadow: false,
         }
     }
 }
@@ -464,7 +456,7 @@ pub struct StartupSettings {
     pub launch_at_login: bool,
     /// Launch Relay minimized without showing the main control panel window.
     ///
-    /// Withheld rather than minimized: the tray's "Show Relay" item and the
+    /// Withheld rather than minimized: the tray's "Show Vox" item and the
     /// show/hide hotkey both toggle on `Window::is_visible`, so hidden is the
     /// state they can bring back.
     #[serde(default, alias = "startMinimized")]
@@ -535,37 +527,64 @@ fn default_snippet_enabled() -> bool {
     true
 }
 
+/// Examples shown in Settings › Snippets, off until the user makes them theirs.
+///
+/// They used to ship enabled, which meant everyone's dictation was rewritten:
+/// "please sign off on this" came out as "please Best regards, Alex on this".
 pub fn default_snippets() -> Vec<SnippetItem> {
+    let example = |id: &str, trigger: &str, text: &str, label: &str| SnippetItem {
+        id: id.to_string(),
+        trigger: trigger.to_string(),
+        snippet_text: text.to_string(),
+        label: Some(label.to_string()),
+        enabled: false,
+    };
     vec![
-        SnippetItem {
-            id: "snip_linkedin".to_string(),
-            trigger: "my linkedin".to_string(),
-            snippet_text: "https://linkedin.com/in/you".to_string(),
-            label: Some("My LinkedIn".to_string()),
-            enabled: true,
-        },
-        SnippetItem {
-            id: "snip_rewrite".to_string(),
-            trigger: "rewrite prompt".to_string(),
-            snippet_text: "Rewrite this to be more concise, clear, and professional:".to_string(),
-            label: Some("Rewrite prompt".to_string()),
-            enabled: true,
-        },
-        SnippetItem {
-            id: "snip_intro".to_string(),
-            trigger: "intro email".to_string(),
-            snippet_text: "Hey, would love to find some time to chat later this week. Let me know what works best for you!".to_string(),
-            label: Some("Intro email".to_string()),
-            enabled: true,
-        },
-        SnippetItem {
-            id: "snip_signoff".to_string(),
-            trigger: "sign off".to_string(),
-            snippet_text: "Best regards,\nAlex".to_string(),
-            label: Some("Sign off".to_string()),
-            enabled: true,
-        },
+        example("example_linkedin", "my linkedin", "https://linkedin.com/in/your-name", "My LinkedIn"),
+        example(
+            "example_rewrite",
+            "rewrite prompt",
+            "Rewrite this to be more concise, clear, and professional:",
+            "Rewrite prompt",
+        ),
+        example(
+            "example_intro",
+            "intro email",
+            "Hey, would love to find some time to chat later this week. Let me know what works best for you!",
+            "Intro email",
+        ),
+        example("example_signoff", "sign off", "Best regards,", "Sign off"),
     ]
+}
+
+/// The examples as they shipped enabled — id, trigger and text — in the
+/// order of their successors in [`default_snippets`].
+const SHIPPED_ENABLED_EXAMPLES: [(&str, &str, &str); 4] = [
+    ("snip_linkedin", "my linkedin", "https://linkedin.com/in/you"),
+    ("snip_rewrite", "rewrite prompt", "Rewrite this to be more concise, clear, and professional:"),
+    (
+        "snip_intro",
+        "intro email",
+        "Hey, would love to find some time to chat later this week. Let me know what works best for you!",
+    ),
+    ("snip_signoff", "sign off", "Best regards,\nAlex"),
+];
+
+/// Replaces each example that shipped enabled, where the user never changed
+/// its trigger or text, with its disabled successor.
+///
+/// Keyed by the old ids, so it happens once: the successor has a new id, and
+/// an example the user switches back on afterwards stays on.
+fn retire_shipped_examples(snippets: &mut [SnippetItem]) {
+    let successors = default_snippets();
+    for snippet in snippets.iter_mut() {
+        let shipped = SHIPPED_ENABLED_EXAMPLES.iter().position(|(id, trigger, text)| {
+            snippet.id == *id && snippet.trigger == *trigger && snippet.snippet_text == *text
+        });
+        if let Some(index) = shipped {
+            *snippet = successors[index].clone();
+        }
+    }
 }
 
 
@@ -829,17 +848,56 @@ impl AppSettings {
         }
 
         let content = fs::read_to_string(path)?;
-        // Fall back to defaults on a corrupt/partial file rather than
-        // refusing to start the app.
-        Ok(serde_json::from_str(&content).unwrap_or_default())
+        // Fall back to defaults on a corrupt file rather than refusing to
+        // start the app — but keep the file first, because the next save
+        // would otherwise replace the only copy of the user's settings.
+        let mut settings: Self = match serde_json::from_str(&content) {
+            Ok(settings) => settings,
+            Err(e) => {
+                let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+                let kept = path.with_extension(format!("json.unreadable-{stamp}"));
+                let _ = fs::copy(path, &kept);
+                tracing::warn!(error = %e, kept = %kept.display(), "settings file did not parse; starting from defaults");
+                Self::default()
+            }
+        };
+        retire_shipped_examples(&mut settings.snippets);
+        crate::providers::secrets::hydrate_keys(
+            crate::providers::secrets::default_store(),
+            &mut settings.provider,
+        );
+        Ok(settings)
     }
 
+    /// Writes the settings file. Provider API keys go to the OS credential
+    /// store instead of the file whenever it is available — see
+    /// `providers::secrets`.
     pub fn save(&self, path: &Path) -> Result<(), SettingsError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        let mut on_disk = self.clone();
+        on_disk.provider = crate::providers::secrets::persist_keys(
+            crate::providers::secrets::default_store(),
+            &self.provider,
+        );
+        // Write beside the file and rename over it, so a crash mid-write
+        // leaves the previous settings rather than half of the new ones.
+        let temp = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
+        fs::write(&temp, serde_json::to_string_pretty(&on_disk)?)?;
+        if let Err(e) = fs::rename(&temp, path) {
+            let _ = fs::remove_file(&temp);
+            return Err(e.into());
+        }
         Ok(())
+    }
+
+    /// The settings as the webview may see them: provider API keys replaced by
+    /// a placeholder. Everything sent to the frontend goes through this.
+    pub fn for_webview(&self) -> Self {
+        let mut copy = self.clone();
+        copy.provider = self.provider.redacted();
+        copy
     }
 
     /// Applies active snippet expansions to the given transcript.
@@ -851,24 +909,27 @@ impl AppSettings {
             if !snippet.enabled || snippet.trigger.trim().is_empty() {
                 continue;
             }
-            let trigger = snippet.trigger.trim();
-            let lower_result = result.to_lowercase();
-            let lower_trigger = trigger.to_lowercase();
-            if let Some(pos) = lower_result.find(&lower_trigger) {
-                let prefix = &result[..pos];
-                let suffix = &result[pos + lower_trigger.len()..];
-                result = format!("{}{}{}", prefix, snippet.snippet_text, suffix);
+            if let Some(range) = find_ignoring_case(&result, snippet.trigger.trim()) {
+                result.replace_range(range, &snippet.snippet_text);
             }
         }
         result
     }
 
-    /// Builds the combined STT initial prompt incorporating custom dictionary words.
+    /// Builds the combined STT initial prompt: the dictionary words, plus the
+    /// custom initial prompt when `enable_initial_prompt` is on.
+    ///
+    /// The toggle governs the custom prompt only. Turning it off used to leave
+    /// a previously typed prompt in effect, because this appended it
+    /// regardless and callers then overwrote the decoding config's own,
+    /// correctly gated, copy with the result.
     pub fn build_stt_prompt(&self) -> Option<String> {
         let mut terms: Vec<String> = self.dictionary.iter().filter(|w| !w.trim().is_empty()).cloned().collect();
-        if let Some(custom) = &self.stt.custom_initial_prompt {
-            if !custom.trim().is_empty() {
-                terms.push(custom.trim().to_string());
+        if self.stt.enable_initial_prompt {
+            if let Some(custom) = &self.stt.custom_initial_prompt {
+                if !custom.trim().is_empty() {
+                    terms.push(custom.trim().to_string());
+                }
             }
         }
         if terms.is_empty() {
@@ -881,7 +942,7 @@ impl AppSettings {
     /// Teaches Relay that `source` should read as `replacement`.
     ///
     /// Returns whether the vocabulary changed. Called only when the user ticks
-    /// "Teach Relay this correction" — most corrections are ordinary edits, and
+    /// "Teach Vox this correction" — most corrections are ordinary edits, and
     /// "Thursday" to "Tuesday" is not something to repeat on every future
     /// transcript.
     ///
@@ -938,9 +999,63 @@ impl AppSettings {
     }
 }
 
+
+/// Where `needle` first occurs in `haystack`, ignoring case, as a byte range
+/// of `haystack` itself.
+///
+/// Searching `haystack.to_lowercase()` and splicing the original at the
+/// offset found there is wrong once lowercasing changes a character's length
+/// (`İ`, the Kelvin sign), and panics when the offset lands mid-character —
+/// in the middle of a dictation. Each lowered byte here remembers which
+/// original character it came from, and a match must begin and end on whole
+/// original characters.
+fn find_ignoring_case(haystack: &str, needle: &str) -> Option<std::ops::Range<usize>> {
+    let needle = needle.to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut lowered = String::with_capacity(haystack.len());
+    let mut origin = Vec::with_capacity(haystack.len());
+    for (offset, c) in haystack.char_indices() {
+        lowered.extend(c.to_lowercase());
+        origin.resize(lowered.len(), offset);
+    }
+    let starts_char = |i: usize| i == 0 || origin[i] != origin[i - 1];
+    lowered
+        .match_indices(&needle)
+        .map(|(start, _)| (start, start + needle.len()))
+        .find(|&(start, end)| starts_char(start) && (end == lowered.len() || starts_char(end)))
+        .map(|(start, end)| {
+            let end = if end == lowered.len() { haystack.len() } else { origin[end] };
+            origin[start]..end
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_custom_initial_prompt_is_used_only_when_enabled() {
+        let mut settings = AppSettings {
+            dictionary: vec!["Pragati".into()],
+            ..Default::default()
+        };
+        settings.stt.custom_initial_prompt = Some("Tauri, Supabase".into());
+
+        settings.stt.enable_initial_prompt = false;
+        assert_eq!(settings.build_stt_prompt().as_deref(), Some("Pragati"));
+
+        settings.stt.enable_initial_prompt = true;
+        assert_eq!(
+            settings.build_stt_prompt().as_deref(),
+            Some("Pragati, Tauri, Supabase")
+        );
+
+        settings.dictionary.clear();
+        settings.stt.enable_initial_prompt = false;
+        assert_eq!(settings.build_stt_prompt(), None);
+    }
 
     #[test]
     fn teaching_a_correction_records_the_mapping_not_just_the_word() {
@@ -1054,21 +1169,105 @@ mod tests {
         assert_eq!(settings.vocabulary_corrections.len(), 1);
     }
 
+    fn settings_with_snippet(trigger: &str, text: &str) -> AppSettings {
+        AppSettings {
+            snippets: vec![SnippetItem {
+                id: "mine".to_string(),
+                trigger: trigger.to_string(),
+                snippet_text: text.to_string(),
+                label: None,
+                enabled: true,
+            }],
+            ..AppSettings::default()
+        }
+    }
+
     #[test]
     fn test_snippet_expansion() {
-        let settings = AppSettings::default();
-        let transcript = "Here is my linkedin if you want to connect";
+        let settings = settings_with_snippet("my linkedin", "https://linkedin.com/in/me");
+        let transcript = "Here is My LinkedIn if you want to connect";
         let expanded = settings.expand_snippets(transcript);
-        assert_eq!(expanded, "Here is https://linkedin.com/in/you if you want to connect");
+        assert_eq!(expanded, "Here is https://linkedin.com/in/me if you want to connect");
     }
 
     #[test]
     fn test_disabled_snippet_not_expanded() {
-        let mut settings = AppSettings::default();
+        let mut settings = settings_with_snippet("my linkedin", "https://linkedin.com/in/me");
         settings.snippets[0].enabled = false;
         let transcript = "Here is my linkedin";
         let expanded = settings.expand_snippets(transcript);
         assert_eq!(expanded, "Here is my linkedin");
+    }
+
+    /// The shipped examples are off: ordinary speech that happens to contain
+    /// a trigger is typed as spoken.
+    #[test]
+    fn default_snippets_leave_dictation_alone() {
+        let settings = AppSettings::default();
+        let transcript = "Please sign off on the intro email and my linkedin post.";
+        assert_eq!(settings.expand_snippets(transcript), transcript);
+    }
+
+    /// Unedited examples saved while they shipped enabled are replaced once;
+    /// an edited one is the user's and is left alone.
+    #[test]
+    fn examples_that_shipped_enabled_are_retired_once() {
+        let shipped = |id: &str, trigger: &str, text: &str| SnippetItem {
+            id: id.to_string(),
+            trigger: trigger.to_string(),
+            snippet_text: text.to_string(),
+            label: None,
+            enabled: true,
+        };
+        let mut snippets = vec![
+            shipped("snip_signoff", "sign off", "Best regards,\nAlex"),
+            shipped("snip_linkedin", "my linkedin", "https://linkedin.com/in/nitin"),
+        ];
+        retire_shipped_examples(&mut snippets);
+        assert_eq!(snippets[0].id, "example_signoff");
+        assert!(!snippets[0].enabled);
+        assert_eq!(snippets[1].snippet_text, "https://linkedin.com/in/nitin");
+        assert!(snippets[1].enabled);
+
+        snippets[0].enabled = true;
+        retire_shipped_examples(&mut snippets);
+        assert!(snippets[0].enabled, "a re-enabled example stays on");
+    }
+
+    /// Case-insensitive matching splices the original text at its own
+    /// offsets, even after characters whose lowercase has another length.
+    #[test]
+    fn snippet_expansion_survives_characters_that_change_length_when_lowercased() {
+        let settings = settings_with_snippet("my email", "me@example.com");
+        assert_eq!(
+            settings.expand_snippets("\u{212A}elvin İstanbul: My Email please"),
+            "\u{212A}elvin İstanbul: me@example.com please"
+        );
+        assert_eq!(find_ignoring_case("İi", "i"), Some(2..3));
+        assert_eq!(find_ignoring_case("abc", ""), None);
+        assert_eq!(find_ignoring_case("ÜBER alles", "über"), Some(0..5));
+    }
+
+    /// A settings file that does not parse is kept aside before defaults
+    /// load, and saving writes a whole file.
+    #[test]
+    fn an_unreadable_settings_file_is_kept_before_defaults_load() {
+        let dir = std::env::temp_dir().join(format!("vox_settings_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        fs::write(&path, "{ \"dictionary\": [\"half-writ").unwrap();
+
+        let loaded = AppSettings::load(&path).unwrap();
+        assert_eq!(loaded.dictionary, AppSettings::default().dictionary);
+        let kept: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("unreadable"))
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert!(fs::read_to_string(kept[0].path()).unwrap().contains("half-writ"));
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

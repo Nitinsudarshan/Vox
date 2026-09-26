@@ -11,6 +11,47 @@
 
 use crate::settings::AudioInputSettings;
 
+/// The audio host, for every surface that opens or lists a device.
+///
+/// cpal's WASAPI backend keeps one process-wide `IMMDeviceEnumerator`,
+/// created inside the COM apartment of whichever thread asks for it first,
+/// and cpal uninitialises COM when that thread exits. A capture thread lives
+/// for one session, so when the first thing to touch audio was a recording,
+/// the enumerator was left in a dead apartment and the next recording crashed
+/// the process with an access violation — the Windows CI job did exactly
+/// that, one test after the first one that opened the host. A thread that
+/// lives as long as the process makes the first request instead.
+pub fn host() -> cpal::Host {
+    #[cfg(windows)]
+    anchor_audio_com();
+    cpal::default_host()
+}
+
+/// Creates cpal's device enumerator on a thread that never exits.
+#[cfg(windows)]
+fn anchor_audio_com() {
+    use std::sync::OnceLock;
+    static ANCHORED: OnceLock<()> = OnceLock::new();
+    ANCHORED.get_or_init(|| {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("vox-audio-com".to_string())
+            .spawn(move || {
+                use cpal::traits::HostTrait;
+                // Asking for the default device is what creates the
+                // enumerator; whether there is one does not matter.
+                let _ = cpal::default_host().default_input_device();
+                let _ = ready_tx.send(());
+                loop {
+                    std::thread::park();
+                }
+            });
+        if spawned.is_ok() {
+            let _ = ready_rx.recv_timeout(std::time::Duration::from_secs(10));
+        }
+    });
+}
+
 /// Picks a device name from what is available.
 ///
 /// Pure, so the policy can be tested without an audio host — which matters,

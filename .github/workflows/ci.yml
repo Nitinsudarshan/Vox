@@ -36,6 +36,12 @@ jobs:
       - name: Test the release scripts
         run: npm run test:scripts
 
+      # Every `invoke()` in the frontend must name a real backend command with
+      # the arguments it takes; unit tests mock `invoke`, so nothing else would
+      # notice a button whose command does not exist.
+      - name: Verify frontend commands exist in the backend
+        run: npm run verify:invoke
+
       # The transcription harness is Python and had no failing direction in CI
       # until it had one. These tests do not need a model or a corpus: they
       # cover the audio gate that decides whether a corpus is usable, and the
@@ -89,6 +95,38 @@ jobs:
       - name: Test
         run: cargo test
 
+  # Vox ships on Windows, and everything behind `cfg(target_os = "windows")` —
+  # text injection, focus tracking, the Win32 `unsafe` calls, the credential
+  # store — is invisible to the Linux job above. This is the only place that
+  # code is compiled, linted and tested before a user runs it.
+  rust-windows:
+    name: Rust backend (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: native/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner image ships MSVC, CMake and LLVM (libclang for bindgen),
+      # which is everything whisper.cpp and the Tauri crates need.
+      - name: Show toolchain
+        run: rustc --version && cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/src-tauri
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # One test at a time. Several tests reach process-wide OS state on
+      # Windows (the clipboard, the foreground window, the credential store),
+      # and a native crash then names the test that caused it: libtest prints
+      # each test's name before running it only when it runs them serially.
+      - name: Test
+        run: cargo test -- --test-threads=1 --nocapture
+
   native-frontend:
     name: Native frontend
     runs-on: ubuntu-latest
@@ -116,3 +154,8 @@ jobs:
       # asset, a Vite config that no longer resolves.
       - name: Build
         run: npm run build
+
+      # The capture extension is bundled separately, from `src/webcapture`,
+      # and nothing above builds it.
+      - name: Build the browser extension
+        run: npm run build:extension

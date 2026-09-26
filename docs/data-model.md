@@ -1,77 +1,92 @@
 ﻿# Vox — Data Model Specification
 
+Paths below are relative to two roots, both resolved at startup
+(`docs/architecture.md`, Data Access): `<vault>` is `<base>/vault` unless the
+user chose a Vault Directory Location, and `<config>` is `<base>/config`.
+`<base>` is `VOX_HOME` if set, an existing `.vox` (or legacy `.relay`) folder
+if one is found, and otherwise — for a fresh release install — the per-user
+application-data folder (`%APPDATA%\com.vox.app` on Windows).
+
 ## 1. Vault Markdown Note Schema
-Markdown files are stored in `.Vox/vault/notes/<id>.md` with YAML frontmatter headers:
+Voice notes — and the notes the scribble pipeline writes — are stored in
+`<vault>/notes/<id>.md`. The frontmatter is written by hand
+(`vault::VaultManager::save_note`), and its optional fields use Rust's `Debug`
+form — `None`, `Some("…")` — rather than YAML's `null`; the reader parses that
+form back:
 
 ```markdown
 ---
-id: "note_123456789"
-title: "Product Architecture Sync"
-type: "meeting" | "scribble" | "trigger"
-created_at: "2026-08-19T01:50:00Z"
-updated_at: "2026-08-19T01:50:00Z"
-tags: ["meeting", "architecture"]
-source_audio: ".Vox/audio/20260819_015000.wav"
+id: "note_3f2b6c1e-9a0d-4c55-8d2e-6b1f0a7c9e21"
+title: "Remind me to send the numbers to Priya before Friday."
+type: "voice_note"
+created_at: "2026-09-25T09:14:03.112000000+00:00"
+updated_at: "2026-09-25T09:14:03.112000000+00:00"
+tags: []
+source_audio: None
+raw_content: Some("um remind me to send the numbers to Priya before Friday")
+cleanup_style: Some("faithful")
+merged_from: None
 ---
 
-# Executive Summary
-...
-
-## Key Takeaways
-- ...
+Remind me to send the numbers to Priya before Friday.
 ```
 
-## 2. Kanban Card Schema
-Kanban tasks are represented as structured Markdown files in `.Vox/vault/kanban/<id>.md`:
+`type` is `voice_note` for every dictation, from the hotkey or the pill.
+Notes of type `scribble` were written by a retired capture mode and still
+read. Scribbles in
+the knowledge layer are separate files, `<vault>/scribbles/<id>.md`, with
+their own frontmatter (`vault::scribble`).
+
+`raw_content` and `cleanup_style` are set only when an opt-in cleanup style
+changed the text: `raw_content` holds it as it was before the rewrite (after
+the deterministic pass), and `cleanup_style` names the style. With the default,
+`raw`, both are `None` and `content` is the transcript as the deterministic
+pass left it. `merged_from` lists the notes a merge combined; their originals
+are kept in `<vault>/merged_sources/` so the merge can be undone.
+`source_audio` is part of the schema, but no current writer sets it.
+
+## 2. Kanban Card Schema (the TODOs surface)
+Todos are Kanban cards, stored as `<vault>/kanban/<id>.md`
+(`vault::kanban::KanbanCard::format_markdown`). A todo spoken on the TODOs
+page:
 
 ```markdown
 ---
-id: "card_987654321"
-title: "Scaffold Rust Tauri backend"
-assignee: "Nitin"
-status: "todo" | "in_progress" | "done"
-priority: "high" | "medium" | "low"
-due_date: "2026-08-25"
-created_at: "2026-08-19T01:50:00Z"
-source_meeting_id: "note_123456789"
+id: "card_8c1d0e2f-4b7a-4f3e-9d6c-2a5b7e9f1c30"
+title: "Send the Q3 numbers to Priya before Friday."
+assignee: ""
+status: "todo"
+priority: "medium"
+due_date: ""
+created_at: "2026-09-25T09:14:03.112000000+00:00"
+source_note_id: "note_5a7c2e90-1d3b-4f6a-8e2c-9b0d4f1a6e73"
+source_kind: "voice_note"
+captured_at: "2026-09-25T09:14:03.112000000+00:00"
+source_ref: {"id":"note_5a7c2e90-1d3b-4f6a-8e2c-9b0d4f1a6e73","label":"Spoken on the TODOs page"}
 ---
 
-### Description
-Implement Rust backend domain modules per `project-structure.md`.
+Send the Q3 numbers to Priya before Friday.
 ```
 
-## 3. Trigger Phrase Configuration Schema (`triggers.json`)
-Stored at `.Vox/config/triggers.json`:
+`status` is `todo | in_progress | done`. `source_kind` is `manual`,
+`voice_note`, `meeting`, `scribble`, `web_capture` or `talkback`; `source_ref`
+points at the originating object, with a `turn_ordinal` where the source has
+turns. `source_kind`, `para`, `captured_at` and `source_ref` are written only
+when set, so a card from an older version still reads. The body is the card's
+description; a spoken todo keeps the full transcript there, while its title is
+cut to 120 characters.
 
-```json
-{
-  "triggers": [
-    {
-      "id": "trig_001",
-      "phrase": "schedule meeting",
-      "action_type": "mcp_calendar",
-      "target_tool": "google_calendar_create_event",
-      "parameters": {
-        "calendar_id": "primary"
-      },
-      "enabled": true
-    },
-    {
-      "id": "trig_002",
-      "phrase": "remind me to",
-      "action_type": "local_reminder",
-      "target_tool": "os_notification",
-      "parameters": {},
-      "enabled": true
-    }
-  ]
-}
-```
+## 3. Trigger Phrase Configuration (removed)
+Nothing reads or writes `triggers.json` any more: the trigger engine, its
+settings tab and its commands were removed (`docs/decisions.md` Decision 75).
+A file left in `<config>` by an earlier version is ignored.
 
 ## 4. App Settings Configuration Schema (`settings.json`)
-Stored at `.Vox/config/settings.json`. Mirrors the Rust `AppSettings` struct
-(`native/src-tauri/src/settings/mod.rs`) exactly — this is the real
-implemented shape, not an aspirational one:
+Stored at `<config>/settings.json`. The Rust `AppSettings` struct
+(`native/src-tauri/src/settings/mod.rs`) is the authority: every section
+defaults when absent, unknown keys are ignored (and dropped on the next save),
+and a corrupt file falls back to defaults rather than stopping the app. The
+sections dictation reads, at their defaults:
 
 ```json
 {
@@ -80,30 +95,80 @@ implemented shape, not an aspirational one:
     "ollama_host": "http://localhost:11434",
     "ollama_model": "llama3.2:latest",
     "cloud_api_key": null,
-    "cloud_model": "gpt-4o-mini"
+    "cloud_model": "gpt-4o-mini",
+    "context_tokens": 8192,
+    "provider_keys": {},
+    "custom_openai_endpoint": null,
+    "custom_openai_model": null
   },
   "stt": {
-    "whisper_model_path": null
-  },
-  "tts": {
-    "piper_binary_path": null,
-    "piper_voice_path": null
+    "whisper_model_path": null,
+    "dictation_quality": "fast",
+    "dictation_threads": null,
+    "enable_initial_prompt": false,
+    "custom_initial_prompt": null,
+    "preset": "",
+    "cleanup_style": "",
+    "meeting_model_id": null,
+    "dictation_engine": null,
+    "meeting_trim_audio_context": true
   },
   "hotkeys": {
     "show_hide_hotkey": "Ctrl+Shift+Space",
-    "dictation_hotkey": "Ctrl+Space"
+    "dictation_hotkey": "Ctrl+Space",
+    "toggle_to_talk": false,
+    "capture_hotkey": "Ctrl+Shift+C"
+  },
+  "clipboard": {
+    "auto_paste": true,
+    "copy_to_clipboard": true,
+    "injection_method": "clipboard_paste"
   }
 }
 ```
 
-`active_provider` is one of `"ollama" | "cloud_openai" | "cloud_gemini" | "cloud_anthropic"`.
-`stt.whisper_model_path` must point at a local GGML Whisper model file (not
-bundled with Vox) for any transcription — meeting/scribble capture, voice
-chat, and universal dictation — to work. `tts.*` are both optional; when
-either is unset, voice chat answers are text-only.
+- `active_provider` is one of `"ollama" | "cloud_openai" | "cloud_gemini" |
+  "cloud_anthropic" | "groq" | "openrouter" | "custom_openai"`.
+- **API keys are not kept here.** `provider_keys` (one per provider) and the
+  legacy single `cloud_api_key` are written to the OS credential store —
+  service `com.vox.app.providers`, account `provider_keys` — and appear in the
+  file empty. Only on a machine with no credential store do they stay in the
+  file. `get_settings` returns each stored key as the placeholder
+  `__vox_stored_key__`, and `save_settings` reads that placeholder, sent back
+  unchanged, as "keep the stored key" (`docs/decisions.md` Decision 73).
+- `stt.cleanup_style`: `""` — the default — and any unrecognised value mean
+  `raw`, and no model runs. `faithful`, `clean`, `polished` (or
+  `professional`) and `concise` opt into the rewrite, which may hold the text
+  for at most five seconds (Decision 71). There is no `text_transform` and no
+  `dictation_streaming_shadow`; either key in an older file is ignored.
+- `stt.whisper_model_path` overrides the dictation model. Unset,
+  `dictation_quality` picks `ggml-base.bin` (`fast`, falling back to an
+  installed `ggml-small.bin`) or `ggml-small.bin` (`accurate`) from
+  `<config>/models/`, downloading it on first use. `dictation_engine:
+  "parakeet"` switches dictation to Parakeet once its model is installed.
+  Meetings use `meeting_model_id`, or whatever model is installed.
+- `stt.enable_initial_prompt` governs `custom_initial_prompt` only; the
+  `dictionary` words always prime Whisper.
+- `clipboard.injection_method` is `clipboard_paste` (clipboard plus Ctrl+V,
+  the default) or `keystrokes` (typed through `enigo`).
 
-## 5. LanceDB Vector Record Schema
-Table `note_embeddings` inside LanceDB database `.Vox/lancedb`:
+The remaining top-level sections: `ui` (pill position), `vault` (`directory`:
+the chosen Vault Directory Location, `null` until one is chosen), `language`
+(dictation languages, note language, output script), `diagnostics` (anonymous
+diagnostics consent — off by default — and first-run state), `cloud` (Supabase
+URL and anon key), `sound` (`dictation_sounds`), `capture` (§8), `startup`
+(launch at login, start minimized), `audio_input` (microphone and keep-warm),
+`meetings` (camelCase keys: system audio, template, languages, devices,
+reminders, the meeting pill), `dictionary`, `snippets` (a spoken phrase
+expanded into text) and `vocabulary_corrections` (§9). There is no `tts`
+section.
+
+## 5. LanceDB Vector Record Schema (planned — not built)
+Decision 6 commits to embedded vector search, and nothing in the tree
+implements it yet: no embeddings are generated, no LanceDB database is
+created, and retrieval ranks by keyword overlap (`docs/roadmap.md`). The table
+below is the planned shape, `note_embeddings`, not a description of anything on
+disk:
 
 | Field | Type | Description |
 |---|---|---|
@@ -117,10 +182,10 @@ Table `note_embeddings` inside LanceDB database `.Vox/lancedb`:
 
 A capture is a `VaultFile` (`native/src-tauri/src/vault/file.rs`) with the
 optional `capture` field populated. Captures live in their own directory so
-the Files surface — which lists `vault/files/` only — is unaffected:
+the Files surface — which lists `<vault>/files/` only — is unaffected:
 
 ```text
-.Vox/vault/captures/<capture_id>/
+<vault>/captures/<capture_id>/
   metadata.json                     # the VaultFile record
   original/<Sanitized-Title>.json   # the raw structured payload, written once
 ```
@@ -169,8 +234,8 @@ deliberately kept out of it:
 `capture_type` is one of `conversation | article | repository | issue |
 pull_request | discussion | code | page`; `fidelity` is `structured |
 generic | text_only`; `coverage` is `full_document | rendered_dom | partial |
-unknown`. See `docs/capture.md` §6 for what each coverage value is allowed to
-claim.
+failed | unknown`. See `docs/capture.md` §7 for what each coverage value is
+allowed to claim.
 
 The raw payload under `original/` is the wire format shared with the browser
 extension (`native/src/webcapture/types.ts` ↔
@@ -186,7 +251,7 @@ source record (`metadata.json`) is what Vox captured; derived data is what
 Vox concluded, and re-analysing must never be able to rewrite the former.
 
 ```text
-.Vox/vault/captures/<source_id>/     (or vault/files/<source_id>/)
+<vault>/captures/<source_id>/        (or <vault>/files/<source_id>/)
   metadata.json                        # the VaultFile record — source truth
   original/<Sanitized-Title>.json      # raw payload, written once
   context.json                         # SourceContext, the read path for the UI
@@ -279,7 +344,8 @@ Part of `settings.json` (§4), under `capture`:
 
 Off by default: capture needs a paired browser extension before it can do
 anything, so a fresh install opens no listening socket. `pairing_token` is a
-256-bit hex secret generated when capture is first enabled. `hotkeys` also
+64-character hex secret — two random v4 UUIDs, 244 random bits — generated
+when capture is first enabled. `hotkeys` also
 gains `capture_hotkey` (default `Ctrl+Shift+C`), which opens the Captures
 surface — reading a page is triggered from inside the browser, for the reason
 given in `docs/capture.md` §1.
@@ -288,7 +354,7 @@ given in `docs/capture.md` §1.
 
 Two separate records, because they answer different questions.
 
-### Correction history (`.Vox/vault/corrections/<note_id>.json`)
+### Correction history (`<vault>/corrections/<note_id>.json`)
 
 Every phrase correction applied to one Voice Note, oldest first. The same
 sidecar shape as `merged_sources/<note_id>.json`, and for the same reason: a
@@ -354,17 +420,22 @@ of having made it. Both are managed in Settings › Dictionary.
 
 ---
 
-## 10. Meeting Schema (`.Vox/vault/meetings/<meeting_id>/`)
+## 10. Meeting Schema (`<vault>/meetings/<meeting_id>/`)
 
 One directory per meeting. The directory *is* the meeting: deleting it deletes
 the transcript, the report and the audio together.
 
 ```text
-.Vox/vault/meetings/meeting-<uuid>/
-├── meeting.json      metadata
-├── transcript.json   Vec<TranscriptSegment>, ordered by `sequence`
-├── summary.json      the report, its fingerprint, and the English original
-├── notes.md          free text the user typed
+<vault>/meetings/meeting-<uuid>/
+├── meeting.json          metadata
+├── transcript.json       Vec<TranscriptSegment>, ordered by `sequence`
+├── transcript.live.json  the live pass's transcript, kept once a final pass replaces it
+├── speakers.json         the voices speaker detection proposed, and the names given them
+├── attribution.json      which transcript line belongs to which of them
+├── summary.json          the report, its fingerprint, and the English original
+├── notes.md              free text the user typed
+├── diagnostics.jsonl     one line per decoded segment, appended as it goes
+├── diagnostics.json      the run's rollup, written once on stop
 └── audio/
     ├── chunk_000000.wav   durable 30 s checkpoints, present only while recording
     └── audio.wav          the merged recording, 16 kHz mono 16-bit PCM
@@ -383,12 +454,17 @@ complete one was.
 | `state` | enum | `recording` / `paused` / `transcribing` / `completed` / `failed` |
 | `source` | enum | `recorded` / `imported` |
 | `duration_seconds` | number | Measured from the audio that reached disk, not from a wall clock |
+| `created_at` / `updated_at` | string | RFC 3339 |
 | `audio_path` | string? | Absolute path to `audio.wav` |
-| `transcript_model` | string? | The model file that produced the current transcript |
+| `transcript` | object? | What produced the transcript on disk: `pass` (`live` / `final`), `engine`, `model` (a filename, never a path), `language`, `profile`, `completed_at`. `None` while recording and for a meeting transcribed before this was recorded; it replaced an earlier `transcript_model` field |
+| `language` | string? | |
+| `mic_device` | string? | |
 | `system_audio_captured` | bool | `false` means only the microphone was recorded, which changes how the transcript should be read |
 | `segment_count` | number | |
 | `dropped_segments` | number | Segments queued but never decoded. Surfaced, not swallowed |
 | `error` | string? | Set by crash recovery and by a failed import |
+| `tags` | string[] | |
+| `series_id` | string? | The recurring meeting this recording belongs to, written during a calendar sync; series records live in `<vault>/meetings/series.json` |
 
 ### `transcript.json`
 
@@ -397,6 +473,11 @@ cannot reorder the transcript), `text`, `start_seconds` / `end_seconds`
 (recording-relative, so a transcript still lines up with its audio after a
 pause), `channel` (`microphone` / `system` / `mixed` — see Decision 68),
 `no_speech_prob` (Whisper's own, not a derived number), and `recorded_at`.
+Optional, and omitted when unset: `cut_at_ceiling` (the segmenter cut this span
+at its ceiling, so the next line continues the sentence), `original_text`,
+`romanized_text` and `translated_text` (the script and language variants),
+`corrections` (what the glossary changed, so the decoder's own words can be
+reconstructed), and `telemetry` (how a live decode went).
 
 ### `summary.json`
 
@@ -407,7 +488,7 @@ pause), `channel` (`microphone` / `system` / `mixed` — see Decision 68),
 context window), `provider`, `model`, `language`, `chunk_count`,
 `processing_ms`.
 
-### Templates (`.Vox/config/meeting-templates/<id>.json`)
+### Templates (`<config>/meeting-templates/<id>.json`)
 
 `{ id, name, description, sections: [{ heading, instruction, style, required }] }`
 where `style` is `bullets` / `checklist` / `prose`. An `id` matching a bundled

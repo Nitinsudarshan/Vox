@@ -29,6 +29,7 @@ import { PageHeader } from '../common/PageHeader';
 import { EmptyState } from '../common/EmptyState';
 import { DictationModelGate } from './DictationModelGate';
 import { AppSettings, CorrectionRecord, VaultLocationInfo, VaultNote } from '../../types';
+import { describeError } from '@/lib/errors';
 
 type VaultViewState =
   | { status: 'loading' }
@@ -296,9 +297,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
       setSelectedNoteIds(new Set());
       setIsBulkDeleting(false);
       setActiveSelectionMode(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to delete voice notes', err);
-      setError(err?.message || 'Failed to delete selected voice notes.');
+      setError(describeError(err, 'Failed to delete selected voice notes.'));
     } finally {
       setActionBusy(false);
     }
@@ -329,9 +330,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
       setSelectedNoteIds(new Set());
       setIsMergingBatch(false);
       setActiveSelectionMode(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to merge voice notes', err);
-      setError(err?.message || 'Failed to merge selected voice notes.');
+      setError(describeError(err, 'Failed to merge selected voice notes.'));
     } finally {
       setActionBusy(false);
     }
@@ -435,9 +436,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
       if (!picked) return;
       await invoke('set_vault_location', { path: picked });
       await refreshLocation();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to set Vault Directory Location', err);
-      setError(err?.message || "Couldn't use that folder — choose another.");
+      setError(describeError(err, "Couldn't use that folder — choose another."));
     } finally {
       setBusy(false);
     }
@@ -449,9 +450,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
     try {
       await invoke('set_vault_location', { path: defaultPath });
       await refreshLocation();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to set default Vault Directory Location', err);
-      setError(err?.message || 'Could not use the default Vox Vault.');
+      setError(describeError(err, 'Could not use the default Vox Vault.'));
     } finally {
       setBusy(false);
     }
@@ -543,9 +544,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
         undoable: true,
       });
       dismissSelection();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to correct phrase', err);
-      setCorrectionError(err?.message || 'Could not apply that correction.');
+      setCorrectionError(describeError(err, 'Could not apply that correction.'));
     } finally {
       setCorrecting(false);
     }
@@ -564,9 +565,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
         undoable: false,
       });
       dismissSelection();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to add to dictionary', err);
-      setCorrectionError(err?.message || 'Could not add that to the dictionary.');
+      setCorrectionError(describeError(err, 'Could not add that to the dictionary.'));
     } finally {
       setCorrecting(false);
     }
@@ -581,11 +582,11 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
       const restoredId = restored.id;
       setNotes((prev) => prev.map((n) => (n.id === restoredId ? restored : n)));
       setUndoState(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to undo correction', err);
       setUndoState({
         ...undoState,
-        message: err?.message || 'That correction can no longer be undone.',
+        message: describeError(err, 'That correction can no longer be undone.'),
         undoable: false,
       });
     }
@@ -639,9 +640,9 @@ export const VoiceNotePage: React.FC<VoiceNotePageProps> = ({ onOpenSpeechSettin
         return next.sort((a, b) => b.created_at.localeCompare(a.created_at));
       });
       setUnmergingNoteId(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to unmerge voice note', err);
-      setError(err?.message || 'Failed to unmerge voice note. The operation was aborted.');
+      setError(describeError(err, 'Failed to unmerge voice note. The operation was aborted.'));
     } finally {
       setActionBusy(false);
     }

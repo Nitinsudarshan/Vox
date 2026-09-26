@@ -257,7 +257,7 @@ impl ActionHandler for OpenSourceHandler {
     }
 
     fn description(&self) -> &'static str {
-        "Resolves and opens an existing source item in Relay."
+        "Resolves and opens an existing source item in Vox."
     }
 
     fn requires_confirmation(&self, _action: &UniversalAction) -> bool {
@@ -304,6 +304,13 @@ impl ActionRegistry {
                 Arc::new(OpenSourceHandler),
             ],
         }
+    }
+
+    /// A registry holding exactly these handlers. The dispatcher's own tests
+    /// use it to exercise gating and auditing without a handler that opens a
+    /// browser or writes to the vault.
+    pub fn with_handlers(handlers: Vec<Arc<dyn ActionHandler>>) -> Self {
+        Self { handlers }
     }
 
     pub fn find_handler(&self, action_type: &ActionType) -> Option<Arc<dyn ActionHandler>> {

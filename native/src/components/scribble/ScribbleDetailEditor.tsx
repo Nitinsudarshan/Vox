@@ -38,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { ConnectAndMergeModal } from './ConnectAndMergeModal';
 import { ConfirmationModal } from '../common/ConfirmationModal';
 import { MarkdownView } from '../common/MarkdownView';
+import { describeError } from '@/lib/errors';
 
 interface ScribbleDetailEditorProps {
   scribble: Scribble;
@@ -170,9 +171,9 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
       const res = await invoke<Scribble>('summarize_scribble', { id: scribble.id });
       onUpdate(res);
       setSummary(res.summary || '');
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to summarize scribble:', err);
-      const msg = typeof err === 'string' ? err : err?.message || 'Failed to generate summary.';
+      const msg = describeError(err, 'Failed to generate summary.');
       setSummaryError(msg);
     } finally {
       setIsSummarizing(false);

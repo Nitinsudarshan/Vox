@@ -10,41 +10,68 @@ use std::sync::RwLock;
 use super::model::{EntityCategory, ResolvedEntity};
 
 pub struct EntityStore {
-    storage_path: PathBuf,
+    /// Behind a lock because a vault move repoints a live store — see
+    /// [`Self::reopen`].
+    storage_path: RwLock<PathBuf>,
     entities: RwLock<Vec<ResolvedEntity>>,
 }
 
 impl EntityStore {
     /// Creates or opens an EntityStore at the given vault directory.
     pub fn new(vault_dir: &Path) -> Self {
-        let entities_dir = vault_dir.join("entities");
-        let _ = fs::create_dir_all(&entities_dir);
-        let storage_path = entities_dir.join("index.json");
-
-        let mut loaded = Vec::new();
-        if storage_path.exists() {
-            if let Ok(data) = fs::read_to_string(&storage_path) {
-                if let Ok(records) = serde_json::from_str::<Vec<ResolvedEntity>>(&data) {
-                    loaded = records;
-                } else {
-                    tracing::warn!("Entities index was malformed; recovering from clean state");
-                }
-            }
-        }
-
+        let storage_path = Self::index_path(vault_dir);
+        let loaded = Self::load_from(&storage_path);
         Self {
-            storage_path,
+            storage_path: RwLock::new(storage_path),
             entities: RwLock::new(loaded),
         }
+    }
+
+    /// Where the index lives under a vault root, creating its directory.
+    fn index_path(vault_dir: &Path) -> PathBuf {
+        let dir = vault_dir.join("entities");
+        let _ = fs::create_dir_all(&dir);
+        dir.join("index.json")
+    }
+
+    /// The records in an index file; empty when it is absent, and empty with
+    /// a warning when it cannot be parsed.
+    fn load_from(storage_path: &Path) -> Vec<ResolvedEntity> {
+        let Ok(data) = fs::read_to_string(storage_path) else {
+            return Vec::new();
+        };
+        serde_json::from_str::<Vec<ResolvedEntity>>(&data).unwrap_or_else(|_| {
+            tracing::warn!("{} was malformed; recovering from a clean state", storage_path.display());
+            Vec::new()
+        })
+    }
+
+    fn current_path(&self) -> PathBuf {
+        self.storage_path.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Points this store at another vault root and loads what is there.
+    ///
+    /// The vault can be moved while Vox runs (Settings › Vault). Before this,
+    /// the store kept the index it opened at launch, so after a move it went
+    /// on reading the old vault and writing into it. Nothing at the old
+    /// location is moved or deleted.
+    pub fn reopen(&self, vault_dir: &Path) {
+        let storage_path = Self::index_path(vault_dir);
+        let loaded = Self::load_from(&storage_path);
+        let mut records = self.entities.write().unwrap_or_else(|e| e.into_inner());
+        *self.storage_path.write().unwrap_or_else(|e| e.into_inner()) = storage_path;
+        *records = loaded;
     }
 
     /// Persists current state to disk atomically.
     fn persist(&self) -> Result<(), String> {
         let entities = self.entities.read().map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(&*entities).map_err(|e| e.to_string())?;
-        let tmp_path = self.storage_path.with_extension("tmp");
+        let storage_path = self.current_path();
+        let tmp_path = storage_path.with_extension("tmp");
         fs::write(&tmp_path, json.as_bytes()).map_err(|e| e.to_string())?;
-        fs::rename(&tmp_path, &self.storage_path).map_err(|e| e.to_string())?;
+        fs::rename(&tmp_path, &storage_path).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -145,6 +172,39 @@ impl EntityStore {
 mod tests {
     use super::*;
     use crate::entities::model::EntityMention;
+
+    fn entity(id: &str, name: &str) -> ResolvedEntity {
+        ResolvedEntity {
+            id: id.to_string(),
+            canonical_name: name.to_string(),
+            category: EntityCategory::Project,
+            aliases: Vec::new(),
+            source_identifiers: Vec::new(),
+            urls: Vec::new(),
+            confidence: 0.9,
+            mentions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn reopening_at_another_vault_reads_and_writes_there() {
+        let vault_a = std::env::temp_dir().join(format!("vox_test_ent_a_{}", uuid::Uuid::new_v4()));
+        let vault_b = std::env::temp_dir().join(format!("vox_test_ent_b_{}", uuid::Uuid::new_v4()));
+        let store = EntityStore::new(&vault_a);
+        store.store_entity(entity("ent_a", "Alpha")).unwrap();
+
+        store.reopen(&vault_b);
+        assert!(store.list_all().is_empty(), "vault B starts empty");
+        store.store_entity(entity("ent_b", "Beta")).unwrap();
+
+        store.reopen(&vault_a);
+        let in_a = store.list_all();
+        assert_eq!(in_a.len(), 1, "vault A was not written to while B was open");
+        assert_eq!(in_a[0].canonical_name, "Alpha");
+
+        let _ = fs::remove_dir_all(vault_a);
+        let _ = fs::remove_dir_all(vault_b);
+    }
 
     #[test]
     fn test_entity_store_atomic_persistence_and_merge() {

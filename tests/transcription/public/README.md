@@ -95,7 +95,7 @@ python tests/transcription/runner/run_public_benchmark.py --manifest fleurs-hi-v
 
 ### Step 3: Inspect Reports
 Results are exported to:
-- Markdown report: `TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md`
+- Markdown report: `docs/benchmarks/TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md`
 - Documentation report: `docs/public-speech-benchmark.md`
 - Machine-readable JSON: `tests/transcription/reports/public/benchmark_report.json`
 - Tabular CSV: `tests/transcription/reports/public/benchmark_report.csv`

@@ -27,7 +27,7 @@ Vox uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** serv
              │                             │
              ▼                             ▼
     OS Keyring:                   OS Keyring:
-    com.Vox.app.identity        com.Vox.app.calendar
+    com.vox.app.identity        com.vox.app.calendar
 ```
 
 ### Key Security & Architectural Invariants
@@ -40,9 +40,9 @@ Vox uses a single, centralized, production-grade **Desktop OAuth 2.0 PKCE** serv
    - **Vox Sign-In**: Requests `openid`, `userinfo.email`, and `userinfo.profile` only.
    - **Google Calendar Sync**: Requests `calendar.events.readonly` separately only when explicitly initiated by the user.
 3. **Isolated Keyring Namespaces**:
-   - Identity tokens: stored under `com.Vox.app.identity` / `google_account_tokens`.
-   - Calendar tokens: stored under `com.Vox.app.calendar` / `google_calendar_tokens`.
-   - Fallback stores located in `.Vox/config/` (never in the user's markdown `vault/`).
+   - Identity tokens: stored under `com.vox.app.identity` / `google_account_tokens`.
+   - Calendar tokens: stored under `com.vox.app.calendar` / `google_calendar_tokens`.
+   - When no credential store is available, an obfuscated (not encrypted) fallback file in `<config>/` (never in the user's markdown vault).
 4. **Independent Lifecycle**:
    - Disconnecting Calendar revokes calendar tokens without signing out of Vox.
    - Signing out of Vox revokes identity tokens without deleting local meetings or vault data.
@@ -89,11 +89,16 @@ To configure the official Vox Desktop Client ID in Google Cloud:
 ## 3. Configuring the Client ID in Vox
 
 ### Production / Environment Builds
-Set the environment variable at build or runtime:
+Set the environment variables at build or run time (`oauth/config.rs`):
 ```bash
 # In .env or CI build environment
-Vox_GOOGLE_CLIENT_ID="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+VOX_GOOGLE_CLIENT_ID="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+VOX_GOOGLE_CLIENT_SECRET="GOCSPX-..."
 ```
+The pre-rename `RELAY_GOOGLE_CLIENT_ID` / `RELAY_GOOGLE_CLIENT_SECRET` names
+are still read as a fallback. Google's token endpoint requires the secret even
+for desktop clients; it treats a desktop client secret as non-confidential,
+which is the only reason it may be baked in at build time.
 
 ### Developer Setting Override (In-App)
 In the Vox application:

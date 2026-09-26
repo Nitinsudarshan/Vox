@@ -19,13 +19,12 @@ tauri-build = { version = "2.0", features = [] }
 # in Meeting Detail can seek around it. Scoped at runtime to the vault's
 # meetings directory and nothing else — see `lib.rs`.
 tauri = { version = "2.0", features = ["tray-icon", "protocol-asset", "image-png"] }
-tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2.0"
 tauri-plugin-notification = "2.0"
 tauri-plugin-global-shortcut = "2.0"
 # Opens a meeting's conferencing link in the user's default browser when
-# they press Join on a reminder. `tauri-plugin-shell`'s `open` is deprecated
-# in favour of this.
+# they press Join on a reminder. (`tauri-plugin-shell`'s `open`, deprecated
+# in favour of this, is not a dependency.)
 tauri-plugin-opener = "2"
 # Writes the OS launch entry behind Settings › Startup › "Launch at login" —
 # the registry Run key on Windows, a LaunchAgent on macOS, a .desktop file on
@@ -41,7 +40,7 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
-cpal = "0.15"
+cpal = "0.16"
 hound = "3.5"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.8", features = ["v4", "serde"] }
@@ -53,7 +52,7 @@ keyring = "2.1"
 urlencoding = "2.1"
 dotenvy = "0.15"
 sha2 = "0.10"
-pdf-extract = "0.7"
+pdf-extract = "0.12"
 # Decodes the audio formats a meeting recording arrives in when the user
 # imports one — mp3, m4a/aac, flac, ogg, wav. Pure Rust and decoded packet by
 # packet, so importing a three-hour recording neither pulls in an external
@@ -70,7 +69,7 @@ symphonia = { version = "0.5", default-features = false, features = [
     "wav",
     "pcm",
 ] }
-quick-xml = "0.36"
+quick-xml = "0.42"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Unpacks the Ollama archive on macOS and Linux (`providers::ollama_install`).
 # `flate2` is already in the tree behind `zip`'s deflate, so the gzip half of a
@@ -106,10 +105,11 @@ whisper-local = ["dep:whisper-rs"]
 onnx-spike = ["dep:ort"]
 # Parakeet TDT transcription through ONNX Runtime — `capture::parakeet`.
 #
-# Off by default until the Windows bundling question above is answered: an
-# engine that works for whoever built it and crashes on an installed app is
-# worse than one that is absent and says so. The decoding algorithm and the
+# On by default, so the engine can be picked in Settings › Speech models. The
+# Windows bundling question above (docs/spikes/onnx-windows.md) is still
+# unanswered: until that spike has run on a real installed build, treat
+# Parakeet on a packaged app as unverified. The decoding algorithm and the
 # vocabulary compile and are tested in *every* build; only the ONNX sessions
-# are behind this.
+# are behind this, and a build without it reports Parakeet as unavailable.
 parakeet = ["dep:ort"]
 

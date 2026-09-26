@@ -37,6 +37,8 @@ pub const CORRECTIONS_DIR: &str = "corrections";
 pub mod correction;
 pub use correction::CorrectionRecord;
 
+mod frontmatter;
+
 pub mod para;
 pub use para::*;
 
@@ -220,21 +222,35 @@ impl VaultManager {
             .vault_dir()
             .join("notes")
             .join(format!("{}.md", note.id));
+        // Strings go out as JSON: one line whatever they contain, and read
+        // back exactly. The `Debug` rendering this replaced escaped combining
+        // marks as `\u{94d}`, which the reader could not decode, and doubled
+        // every backslash in a Windows audio path on each save.
+        let json = |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+        let optional = |value: &Option<String>| match value {
+            Some(v) => format!("Some({})", json(v)),
+            None => "None".to_string(),
+        };
+        let list = |values: &[String]| serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string());
         let merged_from_str = match &note.merged_from {
-            Some(ids) => format!("{:?}", ids),
+            Some(ids) => list(ids),
             None => "None".to_string(),
         };
-        let raw_content_str = match &note.raw_content {
-            Some(raw) => format!("Some({:?})", raw),
-            None => "None".to_string(),
-        };
-        let cleanup_style_str = match &note.cleanup_style {
-            Some(style) => format!("Some({:?})", style),
-            None => "None".to_string(),
-        };
+        // The title stays on its own line even if a caller did not flatten it.
+        let title = note.title.replace(['\r', '\n'], " ");
         let frontmatter = format!(
-            "---\nid: \"{}\"\ntitle: \"{}\"\ntype: \"{}\"\ncreated_at: \"{}\"\nupdated_at: \"{}\"\ntags: {:?}\nsource_audio: {:?}\nraw_content: {}\ncleanup_style: {}\nmerged_from: {}\n---\n\n{}",
-            note.id, note.title, note.note_type, note.created_at, note.updated_at, note.tags, note.source_audio, raw_content_str, cleanup_style_str, merged_from_str, note.content
+            "---\nid: \"{}\"\ntitle: \"{}\"\ntype: \"{}\"\ncreated_at: \"{}\"\nupdated_at: \"{}\"\ntags: {}\nsource_audio: {}\nraw_content: {}\ncleanup_style: {}\nmerged_from: {}\n---\n\n{}",
+            note.id,
+            title,
+            note.note_type,
+            note.created_at,
+            note.updated_at,
+            list(&note.tags),
+            optional(&note.source_audio),
+            optional(&note.raw_content),
+            optional(&note.cleanup_style),
+            merged_from_str,
+            note.content
         );
 
         fs::write(&file_path, frontmatter)?;
@@ -257,6 +273,7 @@ impl VaultManager {
     /// One card by id.
     pub fn get_kanban_card(&self, id: &str) -> Result<KanbanCard, VaultError> {
         self.init()?;
+        validate_id(id)?;
         let file_path = self.vault_dir().join("kanban").join(format!("{}.md", id));
         if !file_path.exists() {
             return Err(VaultError::NotFound(id.to_string()));
@@ -347,6 +364,7 @@ impl VaultManager {
     /// Removes a card from the board for good.
     pub fn delete_kanban_card(&self, id: &str) -> Result<(), VaultError> {
         self.init()?;
+        validate_id(id)?;
         let file_path = self.vault_dir().join("kanban").join(format!("{}.md", id));
         if file_path.exists() {
             fs::remove_file(&file_path)?;
@@ -357,6 +375,7 @@ impl VaultManager {
 
     pub fn get_note(&self, id: &str) -> Result<VaultNote, VaultError> {
         self.init()?;
+        validate_id(id)?;
         let file_path = self.vault_dir().join("notes").join(format!("{}.md", id));
         if !file_path.exists() {
             return Err(VaultError::NotFound(id.to_string()));
@@ -368,6 +387,7 @@ impl VaultManager {
 
     pub fn delete_note(&self, id: &str) -> Result<(), VaultError> {
         self.init()?;
+        validate_id(id)?;
         let file_path = self.vault_dir().join("notes").join(format!("{}.md", id));
         if file_path.exists() {
             fs::remove_file(&file_path)?;
@@ -407,6 +427,7 @@ impl VaultManager {
     /// A note that has never been corrected has no file and an empty history —
     /// not an error, since asking is how the UI finds out.
     pub fn correction_history(&self, note_id: &str) -> Result<Vec<CorrectionRecord>, VaultError> {
+        validate_id(note_id)?;
         let path = self.corrections_path(note_id);
         if !path.exists() {
             return Ok(Vec::new());
@@ -729,13 +750,8 @@ impl VaultManager {
     }
 
     fn parse_note_md(content: &str) -> Option<VaultNote> {
-        let parts: Vec<&str> = content.splitn(3, "---").collect();
-        if parts.len() < 3 {
-            return None;
-        }
-
-        let frontmatter = parts[1];
-        let body = parts[2].trim_start_matches('\n').to_string();
+        let (frontmatter, body) = frontmatter::split(content)?;
+        let body = body.trim_start_matches(['\r', '\n']).to_string();
 
         let mut id = String::new();
         let mut title = String::new();
@@ -761,45 +777,19 @@ impl VaultManager {
             } else if let Some(v) = line.strip_prefix("updated_at:") {
                 updated_at = v.trim().trim_matches('"').to_string();
             } else if let Some(v) = line.strip_prefix("tags:") {
-                tags = parse_debug_string_list(v.trim());
+                tags = frontmatter::decode_string_list(v);
             } else if let Some(v) = line.strip_prefix("source_audio:") {
-                let v = v.trim();
-                source_audio = if v == "None" {
-                    None
-                } else {
-                    Some(
-                        v.trim_start_matches("Some(")
-                            .trim_end_matches(')')
-                            .trim_matches('"')
-                            .to_string(),
-                    )
-                };
+                source_audio = frontmatter::decode_optional_string(v);
             } else if let Some(v) = line.strip_prefix("raw_content:") {
-                let v = v.trim();
-                raw_content = if v == "None" || v.is_empty() {
-                    None
-                } else if v.starts_with("Some(") && v.ends_with(')') {
-                    let inner = &v[5..v.len() - 1];
-                    serde_json::from_str::<String>(inner).ok().or_else(|| Some(inner.trim_matches('"').to_string()))
-                } else {
-                    Some(v.trim_matches('"').to_string())
-                };
+                raw_content = frontmatter::decode_optional_string(v);
             } else if let Some(v) = line.strip_prefix("cleanup_style:") {
-                let v = v.trim();
-                cleanup_style = if v == "None" || v.is_empty() {
-                    None
-                } else if v.starts_with("Some(") && v.ends_with(')') {
-                    let inner = &v[5..v.len() - 1];
-                    serde_json::from_str::<String>(inner).ok().or_else(|| Some(inner.trim_matches('"').to_string()))
-                } else {
-                    Some(v.trim_matches('"').to_string())
-                };
+                cleanup_style = frontmatter::decode_optional_string(v);
             } else if let Some(v) = line.strip_prefix("merged_from:") {
                 let v = v.trim();
                 merged_from = if v == "None" || v.is_empty() {
                     None
                 } else {
-                    Some(parse_debug_string_list(v))
+                    Some(frontmatter::decode_string_list(v))
                 };
             }
         }
@@ -868,6 +858,7 @@ impl VaultManager {
 
     pub fn get_scribble(&self, id: &str) -> Result<Scribble, VaultError> {
         self.init()?;
+        validate_id(id)?;
         let file_path = self
             .vault_dir()
             .join("scribbles")
@@ -922,6 +913,7 @@ impl VaultManager {
 
     pub fn delete_scribble(&self, id: &str) -> Result<(), VaultError> {
         self.init()?;
+        validate_id(id)?;
         let file_path = self
             .vault_dir()
             .join("scribbles")
@@ -1371,6 +1363,7 @@ impl VaultManager {
     /// this is what lets `enrich_vault_file`, `summarize_vault_file`, and
     /// promotion to a Scribble work on captures without a second code path.
     fn find_vault_file_dir(&self, id: &str) -> Option<PathBuf> {
+        validate_id(id).ok()?;
         for subdir in [FILES_DIR, CAPTURES_DIR] {
             let candidate = self.vault_dir().join(subdir).join(id);
             if candidate.join("metadata.json").exists() {
@@ -1814,6 +1807,7 @@ impl VaultManager {
     /// Restores a deleted item from Trash back to its active folder.
     pub fn restore_trash_item(&self, trash_id: &str) -> Result<(), VaultError> {
         self.init()?;
+        validate_id(trash_id)?;
         let trash_dir = self.vault_dir().join("trash");
         let meta_path = trash_dir.join(format!("{}.json", trash_id));
         if !meta_path.exists() {
@@ -1861,19 +1855,14 @@ impl VaultManager {
     }
 
     /// Permanently deletes a single item from Trash.
+    ///
+    /// A trashed file or capture is a directory named by its trash id, beside
+    /// the `.json` record; leaving it behind kept the original document and
+    /// payload on disk after the user was told they were gone.
     pub fn delete_trash_item_permanently(&self, trash_id: &str) -> Result<(), VaultError> {
         self.init()?;
-        let trash_dir = self.vault_dir().join("trash");
-        let meta_path = trash_dir.join(format!("{}.json", trash_id));
-        let trash_md = trash_dir.join(format!("{}.md", trash_id));
-
-        if meta_path.exists() {
-            fs::remove_file(&meta_path)?;
-        }
-        if trash_md.exists() {
-            fs::remove_file(&trash_md)?;
-        }
-        Ok(())
+        validate_id(trash_id)?;
+        remove_trash_entry(&self.vault_dir().join("trash"), trash_id)
     }
 
     /// Empties all items from Trash.
@@ -1916,10 +1905,8 @@ impl VaultManager {
             if path.extension().is_some_and(|ext| ext == "json") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(item) = serde_json::from_str::<TrashItem>(&content) {
-                        if item.is_expired() {
-                            let trash_md = trash_dir.join(format!("{}.md", item.id));
-                            let _ = fs::remove_file(&path);
-                            let _ = fs::remove_file(&trash_md);
+                        if item.is_expired() && validate_id(&item.id).is_ok() {
+                            let _ = remove_trash_entry(&trash_dir, &item.id);
                             purged += 1;
                         }
                     }
@@ -2153,20 +2140,46 @@ impl VaultManager {
     }
 }
 
+/// Rejects an id that is not one plain path component.
+///
+/// Every id the vault issues is `<kind>_<uuid>`, but ids arrive from the
+/// webview, and each is joined onto a folder that is then read, renamed or
+/// deleted. A separator, a drive prefix, or a component Windows reads as `.`
+/// or `..` (any run of dots and spaces) would reach outside that folder.
+fn validate_id(id: &str) -> Result<(), VaultError> {
+    let plain = !id.contains(['/', '\\', ':', '\0'])
+        && !id.trim_end_matches(['.', ' ']).is_empty();
+    if plain {
+        Ok(())
+    } else {
+        Err(VaultError::NotFound(id.to_string()))
+    }
+}
+
+/// Deletes everything Trash holds for one item: its record, a trashed
+/// note's Markdown, and a trashed file's or capture's directory.
+fn remove_trash_entry(trash_dir: &std::path::Path, trash_id: &str) -> Result<(), VaultError> {
+    let meta_path = trash_dir.join(format!("{}.json", trash_id));
+    let trash_md = trash_dir.join(format!("{}.md", trash_id));
+    let item_dir = trash_dir.join(trash_id);
+
+    if item_dir.is_dir() {
+        fs::remove_dir_all(&item_dir)?;
+    }
+    if trash_md.exists() {
+        fs::remove_file(&trash_md)?;
+    }
+    if meta_path.exists() {
+        fs::remove_file(&meta_path)?;
+    }
+    Ok(())
+}
+
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() > 2)
         .map(|w| w.to_string())
-        .collect()
-}
-
-fn parse_debug_string_list(raw: &str) -> Vec<String> {
-    raw.trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(',')
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty())
         .collect()
 }
 
@@ -2430,6 +2443,91 @@ mod tests {
         let voice_notes = manager.list_notes_by_type(VOICE_NOTE_TYPE).unwrap();
         assert_eq!(voice_notes.len(), 1);
         assert_eq!(voice_notes[0].id, voice_note.id);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// Hindi raw transcripts, Windows audio paths and a `---` in the text
+    /// all survive a save and read, and a second save of what was read.
+    #[test]
+    fn voice_note_round_trips_hindi_windows_paths_and_triple_dashes() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let mut note = VaultNote::new_voice_note_with_raw(
+            "Standup\n---\nक्या हाल है",
+            Some("क्या\nहै \"quoted\" --- here".to_string()),
+            Some("clean".to_string()),
+        );
+        note.source_audio = Some(r"C:\Users\me\audio.wav".to_string());
+        note.tags = vec!["क्या".to_string(), "a, b".to_string()];
+        note.merged_from = Some(vec!["note_a".to_string(), "note_b".to_string()]);
+        manager.save_note(&note).unwrap();
+
+        let read = manager.get_note(&note.id).unwrap();
+        assert_eq!(read.note_type, VOICE_NOTE_TYPE);
+        assert_eq!(read.title, note.title);
+        assert_eq!(read.content, note.content);
+        assert_eq!(read.raw_content, note.raw_content);
+        assert_eq!(read.cleanup_style, note.cleanup_style);
+        assert_eq!(read.source_audio, note.source_audio);
+        assert_eq!(read.tags, note.tags);
+        assert_eq!(read.merged_from, note.merged_from);
+
+        manager.save_note(&read).unwrap();
+        let again = manager.get_note(&note.id).unwrap();
+        assert_eq!(again.raw_content, note.raw_content);
+        assert_eq!(again.source_audio, note.source_audio);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// A note written by the previous `Debug`-based writer still reads back
+    /// as the text that was dictated, not as its escapes.
+    #[test]
+    fn voice_note_written_by_the_debug_writer_still_reads() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+        manager.init().unwrap();
+
+        let tags = vec!["क्या".to_string()];
+        let source_audio = Some(r"C:\Users\me\a.wav".to_string());
+        let raw = "क्या\nहै";
+        let legacy = format!(
+            "---\nid: \"note_legacy\"\ntitle: \"Legacy\"\ntype: \"voice_note\"\ncreated_at: \"2026-01-01T00:00:00Z\"\nupdated_at: \"2026-01-01T00:00:00Z\"\ntags: {:?}\nsource_audio: {:?}\nraw_content: Some({:?})\ncleanup_style: Some({:?})\nmerged_from: {:?}\n---\n\nbody",
+            tags, source_audio, raw, "clean", vec!["note_x"]
+        );
+        fs::write(temp_dir.join("notes").join("note_legacy.md"), legacy).unwrap();
+
+        let read = manager.get_note("note_legacy").unwrap();
+        assert_eq!(read.raw_content.as_deref(), Some(raw));
+        assert_eq!(read.source_audio, source_audio);
+        assert_eq!(read.tags, tags);
+        assert_eq!(read.cleanup_style.as_deref(), Some("clean"));
+        assert_eq!(read.merged_from, Some(vec!["note_x".to_string()]));
+        assert_eq!(read.content, "body");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// A summary or body containing `---` no longer cuts the frontmatter
+    /// short, so the Scribble stays readable and listed.
+    #[test]
+    fn scribble_with_triple_dashes_in_its_values_stays_listed() {
+        let temp_dir = std::env::temp_dir().join(format!("relay_test_{}", uuid::Uuid::new_v4()));
+        let manager = VaultManager::new(temp_dir.clone());
+
+        let mut scribble = Scribble::new_text("Intro\n\n---\n\nAfter the rule", Some("A --- B"));
+        scribble.summary = Some("Part one --- part two".to_string());
+        scribble.source_metadata = serde_json::json!({ "url": "https://example.com/a---b" });
+        manager.save_scribble(&scribble).unwrap();
+
+        let read = manager.get_scribble(&scribble.id).unwrap();
+        assert_eq!(read.title, "A --- B");
+        assert_eq!(read.summary.as_deref(), Some("Part one --- part two"));
+        assert_eq!(read.content, scribble.content);
+        assert_eq!(read.source_metadata, scribble.source_metadata);
+        assert!(manager.list_scribbles().unwrap().iter().any(|s| s.id == scribble.id));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -3275,6 +3373,51 @@ mod tests {
 
         let _ = fs::remove_dir_all(temp_dir);
         let _ = fs::remove_dir_all(external_dir);
+    }
+
+    /// Deleting a trashed file for good removes its directory — the copy of
+    /// the document — not only the record that listed it.
+    #[test]
+    fn permanently_deleting_a_trashed_file_removes_its_directory() {
+        let (manager, dir) = scratch_vault();
+        let source = dir.join("outside.md");
+        fs::write(&source, "# Outside\n\nPrivate text.").unwrap();
+        let imported = manager.import_vault_file(&source).unwrap();
+
+        manager.delete_vault_file(&imported.id).unwrap();
+        let trash_id = format!("trash_file_{}", imported.id);
+        let trashed_dir = dir.join("trash").join(&trash_id);
+        assert!(trashed_dir.is_dir());
+
+        manager.delete_trash_item_permanently(&trash_id).unwrap();
+
+        assert!(!trashed_dir.exists());
+        assert!(!dir.join("trash").join(format!("{trash_id}.json")).exists());
+        assert!(manager.get_trash_items().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Ids come from the webview; none of these may resolve outside the
+    /// folder it is joined onto.
+    #[test]
+    fn ids_that_are_not_one_plain_component_are_refused() {
+        let (manager, dir) = scratch_vault();
+        fs::write(dir.join("keep.json"), "{}").unwrap();
+
+        for id in ["", ".", "..", "...", ". .", "../keep", "..\\keep", "a/b", "C:evil"] {
+            assert!(validate_id(id).is_err(), "{id:?} should be refused");
+        }
+        assert!(manager.delete_trash_item_permanently("../keep").is_err());
+        assert!(manager.delete_trash_item_permanently("..").is_err());
+        assert!(manager.get_note("../trash/x").is_err());
+        assert!(dir.join("keep.json").exists());
+        assert!(dir.join("trash").is_dir());
+
+        assert!(validate_id("trash_capture_capture_1b2c-3d").is_ok());
+        assert!(validate_id("card_legacy_1").is_ok());
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     /// A fresh vault in a throwaway directory, the pattern the tests above use.

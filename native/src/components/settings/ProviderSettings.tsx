@@ -66,6 +66,9 @@ import { SpeechModelsView } from './SpeechModelsView';
 import { CloudProviderSettings } from './CloudProviderSettings';
 import { OllamaInstallCard } from './OllamaInstallCard';
 import { UnifiedModelsView } from './UnifiedModelsView';
+import { describeError } from '@/lib/errors';
+import type { SttModelStatus } from '@/types/models';
+import type { CleanupStyle } from '../capture/PillTypes';
 
 export type SettingsSection =
   | 'account'
@@ -160,7 +163,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     ollama_model: 'llama3.2:latest',
     cloud_model: 'gpt-4o-mini',
   },
-  stt: { whisper_model_path: '', cleanup_style: 'faithful' },
+  stt: { whisper_model_path: '', cleanup_style: 'raw' },
   hotkeys: {
     show_hide_hotkey: 'Ctrl+Shift+Space',
     dictation_hotkey: 'Ctrl+Space',
@@ -292,7 +295,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       }
       await fetchSttModels();
     } catch (e) {
-      setModelDownloadError(e instanceof Error ? e.message : String(e));
+      setModelDownloadError(describeError(e));
     } finally {
       setDownloadingModel(null);
     }
@@ -308,27 +311,6 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       console.error('Failed to query STT models', err);
     } finally {
       setLoadingSttModels(false);
-    }
-  };
-
-  type SttModelStatus =
-    | { state: 'checking' }
-    | { state: 'ready'; path: string }
-    | { state: 'failed'; message: string };
-  const [sttModelStatus, setSttModelStatus] = useState<SttModelStatus>({ state: 'checking' });
-
-  const checkSttModel = async () => {
-    setSttModelStatus({ state: 'checking' });
-    try {
-      const status = await invoke<SttModelStatus>('ensure_stt_model_ready');
-      setSttModelStatus(status);
-      if (status.state === 'ready') {
-        setSettings((prev) => ({ ...prev, stt: { ...prev.stt, whisper_model_path: status.path } }));
-      }
-      await fetchSttModels();
-    } catch (err) {
-      console.error('Failed to check local Whisper model status', err);
-      setSttModelStatus({ state: 'failed', message: 'Could not reach the backend' });
     }
   };
 
@@ -426,7 +408,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   const handleCheckUpdates = async () => {
     try {
       setCheckingUpdate(true);
-      const info = await invoke<UpdateInfo>('check_for_updates');
+      const info = await invoke<UpdateInfo>('check_for_app_updates');
       setUpdateInfo(info);
     } catch (err) {
       console.error('Update check failed:', err);
@@ -506,9 +488,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         ...prev,
         vault: { ...prev.vault, directory: picked },
       }));
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to set Vault Directory Location', err);
-      setVaultError(err?.message || "Couldn't use that folder — choose another.");
+      setVaultError(describeError(err, "Couldn't use that folder — choose another."));
     } finally {
       setVaultBusy(false);
     }
@@ -525,8 +507,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             ...(loaded.stt || {}),
             cleanup_style:
               loaded.stt?.cleanup_style ||
-              (loaded.stt as any)?.cleanupStyle ||
-              'faithful',
+              loaded.stt?.cleanupStyle ||
+              'raw',
           },
           clipboard: {
             ...DEFAULT_SETTINGS.clipboard!,
@@ -549,19 +531,19 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             ...(loaded.language || {}),
             spoken_languages:
               loaded.language?.spoken_languages ||
-              (loaded.language as any)?.spokenLanguages ||
+              loaded.language?.spokenLanguages ||
               DEFAULT_LANGUAGE_SETTINGS.spoken_languages,
             primary_dictation_language:
               loaded.language?.primary_dictation_language ||
-              (loaded.language as any)?.primaryDictationLanguage ||
+              loaded.language?.primaryDictationLanguage ||
               DEFAULT_LANGUAGE_SETTINGS.primary_dictation_language,
             notes_language:
               loaded.language?.notes_language ||
-              (loaded.language as any)?.notesLanguage ||
+              loaded.language?.notesLanguage ||
               DEFAULT_LANGUAGE_SETTINGS.notes_language,
             output_script:
               loaded.language?.output_script ||
-              (loaded.language as any)?.outputScript ||
+              loaded.language?.outputScript ||
               DEFAULT_LANGUAGE_SETTINGS.output_script,
           },
         });
@@ -590,12 +572,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     if (!loading && activeSection === 'general') {
       loadVaultLocation();
     }
+    if (!loading && activeSection === 'dictation') {
+      loadAudioDevices();
+    }
     if (!loading && activeSection === 'advanced') {
       if (settings.provider.active_provider === 'ollama') {
         checkLocalLlm();
         fetchOllamaModels();
       }
-      checkSttModel();
       fetchSttModels();
     }
     if (!loading && (activeSection === 'about' || activeSection === 'privacy')) {
@@ -612,22 +596,22 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     try {
       await invoke('update_hotkeys', { hotkeys: updatedHotkeys });
       setError('');
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to apply hotkey', err);
-      setError(err?.message || 'Failed to apply hotkey — it may already be in use by another app');
+      setError(describeError(err, 'Failed to apply hotkey — it may already be in use by another app'));
     }
   };
 
 
 
-  const handleSaveDirect = async () => {
+  const handleSaveDirect = async (next: AppSettings = settings) => {
     try {
-      await invoke('save_settings', { settings });
+      await invoke('save_settings', { settings: next });
       setSaved(true);
       setError('');
       setTimeout(() => setSaved(false), 2000);
       fetchSttModels();
-      if (settings.provider.active_provider === 'ollama') {
+      if (next.provider.active_provider === 'ollama') {
         fetchOllamaModels();
       }
     } catch (err) {
@@ -643,7 +627,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
 
   // Find default or active microphone
   const defaultDevice = audioDevices.find((d) => d.is_default) || audioDevices[0];
-  const activeDeviceName = settings.audio_input?.selected_device || defaultDevice?.name || 'Default Microphone Array';
+  const activeDeviceName = settings.audio_input?.selected_device || defaultDevice?.name || 'System default';
 
   if (loading) {
     return (
@@ -924,7 +908,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                     <div>
                       <p className="text-xs font-semibold text-foreground">AI Cleanup & Transcription Style</p>
                       <p className="text-[11px] text-muted-foreground">
-                        Automated text refinement applied directly after speech-to-text
+                        Off (Raw) by default. Any other style sends each dictation to your selected AI
+                        provider and can add up to 5 seconds before the text lands.
                       </p>
                     </div>
                   </div>
@@ -949,9 +934,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
                   {[
                     {
+                      id: 'raw',
+                      name: 'Raw',
+                      tag: 'Default',
+                      desc: 'No AI rewrite. Text as transcribed, with only the built-in filler and dictionary fixes.',
+                    },
+                    {
                       id: 'faithful',
                       name: 'Faithful',
-                      tag: 'Default',
                       desc: 'Punctuation, capitalization & filler removal. Your words stay 100% untouched.',
                     },
                     {
@@ -969,13 +959,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                       name: 'Concise',
                       desc: 'Removes redundancy & condenses text into tight, punchy executive points.',
                     },
-                    {
-                      id: 'raw',
-                      name: 'Raw',
-                      desc: 'Direct verbatim Whisper output. No AI rewrites, no disfluency filtering.',
-                    },
                   ].map((item) => {
-                    const currentStyle = settings.stt?.cleanup_style || settings.stt?.cleanupStyle || 'faithful';
+                    const currentStyle = settings.stt?.cleanup_style || settings.stt?.cleanupStyle || 'raw';
                     const isSelected = currentStyle === item.id;
                     return (
                       <button
@@ -986,8 +971,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                             ...settings,
                             stt: {
                               ...settings.stt,
-                              cleanup_style: item.id as any,
-                              cleanupStyle: item.id as any,
+                              cleanup_style: item.id as CleanupStyle,
+                              cleanupStyle: item.id as CleanupStyle,
                             },
                           };
                           setSettings(updated);
@@ -1908,7 +1893,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                         const dir = vaultLocation?.path;
                         if (dir) {
                           try {
-                            await invoke('open_vault_in_explorer');
+                            await invoke('open_vault_folder');
                           } catch {
                             alert(`Your vault is stored at: ${dir}`);
                           }

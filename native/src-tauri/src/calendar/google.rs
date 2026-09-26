@@ -43,6 +43,9 @@ pub enum CalendarApiError {
 
     #[error("this account needs to be reconnected: {0}")]
     Reauthorize(String),
+
+    #[error("the fetched events could not be saved on this computer: {0}")]
+    Storage(String),
 }
 
 /// A calendar the account can read.

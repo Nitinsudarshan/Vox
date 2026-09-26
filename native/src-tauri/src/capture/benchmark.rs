@@ -115,7 +115,7 @@ pub struct CleanupResult {
 }
 
 fn default_prod_cleanup_style() -> String {
-    "faithful".to_string()
+    CleanupStyle::default().as_str().to_string()
 }
 
 /// Detailed timing breakdown for a single model's execution.
@@ -933,8 +933,12 @@ pub async fn execute_benchmark_run(
 
     // Production E2E is only honest if the production style actually ran, so
     // it is always part of the run even when not selected for comparison.
+    // Unset means "what production does", which is the user's own setting.
     let production_style = CleanupStyle::from_setting(
-        request.production_cleanup_style.as_deref().unwrap_or("faithful"),
+        request
+            .production_cleanup_style
+            .as_deref()
+            .unwrap_or(&settings.stt.cleanup_style),
     );
     if !cleanup_styles.contains(&production_style) {
         cleanup_styles.push(production_style);

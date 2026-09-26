@@ -19,6 +19,7 @@ import {
 import { MainTabType, VaultFile, Scribble } from '../../types';
 import { FileDetailModal } from './FileDetailModal';
 import { ConfirmationModal } from '../common/ConfirmationModal';
+import { describeError } from '@/lib/errors';
 
 interface FilesPageProps {
   onNavigateTab?: (tab: MainTabType) => void;
@@ -41,23 +42,29 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
   useEffect(() => {
     loadFiles();
 
+    // `listen` resolves asynchronously, so the page can unmount before it
+    // does. Without the `disposed` check that listener was never removed, and
+    // coming back to Files added a second one — importing each dropped file
+    // twice.
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     import('@tauri-apps/api/event')
-      .then(({ listen }) => {
-        listen<any>('tauri://drag-drop', (event) => {
-          if (event.payload?.paths && Array.isArray(event.payload.paths)) {
-            for (const path of event.payload.paths) {
-              handleImportPath(path);
-            }
+      .then(({ listen }) =>
+        listen<{ paths?: string[] }>('tauri://drag-drop', (event) => {
+          for (const path of event.payload?.paths ?? []) {
+            handleImportPath(path);
           }
-        }).then((fn) => {
-          unlisten = fn;
-        });
+        }),
+      )
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
       })
       .catch(() => {});
 
     return () => {
-      if (unlisten) unlisten();
+      disposed = true;
+      unlisten?.();
     };
   }, []);
 
@@ -89,9 +96,9 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       const imported = await invoke<VaultFile>('import_vault_file', { sourcePath });
       setSuccessBanner(`Successfully imported ${imported.original_filename} into Vault (original file left untouched).`);
       await loadFiles();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to import file:', err);
-      setErrorBanner(`Import failed: ${err?.message || err}`);
+      setErrorBanner(`Import failed: ${describeError(err, 'unknown error')}`);
     } finally {
       setImporting(false);
     }
@@ -109,7 +116,8 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
 
     setImporting(true);
     try {
-      const rawPath = (file as any).path as string | undefined;
+      // The Tauri webview adds the absolute path to a dropped File.
+      const rawPath = (file as File & { path?: string }).path;
 
       // 1. Try importing by absolute source path if available
       if (rawPath && (rawPath.includes(':\\') || rawPath.startsWith('/'))) {
@@ -134,9 +142,9 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
 
       setSuccessBanner(`Successfully imported ${imported.original_filename} into Vault (original file left untouched).`);
       await loadFiles();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to import file object:', err);
-      setErrorBanner(`Import failed: ${err?.message || err}`);
+      setErrorBanner(`Import failed: ${describeError(err, 'unknown error')}`);
     } finally {
       setImporting(false);
     }
@@ -209,8 +217,8 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       setFiles((prev) => prev.map((f) => (f.id === id ? updated : f)));
       if (selectedFile?.id === id) setSelectedFile(updated);
       setSuccessBanner(`Summary generated for ${updated.original_filename}.`);
-    } catch (err: any) {
-      setErrorBanner(`Summarize failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Summarize failed: ${describeError(err, 'unknown error')}`);
     }
   };
 
@@ -220,8 +228,8 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       setFiles((prev) => prev.map((f) => (f.id === id ? updated : f)));
       if (selectedFile?.id === id) setSelectedFile(updated);
       setSuccessBanner(`Analysis complete for ${updated.original_filename}.`);
-    } catch (err: any) {
-      setErrorBanner(`Analyse failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Analyse failed: ${describeError(err, 'unknown error')}`);
     }
   };
 
@@ -231,8 +239,8 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       setSuccessBanner(`Created new Scribble "${scribble.title}" linked to file.`);
       if (onNavigateTab) onNavigateTab('scribble');
       return scribble;
-    } catch (err: any) {
-      setErrorBanner(`Create Scribble failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Create Scribble failed: ${describeError(err, 'unknown error')}`);
     }
   };
 
@@ -242,8 +250,8 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       setFiles((prev) => prev.map((f) => (f.id === id ? updated : f)));
       if (selectedFile?.id === id) setSelectedFile(updated);
       setSuccessBanner(`Re-analyzed ${updated.original_filename}.`);
-    } catch (err: any) {
-      setErrorBanner(`Re-process failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Re-process failed: ${describeError(err, 'unknown error')}`);
     }
   };
 
@@ -252,8 +260,8 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       const updated = await invoke<VaultFile>('update_vault_file_tags', { id, tags, topics, entities });
       setFiles((prev) => prev.map((f) => (f.id === id ? updated : f)));
       if (selectedFile?.id === id) setSelectedFile(updated);
-    } catch (err: any) {
-      setErrorBanner(`Update tags failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Update tags failed: ${describeError(err, 'unknown error')}`);
     }
   };
 
@@ -263,16 +271,16 @@ export const FilesPage: React.FC<FilesPageProps> = ({ onNavigateTab }) => {
       setFiles((prev) => prev.filter((f) => f.id !== id));
       if (selectedFile?.id === id) setSelectedFile(null);
       setSuccessBanner(`Moved ${filename} to Vox Trash (original file remains untouched).`);
-    } catch (err: any) {
-      setErrorBanner(`Delete failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Delete failed: ${describeError(err, 'unknown error')}`);
     }
   };
 
   const handleOpenLocation = async (id: string) => {
     try {
       await invoke('open_vault_file_location', { id });
-    } catch (err: any) {
-      setErrorBanner(`Open folder failed: ${err?.message || err}`);
+    } catch (err) {
+      setErrorBanner(`Open folder failed: ${describeError(err, 'unknown error')}`);
     }
   };
 

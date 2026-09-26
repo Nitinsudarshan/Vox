@@ -143,7 +143,7 @@ pub struct CorrectionRecord {
     /// Character offset of the replacement within the note it was applied to.
     pub start: usize,
     pub corrected_at: String,
-    /// Whether the user ticked "Teach Relay this correction". A learned
+    /// Whether the user ticked "Teach Vox this correction". A learned
     /// correction also exists as a `settings::VocabularyCorrection`; this is
     /// the record that *this* note is where it came from.
     pub learned: bool,

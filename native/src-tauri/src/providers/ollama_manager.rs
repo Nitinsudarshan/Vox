@@ -123,22 +123,27 @@ fn spawn_background_pull(host: &str, model: &str) {
         }
 
         tracing::info!("Pulling Ollama model '{}' in the background…", model);
-        let client = reqwest::Client::new();
-        let result = client
-            .post(format!("{}/api/pull", host))
-            .json(&serde_json::json!({ "name": model, "stream": false }))
-            .timeout(Duration::from_secs(20 * 60))
-            .send()
-            .await;
-
-        match result {
-            Ok(res) if res.status().is_success() => {
-                tracing::info!("Ollama model '{}' is ready", model);
-            }
-            Ok(res) => tracing::warn!("Ollama pull for '{}' failed: HTTP {}", model, res.status()),
+        match pull_model(&host, &model).await {
+            Ok(()) => tracing::info!("Ollama model '{}' is ready", model),
             Err(e) => tracing::warn!("Ollama pull for '{}' failed: {}", model, e),
         }
     });
+}
+
+/// Asks Ollama to pull `model` and waits for it to finish.
+pub async fn pull_model(host: &str, model: &str) -> Result<(), String> {
+    let res = reqwest::Client::new()
+        .post(format!("{}/api/pull", host.trim_end_matches('/')))
+        .json(&serde_json::json!({ "name": model, "stream": false }))
+        .timeout(Duration::from_secs(20 * 60))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("HTTP {}", res.status()))
+    }
 }
 
 pub async fn model_is_present(host: &str, model: &str) -> bool {

@@ -582,7 +582,7 @@ live in their own directory (`vault/captures/`) rather than mixed into
 its text-extraction path exactly as they were.
 
 ```text
-.Vox/vault/captures/<capture_id>/
+<vault>/captures/<capture_id>/
   metadata.json                     # VaultFile: normalized markdown + provenance
   original/<Sanitized-Title>.json   # the raw structured payload, written once
 ```
@@ -757,7 +757,7 @@ changed its markup last week, and no fixture can. The manual procedure:
    and that **no artifact appears** in Captures; and the same page twice
    unchanged, then after it changes.
 5. Regenerate the contract fixtures if the payload shape changed:
-   `Vox_UPDATE_CAPTURE_FIXTURES=1 npm test`, then run `cargo test` and
+   `VOX_UPDATE_CAPTURE_FIXTURES=1 npm test`, then run `cargo test` and
    review the diff.
 
 ## 15. Extension points

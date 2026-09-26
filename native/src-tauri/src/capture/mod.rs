@@ -1,3 +1,4 @@
+pub mod dictation;
 pub mod eligibility;
 pub mod streaming_pipeline;
 pub mod glossary;
@@ -168,7 +169,29 @@ struct ActiveStream {
     input_rate: u32,
     generation: u64,
     alive: Arc<AtomicBool>,
-    streaming_sink: Arc<Mutex<Option<std_mpsc::Sender<Vec<f32>>>>>,
+    /// The thread that owns the cpal stream; joined when this is dropped.
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Closing a stream finishes before anything else can open one.
+///
+/// The capture thread owns the cpal stream and drops it when told to stop.
+/// Left detached, that teardown overlapped whatever came next — a new
+/// session opening the device a moment later — and on Windows an input
+/// stream torn down while another was being opened crashed the process with
+/// an access violation (the first Windows CI run found it). Joining here makes
+/// every way a stream ends — keep-warm off, the warm timer, the recorder
+/// being dropped — wait for the old stream to be gone. Teardown takes
+/// milliseconds, and the thread touches none of the locks held around this.
+impl Drop for ActiveStream {
+    fn drop(&mut self) {
+        let _ = self.stop_tx.send(());
+        if let Some(thread) = self.thread.take() {
+            if thread.thread().id() != std::thread::current().id() {
+                let _ = thread.join();
+            }
+        }
+    }
 }
 
 struct AliveGuard(Arc<AtomicBool>);
@@ -207,14 +230,6 @@ impl AudioRecorder {
     pub fn is_stream_warm(&self) -> bool {
         let guard = self.inner.lock_or_recover();
         guard.active_session.is_none() && guard.active_stream.is_some()
-    }
-
-    /// Attaches or detaches a streaming PCM sink that receives live mono audio chunks.
-    pub fn set_streaming_sink(&self, sink: Option<std_mpsc::Sender<Vec<f32>>>) {
-        let inner = self.inner.lock_or_recover();
-        if let Some(ref stream) = inner.active_stream {
-            *stream.streaming_sink.lock_or_recover() = sink;
-        }
     }
 
     /// The hardware input rate of the currently active stream.
@@ -258,7 +273,6 @@ impl AudioRecorder {
             if stream.alive.load(Ordering::SeqCst) {
                 stream.samples.lock_or_recover().clear();
                 *stream.detection.lock_or_recover() = AudioDetectionState::default();
-                *stream.streaming_sink.lock_or_recover() = None;
                 *stream.app_handle.lock_or_recover() = app.clone();
                 stream.generation = current_gen;
                 stream.is_recording.store(true, Ordering::SeqCst);
@@ -276,9 +290,8 @@ impl AudioRecorder {
             let detection = Arc::new(Mutex::new(AudioDetectionState::default()));
             let app_handle_store = Arc::new(Mutex::new(app));
             let alive = Arc::new(AtomicBool::new(true));
-            let streaming_sink = Arc::new(Mutex::new(None));
 
-            spawn_warm_capture_thread(
+            let thread = spawn_warm_capture_thread(
                 stop_rx,
                 init_tx,
                 is_recording.clone(),
@@ -286,7 +299,6 @@ impl AudioRecorder {
                 detection.clone(),
                 app_handle_store.clone(),
                 alive.clone(),
-                streaming_sink.clone(),
             );
 
             let input_rate = match init_rx.recv_timeout(Duration::from_secs(10)) {
@@ -304,7 +316,7 @@ impl AudioRecorder {
                 input_rate,
                 generation: current_gen,
                 alive,
-                streaming_sink,
+                thread: Some(thread),
             });
         }
 
@@ -334,7 +346,6 @@ impl AudioRecorder {
 
             let (samples, detection, rate, stream_gen) = if let Some(ref mut stream) = inner.active_stream {
                 stream.is_recording.store(false, Ordering::SeqCst);
-                *stream.streaming_sink.lock_or_recover() = None;
                 let s = stream.samples.lock_or_recover().split_off(0);
                 let d = std::mem::take(&mut *stream.detection.lock_or_recover());
                 (s, d, stream.input_rate, stream.generation)
@@ -349,8 +360,9 @@ impl AudioRecorder {
                     tokio::time::sleep(duration).await;
                     recorder_clone.close_warm_stream_if_idle(stream_gen);
                 });
-            } else if let Some(stream) = inner.active_stream.take() {
-                let _ = stream.stop_tx.send(());
+            } else {
+                // Dropping it stops the stream and waits for the teardown.
+                inner.active_stream = None;
             }
 
             (session, samples, detection, rate)
@@ -359,21 +371,33 @@ impl AudioRecorder {
         let duration = session.start_time.elapsed().as_secs_f32();
         let t_thread_done = std::time::Instant::now();
 
-        let mono_16k = resample_to_16k_mono(&session_samples, input_rate);
-        let t_resampled = std::time::Instant::now();
+        // Resampling, VAD and the WAV write are CPU and disk work on a
+        // recording that can be minutes long. They run on the blocking pool so
+        // the async runtime — which is also driving the hotkey watchdog and
+        // every IPC call — never stalls behind them.
+        let wav_path = session.file_path.clone();
+        let frames_above_threshold = session_detection.frames_above_threshold;
+        let (final_samples, vad_result, had_audio, t_resampled, t_vad_done, t_wav_done) =
+            tokio::task::spawn_blocking(move || -> Result<_, CaptureError> {
+                let mono_16k = resample_to_16k_mono(&session_samples, input_rate);
+                let t_resampled = std::time::Instant::now();
 
-        let vad_config = VadConfig::default();
-        let (processed_samples, vad_result) = vad_config.process(&mono_16k, TARGET_SAMPLE_RATE);
-        let t_vad_done = std::time::Instant::now();
+                let vad_config = VadConfig::default();
+                let (processed_samples, vad_result) = vad_config.process(&mono_16k, TARGET_SAMPLE_RATE);
+                let t_vad_done = std::time::Instant::now();
 
-        let min_frames_above = (input_rate as u64 * AUDIO_DETECTED_MIN_DURATION_MS / 1000) as u32;
-        let raw_had_audio = session_detection.frames_above_threshold >= min_frames_above;
+                let min_frames_above = (input_rate as u64 * AUDIO_DETECTED_MIN_DURATION_MS / 1000) as u32;
+                let raw_had_audio = frames_above_threshold >= min_frames_above;
 
-        let had_audio = raw_had_audio && vad_result.speech_detected;
-        let final_samples = if had_audio { processed_samples } else { Vec::new() };
+                let had_audio = raw_had_audio && vad_result.speech_detected;
+                let final_samples = if had_audio { processed_samples } else { Vec::new() };
 
-        write_wav(&session.file_path, if final_samples.is_empty() { &mono_16k } else { &final_samples })?;
-        let t_wav_done = std::time::Instant::now();
+                write_wav(&wav_path, if final_samples.is_empty() { &mono_16k } else { &final_samples })?;
+                let t_wav_done = std::time::Instant::now();
+                Ok((final_samples, vad_result, had_audio, t_resampled, t_vad_done, t_wav_done))
+            })
+            .await
+            .map_err(|e| CaptureError::DeviceError(format!("audio post-processing task failed: {e}")))??;
 
         let stats = AudioStats::compute(&final_samples, TARGET_SAMPLE_RATE, 1);
         tracing::info!(
@@ -415,10 +439,9 @@ impl AudioRecorder {
         if inner.active_session.is_none() {
             if let Some(ref stream) = inner.active_stream {
                 if stream.generation == target_gen {
-                    if let Some(stream) = inner.active_stream.take() {
-                        let _ = stream.stop_tx.send(());
-                        tracing::info!("[AudioRecorder] Warm idle stream closed after timeout (gen {})", target_gen);
-                    }
+                    // Dropping it stops the stream and waits for the teardown.
+                    inner.active_stream = None;
+                    tracing::info!("[AudioRecorder] Warm idle stream closed after timeout (gen {})", target_gen);
                 }
             }
         }
@@ -434,12 +457,11 @@ fn spawn_warm_capture_thread(
     detection: Arc<Mutex<AudioDetectionState>>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     alive: Arc<AtomicBool>,
-    streaming_sink: Arc<Mutex<Option<std_mpsc::Sender<Vec<f32>>>>>,
-) {
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let _alive_guard = AliveGuard(alive.clone());
 
-        let host = cpal::default_host();
+        let host = device::host();
         let device = match device::open_preferred(&host) {
             Some(d) => d,
             None => {
@@ -470,7 +492,6 @@ fn spawn_warm_capture_thread(
                 let app_ref = app_handle.clone();
                 let emit_ref = last_emit.clone();
                 let level_ref = smoothed_level.clone();
-                let sink_ref = streaming_sink.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _| {
@@ -478,7 +499,7 @@ fn spawn_warm_capture_thread(
                             let app_guard = app_ref.lock_or_recover();
                             push_mono_with_level(
                                 &samps, data, channels, |s| s, &app_guard, &emit_ref,
-                                &level_ref, &det, sample_rate, &sink_ref,
+                                &level_ref, &det, sample_rate,
                             );
                         }
                     },
@@ -493,7 +514,6 @@ fn spawn_warm_capture_thread(
                 let app_ref = app_handle.clone();
                 let emit_ref = last_emit.clone();
                 let level_ref = smoothed_level.clone();
-                let sink_ref = streaming_sink.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[i16], _| {
@@ -509,7 +529,6 @@ fn spawn_warm_capture_thread(
                                 &level_ref,
                                 &det,
                                 sample_rate,
-                                &sink_ref,
                             );
                         }
                     },
@@ -524,7 +543,6 @@ fn spawn_warm_capture_thread(
                 let app_ref = app_handle.clone();
                 let emit_ref = last_emit.clone();
                 let level_ref = smoothed_level.clone();
-                let sink_ref = streaming_sink.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[u16], _| {
@@ -540,7 +558,6 @@ fn spawn_warm_capture_thread(
                                 &level_ref,
                                 &det,
                                 sample_rate,
-                                &sink_ref,
                             );
                         }
                     },
@@ -570,8 +587,12 @@ fn spawn_warm_capture_thread(
         let _ = init_tx.send(Ok(sample_rate));
 
         let _ = stop_rx.recv();
+
+        // Stopped before it is released: cpal drops a playing client without
+        // stopping it.
+        let _ = stream.pause();
         drop(stream);
-    });
+    })
 }
 
 fn compute_rms_f32(samples: &[f32]) -> f32 {
@@ -600,7 +621,6 @@ fn push_mono_with_level<T: Copy>(
     smoothed_level: &Arc<Mutex<f32>>,
     detection: &Arc<Mutex<AudioDetectionState>>,
     sample_rate: u32,
-    streaming_sink: &Arc<Mutex<Option<std_mpsc::Sender<Vec<f32>>>>>,
 ) {
     let mut chunk = Vec::with_capacity(data.len() / channels.max(1));
     if channels > 1 {
@@ -631,10 +651,6 @@ fn push_mono_with_level<T: Copy>(
             *last_guard = std::time::Instant::now();
             let _ = a.emit("capture-level", serde_json::json!({ "level": smoothed }));
         }
-    }
-
-    if let Some(ref tx) = *streaming_sink.lock_or_recover() {
-        let _ = tx.send(chunk.clone());
     }
 
     let mut guard = buf.lock_or_recover();

@@ -38,6 +38,7 @@ import {
 } from '@/types';
 import { SttDiagnosticsView } from '../settings/SttDiagnosticsView';
 import { getParakeetStatus, ParakeetStatus } from '@/lib/speechModels';
+import { describeError } from '@/lib/errors';
 
 interface DiagnosticsPageProps {
   onNavigateTab?: (tab: MainTabType) => void;
@@ -204,12 +205,12 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
         prompt: testPrompt || null,
       });
       setLlmTestResult(res);
-    } catch (err: any) {
+    } catch (err) {
       setLlmTestResult({
         success: false,
         latency_ms: 0,
         model: modelToTest,
-        error: err?.message || String(err),
+        error: describeError(err, String(err)),
       });
     } finally {
       setRunningLlmTest(false);
@@ -222,23 +223,23 @@ export const DiagnosticsPage: React.FC<DiagnosticsPageProps> = ({ onNavigateTab 
     try {
       const res = await invoke<SttModelTestResult>('test_stt_model', { modelPath: path });
       setSttTestResult(res);
-    } catch (err: any) {
+    } catch (err) {
       setSttTestResult({
         success: false,
         path,
         size_bytes: 0,
         latency_ms: 0,
-        error: err?.message || String(err),
+        error: describeError(err, String(err)),
       });
     } finally {
       setTestingSttModel(null);
     }
   };
 
-  const handleSaveSettingsDirect = async () => {
-    if (!settings) return;
+  const handleSaveSettingsDirect = async (next: AppSettings | null = settings) => {
+    if (!next) return;
     try {
-      await invoke('save_settings', { settings });
+      await invoke('save_settings', { settings: next });
       await fetchSttModels();
     } catch (e) {
       console.error('Failed to save settings from diagnostics:', e);

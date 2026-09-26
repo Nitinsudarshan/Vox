@@ -31,14 +31,20 @@ use serde::{Deserialize, Serialize};
 use crate::pipeline::analysis::PromptId;
 
 /// How far the rewrite may go.
+///
+/// `Raw` is the default, and an unrecognised setting reads as `Raw` too. The
+/// rewrite costs a model call before the text is usable, may change words,
+/// and — with a cloud provider selected — sends what the user dictated off the
+/// machine. Each of those is something the user turns on, never something
+/// they discover has been happening.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupStyle {
-    /// Verbatim transcript. Skips any LLM pass completely.
-    Raw,
-    /// Disfluencies and false starts only. The default, and the only style
-    /// that cannot change what was meant.
+    /// Verbatim transcript. Skips any LLM pass completely. The default.
     #[default]
+    Raw,
+    /// Disfluencies and false starts only — the narrowest rewrite, and the
+    /// only style that cannot change what was meant.
     Faithful,
     /// Also fixes grammar and run-on sentences.
     Clean,
@@ -52,11 +58,11 @@ pub enum CleanupStyle {
 impl CleanupStyle {
     pub fn from_setting(raw: &str) -> Self {
         match raw.trim().to_lowercase().as_str() {
-            "raw" => Self::Raw,
+            "faithful" => Self::Faithful,
             "clean" => Self::Clean,
             "professional" | "polished" => Self::Professional,
             "concise" => Self::Concise,
-            _ => Self::Faithful,
+            _ => Self::Raw,
         }
     }
 
@@ -455,9 +461,10 @@ mod tests {
     }
 
     #[test]
-    fn faithful_is_the_default_and_the_narrowest() {
-        assert_eq!(CleanupStyle::default(), CleanupStyle::Faithful);
-        assert_eq!(CleanupStyle::from_setting("nonsense"), CleanupStyle::Faithful);
+    fn raw_is_the_default_and_unknown_values_fail_closed() {
+        assert_eq!(CleanupStyle::default(), CleanupStyle::Raw);
+        assert_eq!(CleanupStyle::from_setting(""), CleanupStyle::Raw);
+        assert_eq!(CleanupStyle::from_setting("nonsense"), CleanupStyle::Raw);
         assert_eq!(CleanupStyle::from_setting("CONCISE"), CleanupStyle::Concise);
 
         // The narrowest style must not license the changes the wider ones do.
@@ -521,6 +528,6 @@ mod tests {
         assert_eq!(CleanupStyle::from_setting("professional"), CleanupStyle::Professional);
         assert_eq!(CleanupStyle::from_setting("polished"), CleanupStyle::Professional);
         assert_eq!(CleanupStyle::from_setting("concise"), CleanupStyle::Concise);
-        assert_eq!(CleanupStyle::from_setting("unknown"), CleanupStyle::Faithful);
+        assert_eq!(CleanupStyle::from_setting("unknown"), CleanupStyle::Raw);
     }
 }

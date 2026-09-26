@@ -4,6 +4,7 @@ import { AlertTriangle, Gauge } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import type { MeetingDiagnostics, SegmentDiagnostics } from '@/types/meetings';
+import { describeError } from '@/lib/errors';
 
 interface MeetingDiagnosticsPanelProps {
   meetingId: string;
@@ -71,7 +72,7 @@ export const MeetingDiagnosticsPanel: React.FC<MeetingDiagnosticsPanelProps> = (
       });
       setSegments(loaded);
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error));
+      setLoadError(describeError(error));
     } finally {
       setLoading(false);
     }

@@ -11,7 +11,7 @@ each file is for. `rules/` is the coding-convention layer underneath it.
 
 | Path | What it is |
 |---|---|
-| `native/src-tauri/` | Rust backend: capture, STT, vault, triggers, MCP wiring. |
+| `native/src-tauri/` | Rust backend: capture, STT and dictation, meetings, calendar, vault, providers. |
 | `native/src/` | React frontend rendered inside the Tauri window. |
 | `native/browser-extension/` | Browser extension for structured web and AI conversation capture into the vault. |
 
@@ -42,8 +42,8 @@ All paths are relative to `rules/`.
 
 ## Verifying a change
 
-CI runs these on every push and pull request (`.github/workflows/ci.yml`);
-run them locally before pushing:
+CI runs these on every push and pull request (`.github/workflows/ci.yml`),
+the Rust checks on both Linux and Windows; run them locally before pushing:
 
 ```bash
 # Rust backend

@@ -13,6 +13,7 @@ import {
   onSpeechModelDownload,
 } from '@/lib/speechModels';
 import type { SpeechModel, SpeechModelCatalogue } from '@/types/models';
+import { describeError } from '@/lib/errors';
 
 interface MeetingModelGateProps {
   /** Opens Settings › Speech, for the user who wants the full catalogue. */
@@ -183,7 +184,7 @@ export const MeetingModelGate: React.FC<MeetingModelGateProps> = ({
                     setProgress({ id: recommended.id, fraction: null });
                     void downloadSpeechModel(recommended.id).catch((err) => {
                       setProgress(null);
-                      setError(err instanceof Error ? err.message : String(err));
+                      setError(describeError(err));
                     });
                   }}
                 >

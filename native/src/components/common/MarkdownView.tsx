@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { DiagramViewport } from '@/components/shared/DiagramViewport';
+import { describeError } from '@/lib/errors';
 
 interface MarkdownViewProps {
   content: string;
@@ -153,10 +154,10 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
         if (isMounted) {
           setSvgContent(svg);
         }
-      } catch (err: any) {
+      } catch (err) {
         if (isMounted) {
           console.warn('[MermaidBlock] Render error:', err);
-          setError(err?.message || 'Could not parse Mermaid diagram syntax.');
+          setError(describeError(err, 'Could not parse Mermaid diagram syntax.'));
         }
       }
     };

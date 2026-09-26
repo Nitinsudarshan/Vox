@@ -193,6 +193,15 @@ pub fn set_account_calendars(
 /// needs reconnecting" and "the calendar is broken".
 #[tauri::command]
 pub async fn sync_calendars(app: AppHandle) -> Result<Vec<CalendarAccount>, CommandError> {
+    // One sync at a time. The background timer and a manual refresh used to
+    // overlap, each saving the account list it had loaded before its network
+    // calls.
+    static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Ok(_running) = SYNC.try_lock() else {
+        let state = app.state::<AppState>();
+        return Ok(calendar_store(&state).load_accounts());
+    };
+
     let (client_id, client_secret) = google_credentials();
     let accounts = {
         let state = app.state::<AppState>();
@@ -229,10 +238,28 @@ pub async fn sync_calendars(app: AppHandle) -> Result<Vec<CalendarAccount>, Comm
         }
     }
 
+    // Save onto the account list as it is now, changing only what a sync
+    // owns. An account connected, disconnected or toggled while the network
+    // calls ran keeps that change, and a disconnected account's events do not
+    // come back with it.
     let state = app.state::<AppState>();
-    calendar_store(&state).save_accounts(&updated)?;
+    let store = calendar_store(&state);
+    let mut current = store.load_accounts();
+    for account in current.iter_mut() {
+        if let Some(synced) = updated.iter().find(|a| a.email.eq_ignore_ascii_case(&account.email)) {
+            account.last_synced_at = synced.last_synced_at.clone();
+            account.last_error = synced.last_error.clone();
+        }
+    }
+    for gone in updated
+        .iter()
+        .filter(|a| !current.iter().any(|c| c.email.eq_ignore_ascii_case(&a.email)))
+    {
+        let _ = store.replace_account_events(&gone.email, Vec::new());
+    }
+    store.save_accounts(&current)?;
     stamp_recurring_series(&state);
-    Ok(updated)
+    Ok(current)
 }
 
 /// Records which recordings belong to which recurring meeting.
@@ -265,6 +292,12 @@ fn stamp_recurring_series(state: &State<'_, AppState>) {
         let Some(meeting) = meetings.iter().find(|m| m.id == assignment.meeting_id) else {
             continue;
         };
+        // A membership the user set by hand wins, and so does taking a
+        // recording out of its series: a sync must not move it back, nor
+        // recreate a series the user deleted for a recording they removed.
+        if meeting.series_id.is_some() || meeting.series_opted_out {
+            continue;
+        }
 
         if let Err(err) = state.meeting_store.upsert_series(MeetingSeries {
             id: assignment.series_id.clone(),
@@ -277,15 +310,9 @@ fn stamp_recurring_series(state: &State<'_, AppState>) {
             continue;
         }
 
-        // A membership the user set by hand wins: they may have moved this
-        // recording into a series Google split, and a sync must not move it
-        // back out.
-        if meeting.series_id.is_some() {
-            continue;
-        }
         if let Err(err) = state
             .meeting_store
-            .set_meeting_series(&meeting.id, Some(assignment.series_id))
+            .assign_series_from_calendar(&meeting.id, &assignment.series_id)
         {
             tracing::warn!("could not put {} in its series: {}", meeting.id, err);
         }
@@ -338,7 +365,11 @@ async fn sync_one(
 
     let count = events.len();
     let state = app.state::<AppState>();
-    let _ = calendar_store(&state).replace_account_events(&account.email, events);
+    // A cache that could not be written is a failed sync: the agenda and
+    // reminders would run on stale events while Settings said "synced".
+    calendar_store(&state)
+        .replace_account_events(&account.email, events)
+        .map_err(|e| CalendarApiError::Storage(e.to_string()))?;
     Ok(count)
 }
 

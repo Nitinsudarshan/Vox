@@ -382,15 +382,6 @@ export interface KanbanCard {
   captured_at?: string | null;
 }
 
-export interface TriggerConfig {
-  id: string;
-  phrase: string;
-  action_type: 'mcp_calendar' | 'local_reminder' | 'mcp_notion' | 'mcp_gdrive';
-  target_tool: string;
-  parameters: Record<string, unknown>;
-  enabled: boolean;
-}
-
 /** Every model provider Vox can send a prompt to. */
 export type ProviderSlug =
   | 'ollama'
@@ -402,6 +393,12 @@ export type ProviderSlug =
   /** Any server speaking the OpenAI chat-completions API, at `custom_openai_endpoint`. */
   | 'custom_openai';
 
+/**
+ * Stands in for a provider API key the backend holds in the OS credential
+ * store. Mirrors `providers::secrets::STORED_KEY_PLACEHOLDER`.
+ */
+export const STORED_KEY_PLACEHOLDER = '__vox_stored_key__';
+
 export interface ProviderSettings {
   active_provider: ProviderSlug;
   ollama_host: string;
@@ -412,7 +409,11 @@ export interface ProviderSettings {
    */
   cloud_api_key?: string;
   cloud_model?: string;
-  /** API keys keyed by provider slug, so switching providers does not lose one. */
+  /**
+   * API keys keyed by provider slug, so switching providers does not lose one.
+   * The backend never sends a real key: a stored one arrives as
+   * `STORED_KEY_PLACEHOLDER`, and sending that back unchanged keeps it.
+   */
   provider_keys?: Record<string, string>;
   /** Base URL for `custom_openai`, e.g. `http://localhost:1234/v1`. */
   custom_openai_endpoint?: string | null;
@@ -449,17 +450,9 @@ export interface SttSettings {
    */
   preset?: '' | 'fast' | 'balanced' | 'quality';
   sttPreset?: '' | 'fast' | 'balanced' | 'quality';
-  /**
-   * Whether dictated text is offered to the Tier 2 cleanup layer.
-   *
-   * Off by default. The layer costs a model call and may change words, so it
-   * is something the user turns on rather than something they discover has
-   * been happening.
-   */
-  text_transform?: boolean;
-  textTransform?: boolean;
-  /** How far that cleanup may go. Empty means `faithful`, the only style that
-   *  cannot change meaning. */
+  /** Whether, and how far, dictated text is rewritten by the AI cleanup
+   *  layer. Empty (the default) means `raw`: no model is asked. Any other
+   *  style sends the dictation to the configured provider. */
   cleanup_style?: '' | 'raw' | 'faithful' | 'clean' | 'polished' | 'professional' | 'concise';
   cleanupStyle?: '' | 'raw' | 'faithful' | 'clean' | 'polished' | 'professional' | 'concise';
   enableInitialPrompt?: boolean;
@@ -1040,7 +1033,7 @@ export interface RetrievedItem {
   provenance: RetrievalProvenance;
   topics: string[];
   explainability?: Explainability | null;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RetrievalResult {
@@ -1066,7 +1059,7 @@ export interface RelationshipRecord {
   confidence: number;
   created_at: string;
   provenance?: string | null;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export type EntityCategory =
@@ -1131,7 +1124,7 @@ export interface MemoryItem {
   supersedes_id?: string | null;
   created_at: string;
   updated_at: string;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export type ContextPackType =
@@ -1188,11 +1181,11 @@ export interface UniversalAction {
   action_type: ActionType;
   intent?: string | null;
   target: string;
-  parameters: any;
+  parameters: Record<string, unknown>;
   source_context?: string | null;
   requires_confirmation: boolean;
   status: ActionStatus;
-  result?: any;
+  result?: unknown;
   error_message?: string | null;
   provenance?: string | null;
   created_at: string;

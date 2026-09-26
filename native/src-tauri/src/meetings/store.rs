@@ -618,19 +618,43 @@ impl MeetingStore {
 
         for meeting in self.list_meetings().unwrap_or_default() {
             if meeting.series_id.as_deref() == Some(id) {
-                let _ = self.update_meeting(&meeting.id, |record| record.series_id = None);
+                let _ = self.update_meeting(&meeting.id, |record| {
+                    record.series_id = None;
+                    record.series_opted_out = true;
+                });
             }
         }
         Ok(())
     }
 
-    /// Puts one meeting in a series, or takes it out of the one it is in.
+    /// The user's choice: puts one meeting in a series, or takes it out of the
+    /// one it is in. Taking it out is remembered, so a sync does not put it
+    /// back.
     pub fn set_meeting_series(
         &self,
         meeting_id: &str,
         series_id: Option<String>,
     ) -> Result<Meeting, MeetingStoreError> {
-        self.update_meeting(meeting_id, |record| record.series_id = series_id.clone())
+        self.update_meeting(meeting_id, |record| {
+            record.series_opted_out = series_id.is_none();
+            record.series_id = series_id.clone();
+        })
+    }
+
+    /// A sync's assignment from the calendar. Leaves alone a meeting the user
+    /// already placed in a series or took out of one; returns whether it
+    /// changed anything.
+    pub fn assign_series_from_calendar(
+        &self,
+        meeting_id: &str,
+        series_id: &str,
+    ) -> Result<bool, MeetingStoreError> {
+        let meeting = self.load_meeting(meeting_id)?;
+        if meeting.series_id.is_some() || meeting.series_opted_out {
+            return Ok(false);
+        }
+        self.update_meeting(meeting_id, |record| record.series_id = Some(series_id.to_string()))?;
+        Ok(true)
     }
 
     /// Deletes a meeting's entire directory, audio included.
@@ -709,15 +733,27 @@ impl MeetingStore {
             }
             let audio_dir = self.audio_dir(&meeting.id)?;
             let chunks = list_chunks(&audio_dir);
-            let duration = chunks
-                .iter()
-                .filter_map(|path| wav_duration_seconds(path))
-                .sum::<f64>();
+            // A meeting stopped before Vox closed has had its checkpoints
+            // merged into one recording; measure and link that instead.
+            let merged = audio_dir.join(crate::meetings::checkpoint::MERGED_AUDIO_FILE);
+            let merged = merged.exists().then_some(merged);
+            let duration = match &merged {
+                Some(path) if chunks.is_empty() => wav_duration_seconds(path).unwrap_or(0.0),
+                _ => chunks
+                    .iter()
+                    .filter_map(|path| wav_duration_seconds(path))
+                    .sum::<f64>(),
+            };
             let segments = self.load_transcript(&meeting.id).unwrap_or_default();
 
             let id = meeting.id.clone();
             self.update_meeting(&id, |record| {
                 record.state = MeetingState::Completed;
+                if record.audio_path.is_none() {
+                    if let Some(path) = &merged {
+                        record.audio_path = Some(path.to_string_lossy().to_string());
+                    }
+                }
                 // A duration measured from the audio that actually reached
                 // disk, not the clock the dead process was keeping.
                 if duration > 0.0 {
@@ -783,10 +819,10 @@ fn modified_time(path: &Path) -> Option<std::time::SystemTime> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), MeetingStoreError> {
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
-    let tmp = path.with_extension(format!(
-        "tmp{}",
-        std::process::id()
-    ));
+    // Unique per write, not per process: two threads writing the same file
+    // (the live worker and a translation) shared one temp name and could
+    // interleave their bytes before either rename.
+    let tmp = path.with_extension(format!("tmp{}", uuid::Uuid::new_v4().simple()));
     fs::write(&tmp, bytes)?;
     match fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
@@ -1050,6 +1086,71 @@ mod tests {
 
         let recovered = store.load_meeting("meeting-f").unwrap();
         assert!((recovered.duration_seconds - 2.0).abs() < 0.01);
+    }
+
+    /// A quit during a stop's final decode leaves the meeting `Transcribing`
+    /// with its merged recording on disk; recovery completes it and links
+    /// that recording so it can be played and transcribed again.
+    #[test]
+    fn recovery_finishes_a_meeting_left_transcribing_and_links_its_recording() {
+        let vault = temp_vault("recover-transcribing");
+        let store = MeetingStore::new(&vault);
+        let mut meeting = Meeting::new("meeting-t".into(), "Stopped".into(), MeetingSource::Recorded);
+        meeting.state = MeetingState::Transcribing;
+        store.create(&meeting).expect("create");
+        store.save_meeting(&meeting).expect("save");
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let merged = store
+            .audio_dir("meeting-t")
+            .unwrap()
+            .join(crate::meetings::checkpoint::MERGED_AUDIO_FILE);
+        let mut writer = hound::WavWriter::create(&merged, spec).unwrap();
+        for _ in 0..48_000 {
+            writer.write_sample(0i16).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let recovered = store.recover_interrupted().expect("recover");
+
+        assert_eq!(recovered, vec!["meeting-t".to_string()]);
+        let meeting = store.load_meeting("meeting-t").unwrap();
+        assert_eq!(meeting.state, MeetingState::Completed);
+        assert!((meeting.duration_seconds - 3.0).abs() < 0.01);
+        assert_eq!(meeting.audio_path.as_deref(), Some(merged.to_string_lossy().as_ref()));
+    }
+
+    /// Taking a recording out of its series, or deleting the series, is
+    /// remembered: a calendar sync does not put the recording back.
+    #[test]
+    fn a_series_opt_out_survives_the_next_sync() {
+        let vault = temp_vault("series-opt-out");
+        let store = MeetingStore::new(&vault);
+        for id in ["meeting-s1", "meeting-s2", "meeting-s3"] {
+            let meeting = Meeting::new(id.into(), "Standup".into(), MeetingSource::Recorded);
+            store.create(&meeting).expect("create");
+        }
+
+        assert!(store.assign_series_from_calendar("meeting-s1", "google:standup").unwrap());
+        store.set_meeting_series("meeting-s1", None).unwrap();
+        assert!(!store.assign_series_from_calendar("meeting-s1", "google:standup").unwrap());
+        assert_eq!(store.load_meeting("meeting-s1").unwrap().series_id, None);
+
+        store.set_meeting_series("meeting-s2", Some("google:standup".into())).unwrap();
+        store.delete_series("google:standup").unwrap();
+        assert!(!store.assign_series_from_calendar("meeting-s2", "google:standup").unwrap());
+
+        assert!(store.assign_series_from_calendar("meeting-s3", "google:standup").unwrap());
+        assert!(!store.assign_series_from_calendar("meeting-s3", "google:other").unwrap());
+        assert_eq!(
+            store.load_meeting("meeting-s3").unwrap().series_id.as_deref(),
+            Some("google:standup")
+        );
     }
 
     #[test]
