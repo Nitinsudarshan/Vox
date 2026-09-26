@@ -249,8 +249,11 @@ def generate_reports(
                 ])
     print(f"[REPORT] CSV written to {csv_path}")
 
-    # 3. Markdown Report: TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md
-    md_path = REPO_ROOT / "TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md"
+    # 3. Markdown Report: docs/benchmarks/TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md —
+    # under docs/ rather than the repository root, where AGENTS.md asks for no
+    # new markdown files.
+    md_path = REPO_ROOT / "docs" / "benchmarks" / "TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Compute aggregates
     cv_summaries = [s for s in eval_summaries if s["dataset_name"] == "common_voice"]
