@@ -192,19 +192,73 @@ export function getLatestReleaseTag(rootDir = defaultRootDir) {
   }
 }
 
+/**
+ * Human-readable counts for the `**Type**:` line, e.g. "2 features, 1 fix".
+ * Categories with nothing in them are left out entirely.
+ */
+function summarizeCounts(categories) {
+  const parts = [];
+  const push = (count, singular, plural) => {
+    if (count > 0) parts.push(`${count} ${count === 1 ? singular : plural}`);
+  };
+
+  push(categories.breaking.length, 'breaking change', 'breaking changes');
+  push(categories.features.length, 'feature', 'features');
+  push(categories.improvements.length, 'improvement', 'improvements');
+  push(categories.fixes.length, 'fix', 'fixes');
+  push(categories.security.length, 'security change', 'security changes');
+  push(categories.other.length, 'other change', 'other changes');
+
+  return parts.join(', ');
+}
+
+/**
+ * The scopes touched by this release, deduplicated and in first-seen order,
+ * so the generated title names the surfaces rather than the version again.
+ */
+function collectScopes(categories) {
+  const scopes = [];
+  for (const key of ['breaking', 'features', 'improvements', 'fixes', 'security', 'other']) {
+    for (const item of categories[key]) {
+      if (item.scope && !scopes.includes(item.scope)) {
+        scopes.push(item.scope);
+      }
+    }
+  }
+  return scopes;
+}
+
+/**
+ * Renders one release entry in the narrative shape the hand-written history
+ * uses and `parse_changelog_markdown` (native/src-tauri/src/commands/app.rs)
+ * reads: an `### ` title, a `**Type**:` line, then `#### ` category sections
+ * whose bullets are `- **<summary> (<scope>)**: <hash>`. The parser takes the
+ * bold text before the parenthesis as an item's category badge and the
+ * parenthesized value as its domain badge, so the two must stay in that order.
+ */
 export function formatChangelogEntry(version, dateStr, categories) {
   const sections = [];
   sections.push(`## [${version}] - ${dateStr}`);
   sections.push('');
 
+  const scopes = collectScopes(categories);
+  const scopeSuffix = scopes.length > 0 ? ` across ${scopes.join(', ')}` : '';
+  sections.push(`### Vox v${version}${scopeSuffix}`);
+  sections.push('');
+
+  const counts = summarizeCounts(categories);
+  const impact = determineBumpType(categories);
+  sections.push(`**Type**: ${impact} — ${counts || 'internal maintenance and updates'}.`);
+  sections.push('');
+
   function renderCategory(title, items) {
     if (items.length === 0) return;
-    sections.push(`### ${title}`);
+    sections.push(`#### ${title}`);
     sections.push('');
     for (const item of items) {
-      const scopePrefix = item.scope ? `**${item.scope}**: ` : '';
-      const hashSuffix = item.hash ? ` (${item.hash})` : '';
-      sections.push(`- ${scopePrefix}${item.description}${hashSuffix}`);
+      const scopePart = item.scope ? ` (\`${item.scope}\`)` : '';
+      const hash = item.hash ? `\`${item.hash}\`` : 'no commit recorded';
+      sections.push(`- **${item.description}${scopePart}**: ${hash}`);
     }
     sections.push('');
   }
@@ -225,9 +279,9 @@ export function formatChangelogEntry(version, dateStr, categories) {
     if (categories.other.length > 0) {
       renderCategory('Improvements', categories.other);
     } else {
-      sections.push('### Improvements');
+      sections.push('#### Improvements');
       sections.push('');
-      sections.push('- Internal maintenance and updates.');
+      sections.push('- **Internal maintenance and updates**: no commit recorded');
       sections.push('');
     }
   }

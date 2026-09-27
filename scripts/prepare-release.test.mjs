@@ -91,11 +91,41 @@ test('formatChangelogEntry produces structured markdown', () => {
 
   const md = formatChangelogEntry('0.42.0', '2026-09-06', categories);
   assert.match(md, /## \[0\.42\.0\] - 2026-09-06/);
-  assert.match(md, /### Features/);
-  assert.match(md, /\*\*meetings\*\*: add calendar sync/);
-  assert.match(md, /### Fixes/);
-  assert.match(md, /\*\*recorder\*\*: prevent clip/);
-  assert.match(md, /### Improvements/);
+
+  // One `### ` title, which parse_changelog_markdown reads as the entry title,
+  // and a `**Type**:` line naming the release impact and what is in it.
+  assert.match(md, /### Vox v0\.42\.0 across meetings, recorder/);
+  assert.match(md, /\*\*Type\*\*: minor — 1 feature, 1 improvement, 1 fix\./);
+
+  // Category sections are `#### `, so they are not mistaken for the title.
+  assert.match(md, /#### Features/);
+  assert.match(md, /#### Fixes/);
+  assert.match(md, /#### Improvements/);
+  assert.doesNotMatch(md, /^### (Features|Fixes|Improvements)$/m);
+
+  // Bullets are `- **<summary> (<scope>)**: <hash>`; the parser takes the bold
+  // text as the item's category and the parenthesized value as its domain.
+  assert.match(md, /- \*\*add calendar sync \(`meetings`\)\*\*: `abc1234`/);
+  assert.match(md, /- \*\*prevent clip \(`recorder`\)\*\*: `789abcd`/);
+
+  // A commit with no scope keeps its summary and drops the parenthesis.
+  assert.match(md, /- \*\*clean index\*\*: `def5678`/);
+});
+
+test('formatChangelogEntry falls back to a maintenance entry when nothing is categorized', () => {
+  const empty = {
+    breaking: [],
+    features: [],
+    improvements: [],
+    fixes: [],
+    security: [],
+    other: []
+  };
+
+  const md = formatChangelogEntry('0.42.1', '2026-09-06', empty);
+  assert.match(md, /### Vox v0\.42\.1/);
+  assert.match(md, /\*\*Type\*\*: patch — internal maintenance and updates\./);
+  assert.match(md, /- \*\*Internal maintenance and updates\*\*: no commit recorded/);
 });
 
 test('updateManifests atomically updates all 5 manifests', () => {
