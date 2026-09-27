@@ -43,7 +43,7 @@
 //! without putting a refactor in front of a recording.
 //!
 //! No credential lives here. A cloud adapter, when there is one, reads its key
-//! through the keyring path the rest of Vox uses, and the registry has no way
+//! from the OS credential store (`providers::secrets`), and the registry has no way
 //! to express a secret.
 
 use std::path::PathBuf;

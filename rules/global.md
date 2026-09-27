@@ -11,9 +11,9 @@ relevant to the surface you're editing.
 
 Vox is a **Rust + Tauri desktop application for Windows** with a companion
 browser extension for web capture, per `docs/decisions.md`:
-- **`native/src-tauri/`** — the Rust backend: capture, STT, the meeting→Kanban
-  and scribble→structured-output pipelines, the configurable trigger-phrase
-  system, the local vault/LanceDB, MCP wiring, and native Supabase integration.
+- **`native/src-tauri/`** — the Rust backend: capture, STT and dictation,
+  meetings, calendar, web capture, the local vault and knowledge layer, the
+  LLM providers, and native Supabase integration.
 - **`native/src/`** — the React frontend rendered inside the Tauri window
   (Windows desktop, local mode).
 - **`native/browser-extension/`** — companion browser extension for web capture.

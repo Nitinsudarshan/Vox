@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Sidebar as SidebarIcon, ChevronRight } from 'lucide-react';
@@ -49,27 +49,37 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onCloseClick,
   className = '',
 }) => {
-  // Intercept OS-level close events (e.g. Alt+F4) to present confirmation dialog
+  // Intercept OS-level close events (e.g. Alt+F4) to present confirmation dialog.
+  // Registered once: the handler reads the latest `onCloseClick` through a
+  // ref, because the parent passes a new function on every render and each
+  // re-registration could outlive its cleanup while still pending.
+  const onCloseClickRef = useRef(onCloseClick);
+  onCloseClickRef.current = onCloseClick;
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     try {
       const win = getCurrentWindow();
       if (win && typeof win.onCloseRequested === 'function') {
-        void win.onCloseRequested((event) => {
-          event.preventDefault();
-          onCloseClick();
-        }).then((fn) => {
-          unlisten = fn;
-        });
+        void win
+          .onCloseRequested((event) => {
+            event.preventDefault();
+            onCloseClickRef.current();
+          })
+          .then((fn) => {
+            if (disposed) fn();
+            else unlisten = fn;
+          });
       }
     } catch {
       // Browser fallback or mock environment
     }
 
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
-  }, [onCloseClick]);
+  }, []);
 
   const handleHeaderDoubleClick = async (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button, a, input, select')) return;

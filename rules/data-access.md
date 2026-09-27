@@ -6,10 +6,10 @@ globs: "native/src-tauri/**, native/src/**"
 
 # Data Access Rules
 
-Vox has two storage layers (local vault/LanceDB and native cloud sync/diagnostics).
+Vox has two storage layers (the local vault — with LanceDB planned beside it, Decision 6, not yet built — and native cloud sync/diagnostics).
 Keep them clearly separated rather than mixing patterns.
 
-## Local storage (markdown vault + LanceDB) — local-only mode, always available
+## Local storage (markdown vault; LanceDB once built) — local-only mode, always available
 
 - All local vault/LanceDB access goes through `native/src-tauri/src/vault/`
   — never scatter file I/O or LanceDB queries through `pipeline/`,

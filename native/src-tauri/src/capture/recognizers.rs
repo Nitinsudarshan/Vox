@@ -174,7 +174,7 @@ impl SpeechRecognizer for ParakeetRecognizer {
 /// the result with something else.
 ///
 /// There is no variant carrying a credential. A cloud adapter, when there is
-/// one, reads its key through the keyring path the rest of Vox uses.
+/// one, reads its key from the OS credential store (`providers::secrets`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "engine")]
 pub enum RecognizerChoice {

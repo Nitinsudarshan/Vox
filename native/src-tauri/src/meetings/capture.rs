@@ -383,7 +383,7 @@ fn run_capture_loop(
     audio_tx: std_mpsc::SyncSender<MixedAudio>,
     init_tx: std_mpsc::Sender<Result<CaptureBinding, ()>>,
 ) {
-    let host = cpal::default_host();
+    let host = crate::capture::device::host();
 
     // Separate FIFOs so the two streams can be consumed in temporal lockstep.
     let mic_fifo: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::with_capacity(32_000)));

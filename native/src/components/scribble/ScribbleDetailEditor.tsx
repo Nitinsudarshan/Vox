@@ -38,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { ConnectAndMergeModal } from './ConnectAndMergeModal';
 import { ConfirmationModal } from '../common/ConfirmationModal';
 import { MarkdownView } from '../common/MarkdownView';
+import { describeError } from '@/lib/errors';
 
 interface ScribbleDetailEditorProps {
   scribble: Scribble;
@@ -56,6 +57,9 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
   onSelectScribble,
   onScribbleCreated,
 }) => {
+  // A Scribble promoted from a web capture is still a record of what a site
+  // said; it renders the way the capture does (see MarkdownView `untrusted`).
+  const fromExternalSource = scribble.source_metadata?.trust === 'external_untrusted';
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(scribble.title);
   const [content, setContent] = useState(scribble.content);
@@ -170,9 +174,9 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
       const res = await invoke<Scribble>('summarize_scribble', { id: scribble.id });
       onUpdate(res);
       setSummary(res.summary || '');
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to summarize scribble:', err);
-      const msg = typeof err === 'string' ? err : err?.message || 'Failed to generate summary.';
+      const msg = describeError(err, 'Failed to generate summary.');
       setSummaryError(msg);
     } finally {
       setIsSummarizing(false);
@@ -488,7 +492,7 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
             </div>
 
             <div className="text-xs text-foreground leading-relaxed">
-              <MarkdownView content={scribble.summary} />
+              <MarkdownView content={scribble.summary} untrusted={fromExternalSource} />
             </div>
           </div>
         )}
@@ -553,7 +557,7 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
                     !isContentExpanded ? 'max-h-52 overflow-hidden' : ''
                   }`}
                 >
-                  <MarkdownView content={scribble.content} />
+                  <MarkdownView content={scribble.content} untrusted={fromExternalSource} />
                 </div>
 
                 {!isContentExpanded && (
@@ -587,7 +591,7 @@ export const ScribbleDetailEditor: React.FC<ScribbleDetailEditorProps> = ({
             </div>
           ) : (
             <div className="p-4 rounded-lg bg-muted/20 border border-border font-sans text-xs text-foreground leading-relaxed">
-              <MarkdownView content={scribble.content} />
+              <MarkdownView content={scribble.content} untrusted={fromExternalSource} />
             </div>
           )}
         </div>

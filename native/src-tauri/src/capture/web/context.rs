@@ -868,7 +868,10 @@ fn scan_text_for_cues(
     ordinal: u32,
     acc: &mut ContextAccumulator,
 ) {
-    let lower = text.to_lowercase();
+    // The cues are ASCII, so match them with ASCII case folding and slice
+    // `text` at offsets into `text` itself; offsets from a lowercased copy
+    // drift, or land mid-character, once lowercasing changes a length.
+    let find = |cue: &str| crate::pipeline::find_ignoring_ascii_case(text, cue);
 
     // Decisions
     for cue in &[
@@ -881,7 +884,7 @@ fn scan_text_for_cues(
         "the consensus is",
         "we will use",
     ] {
-        if let Some(pos) = lower.find(cue) {
+        if let Some(pos) = find(cue) {
             let snippet = extract_sentence_from(&text[pos..]);
             let key = snippet.to_lowercase();
             if !snippet.is_empty() && !acc.seen_decisions.contains(&key) {
@@ -899,7 +902,7 @@ fn scan_text_for_cues(
 
     // Constraints & Requirements
     for cue in &["must not", "cannot", "is required to", "must always", "restricted to", "constraint:"] {
-        if let Some(pos) = lower.find(cue) {
+        if let Some(pos) = find(cue) {
             let snippet = extract_sentence_from(&text[pos..]);
             if !snippet.is_empty() {
                 acc.constraints.push(ContextConstraint {
@@ -913,7 +916,7 @@ fn scan_text_for_cues(
     }
 
     for cue in &["must have", "requirement:", "needs to support", "we need to ensure that"] {
-        if let Some(pos) = lower.find(cue) {
+        if let Some(pos) = find(cue) {
             let snippet = extract_sentence_from(&text[pos..]);
             if !snippet.is_empty() {
                 acc.requirements.push(ContextRequirement {
@@ -953,7 +956,7 @@ fn scan_text_for_cues(
         "we will follow up",
         "please make sure to",
     ] {
-        if let Some(pos) = lower.find(cue) {
+        if let Some(pos) = find(cue) {
             let snippet = extract_sentence_from(&text[pos..]);
             let key = snippet.to_lowercase();
             if !snippet.is_empty() && !acc.seen_actions.contains(&key) {
@@ -1285,6 +1288,21 @@ pub fn extract_deterministic_repository_context(
 mod tests {
     use super::*;
     use crate::capture::web::{CaptureContent, CaptureContentKind, CaptureMessage, ContentBlock, ExtractorInfo};
+
+    /// Lowercasing `İ` or the Kelvin sign changes their length, which used
+    /// to shift every cue offset after them: a panic mid-character, or a
+    /// decision with its first letter cut off.
+    #[test]
+    fn cue_scanning_slices_the_original_text_at_its_own_offsets() {
+        let mut acc = ContextAccumulator::default();
+        scan_text_for_cues("\u{212A} todo: ship it.", 1, &mut acc);
+        assert_eq!(acc.action_items.len(), 1);
+
+        let mut acc = ContextAccumulator::default();
+        scan_text_for_cues("İstanbul ekibi. We decided to use Postgres.", 2, &mut acc);
+        assert_eq!(acc.decisions.len(), 1);
+        assert!(acc.decisions[0].decision.starts_with("We decided to use Postgres"));
+    }
 
     fn capture_file_for(capture_type: &str, url: &str, markdown: &str) -> crate::vault::VaultFile {
         crate::vault::VaultFile::new_capture(

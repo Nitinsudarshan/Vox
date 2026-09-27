@@ -1,0 +1,72 @@
+name: Security
+
+# Dependency advisories. Separate from CI because what it checks changes
+# without anyone pushing: a new advisory against a crate already in the lock
+# file should say so, on a schedule, without turning every unrelated pull
+# request red. It also runs whenever a lock file or manifest changes, which
+# is when a pull request can introduce one.
+on:
+  push:
+    paths:
+      - "native/src-tauri/Cargo.lock"
+      - "native/src-tauri/Cargo.toml"
+      - "native/package-lock.json"
+      - "native/package.json"
+      - ".github/workflows/security.yml"
+  pull_request:
+    paths:
+      - "native/src-tauri/Cargo.lock"
+      - "native/src-tauri/Cargo.toml"
+      - "native/package-lock.json"
+      - "native/package.json"
+      - ".github/workflows/security.yml"
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: Rust dependency advisories
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # A prebuilt binary; compiling cargo-audit from source would cost more
+      # than the audit itself.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Fails on a vulnerability. "Unmaintained" and "unsound" notices are
+      # reported but not fatal: most arrive through Tauri's GTK stack on
+      # Linux, which Vox does not ship, and cannot be fixed from here.
+      - name: Audit Cargo.lock
+        run: cargo audit
+
+  npm-audit:
+    name: npm dependency advisories
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Everything that ships in the app or the extension must be clean at
+      # moderate and above; dev tooling fails the job only at high.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high

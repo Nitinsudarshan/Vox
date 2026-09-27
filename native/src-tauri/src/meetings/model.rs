@@ -37,9 +37,16 @@ pub enum MeetingState {
 }
 
 impl MeetingState {
-    /// Whether a crash in this state left work to finish on next launch.
+    /// Whether a meeting found in this state at launch was cut off by Vox
+    /// closing. Nothing records or transcribes before startup recovery runs,
+    /// so `Transcribing` is as stranded as `Recording`: a quit during a
+    /// stop's final decode used to leave the meeting "Transcribing…" forever,
+    /// with its audio on disk and no way to play it.
     pub fn is_interrupted(self) -> bool {
-        matches!(self, MeetingState::Recording | MeetingState::Paused)
+        matches!(
+            self,
+            MeetingState::Recording | MeetingState::Paused | MeetingState::Transcribing
+        )
     }
 }
 
@@ -301,6 +308,12 @@ pub struct Meeting {
     /// split a series silently the moment somebody renamed it.
     #[serde(default)]
     pub series_id: Option<String>,
+    /// The user took this recording out of its series, or deleted the series.
+    /// A sync never puts it back; without this, a meeting with no series was
+    /// indistinguishable from one never assigned, and the next sync undid the
+    /// user's choice within minutes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub series_opted_out: bool,
 }
 
 impl Meeting {
@@ -325,6 +338,7 @@ impl Meeting {
             error: None,
             tags: Vec::new(),
             series_id: None,
+            series_opted_out: false,
         }
     }
 
@@ -460,7 +474,7 @@ mod tests {
     fn interrupted_states_are_exactly_the_ones_a_crash_can_leave() {
         assert!(MeetingState::Recording.is_interrupted());
         assert!(MeetingState::Paused.is_interrupted());
-        assert!(!MeetingState::Transcribing.is_interrupted());
+        assert!(MeetingState::Transcribing.is_interrupted());
         assert!(!MeetingState::Completed.is_interrupted());
         assert!(!MeetingState::Failed.is_interrupted());
     }

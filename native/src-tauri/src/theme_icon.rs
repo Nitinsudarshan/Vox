@@ -13,7 +13,10 @@ pub fn is_system_taskbar_dark() -> bool {
         // HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme
         // 0 = Dark taskbar (needs light/white icon)
         // 1 = Light taskbar (needs dark/black icon)
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: a console flashed on every launch without it.
         let output = std::process::Command::new("reg")
+            .creation_flags(0x0800_0000)
             .args([
                 "query",
                 "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",

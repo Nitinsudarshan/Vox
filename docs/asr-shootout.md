@@ -136,7 +136,9 @@ distortion.
 Consequences, stated plainly:
 
 - **Every accuracy number published from `corpus-v1` is void**, including the
-  15.17% WER and 8.03% CER in `TRANSCRIPTION_BENCHMARK_V1.md`.
+  15.17% WER and 8.03% CER that `docs/benchmarks/TRANSCRIPTION_BENCHMARK_V1.md`
+  first reported. That file has since been overwritten by a run over
+  `corpus-real-v1`, which is neural text-to-speech too, whatever its name says.
 - **The throughput numbers are suspect rather than void.** Decode cost tracks
   transcript length and segment count, both of which this distortion moves, so
   3.03 RTF is a real measurement of a run that should not have happened.

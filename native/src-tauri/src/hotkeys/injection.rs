@@ -58,8 +58,11 @@ pub fn is_same_tab_or_document(title_a: &str, title_b: &str) -> bool {
     let clean = |s: &str| -> String {
         let mut s = s.trim();
         // Strip leading dirty markers (e.g. VS Code "* file.rs" or "● file.rs")
-        if s.starts_with('*') || s.starts_with('●') {
-            s = s[1..].trim();
+        // `●` is three bytes, so strip by character, not by byte index — a
+        // byte slice here panicked on every unsaved VS Code file whose dirty
+        // state changed while the user was dictating.
+        if let Some(rest) = s.strip_prefix(['*', '●']) {
+            s = rest.trim();
         }
         // Strip leading unread badges like "(1) " or "[2] "
         if let Some(stripped) = s.strip_prefix('(') {
@@ -327,46 +330,6 @@ pub fn focus_unchanged(
         (None, None) => true,
         _ => false,
     }
-}
-
-/// Selects the last `steps` cursor positions before the caret.
-///
-/// Shift+Left, repeated. Used by the dictation cleanup to select exactly what
-/// Relay injected so a replacement overwrites it rather than appending to it.
-///
-/// `steps` must come from `capture::text_normalize::cursor_steps`, not from
-/// `chars().count()`. An arrow key moves by grapheme cluster, so counting chars
-/// over-selects on any script with combining marks and would swallow whatever
-/// the user had written before dictating.
-///
-/// Selecting nothing is a success: the caller has nothing to replace and a
-/// subsequent injection simply inserts.
-pub fn select_previous(steps: usize) -> Result<(), InjectionError> {
-    use enigo::{Direction, Key};
-    if steps == 0 {
-        return Ok(());
-    }
-
-    release_modifier_keys();
-
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| InjectionError::ConnectionFailed(e.to_string()))?;
-    enigo
-        .key(Key::Shift, Direction::Press)
-        .map_err(|e| InjectionError::SimulationFailed(e.to_string()))?;
-    let mut result = Ok(());
-    for _ in 0..steps {
-        if let Err(e) = enigo.key(Key::LeftArrow, Direction::Click) {
-            result = Err(InjectionError::SimulationFailed(e.to_string()));
-            break;
-        }
-    }
-    // Released even when a press failed part-way: leaving Shift held would
-    // turn the user's next keystroke into a selection.
-    let released = enigo
-        .key(Key::Shift, Direction::Release)
-        .map_err(|e| InjectionError::SimulationFailed(e.to_string()));
-    result.and(released)
 }
 
 /// Injects text using simulated individual keystrokes.
@@ -644,6 +607,8 @@ mod tests {
         assert!(is_same_tab_or_document("ChatGPT - Google Chrome", "ChatGPT - Google Chrome"));
         // Dirty / unread markers
         assert!(is_same_tab_or_document("* file.rs - VS Code", "file.rs - VS Code"));
+        // VS Code's multi-byte dirty dot, which used to panic the byte slice.
+        assert!(is_same_tab_or_document("● main.rs - Vox - Visual Studio Code", "main.rs - Vox - Visual Studio Code"));
         assert!(is_same_tab_or_document("(1) Inbox - Gmail", "(2) Inbox - Gmail"));
         assert!(is_same_tab_or_document("[99+] Slack | Channel", "Slack | Channel"));
 

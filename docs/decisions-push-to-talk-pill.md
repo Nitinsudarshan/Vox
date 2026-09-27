@@ -29,6 +29,12 @@ Vox's push-to-talk (PTT) interface required an interaction and visual refinement
 - **Choice**: Include Auto-paste (Toggle), Text transform (Toggle), Cleanup style (Faithful/Clean/Professional/Concise), Prompt mode (Toggle with "Rewrite speech into a prompt"), and Speech Language.
 - **Why**: All dropdown controls map directly to Vox's capabilities without fake or simulated state.
 
+### Decision 6: The Popover as Built — Cleanup Style Replaced Text Transform, and There Is No Prompt Mode
+- **Choice**: `PillSettingsPopover.tsx` carries six rows: **Auto-paste after dictation** (toggle, `clipboard.auto_paste`); **Dictation sounds** (toggle, `sound.dictation_sounds`); **Cleanup style**, a sub-page offering Raw (Default), Faithful, Clean, Polished and Concise (`stt.cleanup_style`); **Language**, a sub-page offering Auto-detect, English (US), Hinglish, Hindi and Español (written as `language.primary_dictation_language` plus `language.spoken_languages`); **Open Vox**; and **Open All Settings in App**. Decision 5's Text transform and Prompt mode toggles are not in it.
+- **Why**: Decision 5 records what was planned; this records what shipped. Cleanup style is the one control for the Tier 2 rewrite: Raw means no model runs, and it is the default (`docs/decisions.md` Decision 71). The Text transform toggle, a second on/off switch for the same rewrite, left the popover in `07ea67e`, and its `stt.text_transform` setting was removed later. No version of the popover in this repository's history has carried a Prompt mode control, and no code implements one.
+- **Alternatives Considered**: Keeping a Text transform toggle beside the style list.
+- **Reason Rejected**: Two controls for one behaviour can disagree — the toggle off with Polished chosen, or on with Raw — and Raw already means off.
+
 ---
 
 ## Trade-Offs & Mitigation

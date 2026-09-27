@@ -204,9 +204,17 @@ export async function runReveal(
     // The revealed blocks replace the single pass's, but its identity — which
     // rung of the ladder was reached, what it called the page, its title —
     // stands: the reveal pass changed how much was read, not what read it.
+    //
+    // Not when a site extractor matched: the reveal pass collects generic
+    // blocks, so a GitHub file lost its code block to one paragraph per line,
+    // and an issue gained a second, generic copy of the page beside its turns.
+    const siteMatched = single.strategy === 'site';
     result = {
       ...single,
-      blocks: collected.blocks.length >= single.blocks.length ? collected.blocks : single.blocks,
+      blocks:
+        !siteMatched && collected.blocks.length >= single.blocks.length
+          ? collected.blocks
+          : single.blocks,
       truncated: single.truncated || genericTruncated,
       links: links.length ? links : single.links,
       notes: [...notes, ...single.notes],

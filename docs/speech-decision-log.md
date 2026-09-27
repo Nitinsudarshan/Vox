@@ -1330,6 +1330,62 @@ proposal, and in §"Reserved, not yet decided" below as a reserved id.
 
 ---
 
+### D-055 — Dictated text is finished before a model sees it, and a model sees it only when asked
+
+- **Context**: dictation had two copies of everything after the recorder —
+  one behind the global hotkey, one behind the pill — and they had drifted:
+  the hotkey path typed and saved a transcript that normalisation had
+  emptied. Separately, an empty `stt.cleanup_style` meant `Faithful`, so every
+  dictation waited up to five seconds on an LLM rewrite before its text was
+  usable, and with a cloud provider the text left the machine.
+- **Decision**: one pipeline, `capture::dictation`, in a fixed order.
+  `transcribe` picks the engine, primes Whisper, decodes on the blocking pool
+  and records a diagnostics snapshot. `finish_text` is Tier 1 — normalisation
+  with the learned corrections, snippets, then the output script — and nothing
+  left means no speech. `clean_up` is Tier 2: `Raw` by default, asking no
+  model; `faithful`, `clean`, `polished` and `concise` opt-in and bounded by
+  `CLEANUP_TIMEOUT`, with the transcribed text used on a timeout, an error or
+  an unchanged answer. Both surfaces call the three steps; only what happens to
+  the finished text differs.
+- **Already true in the code**: `capture/dictation.rs` tests each promise —
+  `raw_style_never_asks_a_model`, `a_slow_provider_times_out_to_the_input`,
+  `a_failed_provider_falls_back_to_the_input` and
+  `finish_text_drops_a_transcript_that_normalises_to_nothing`.
+- **Consequence for measurement**: unless the user opts into a style,
+  dictation latency is decode plus Tier 1. The single `[DICTATION_LATENCY]`
+  log line times cleanup on its own and marks a timeout, so a slow dictation
+  can be attributed to the recogniser or to the rewrite rather than to
+  "dictation". The Dictation Test Lab's `production` cleanup style follows the
+  user's setting, so what it measures is what their dictations run.
+- **Restates**: `decisions.md` Decisions 71 (`Raw` is the default) and 72 (one
+  pipeline). Decision 65 is unchanged: Tier 2 never reaches a meeting
+  transcript, and nothing here touches the meeting path.
+
+---
+
+### D-056 — Benchmark reports are committed under `docs/benchmarks/`, not at the repository root
+
+- **Context**: `tests/transcription/runner/run_benchmark.py` wrote
+  `TRANSCRIPTION_BENCHMARK_V1.md` to the repository root as well as to
+  `tests/transcription/reports/`, and `run_public_benchmark.py` wrote
+  `TRANSCRIPTION_BENCHMARK_PUBLIC_V1.md` to the root alone, with
+  `PIPELINE_BASELINE.md` beside them. `AGENTS.md` asks that no new root-level
+  markdown file be opened, because that is how the documentation pile grew.
+- **Decision**: the three reports live in `docs/benchmarks/`, both runners
+  write there, and `docs/README.md` lists them as deep records — each written
+  against one run, read as history.
+- **Consequence for earlier entries**: the `TRANSCRIPTION_BENCHMARK_V1.md` of
+  D-051 is now `docs/benchmarks/TRANSCRIPTION_BENCHMARK_V1.md`, and the banner
+  D-051 describes is no longer in it. The file was overwritten in `1212d20` by
+  a run over `corpus-real-v1` — neural text-to-speech, whatever its name —
+  whose content is dated before D-050's renderer landed, so its Hindi and
+  Hinglish columns print `0.00%` for languages that were never run.
+  `run_benchmark.py --render-from` re-renders a stored run under the current
+  rules without decoding it again (D-050).
+- **Restates**: nothing in `decisions.md`.
+
+---
+
 ## Reserved, not yet decided
 
 Nothing. Every id the staged plan reserved has landed with the stage that

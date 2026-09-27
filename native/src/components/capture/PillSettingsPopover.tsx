@@ -215,8 +215,8 @@ export const PillSettingsPopover: React.FC<PillSettingsPopoverProps> = ({
             <span>Back</span>
           </button>
           {[
-            { id: 'raw', name: 'Raw (Verbatim)' },
-            { id: 'faithful', name: 'Faithful (Default)' },
+            { id: 'raw', name: 'Raw (Default)' },
+            { id: 'faithful', name: 'Faithful' },
             { id: 'clean', name: 'Clean' },
             { id: 'polished', name: 'Polished' },
             { id: 'concise', name: 'Concise' },

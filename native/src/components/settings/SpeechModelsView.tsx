@@ -31,6 +31,7 @@ import type {
   SpeechModelDownloadProgress,
   SpeechModelTier,
 } from '@/types/models';
+import { describeError } from '@/lib/errors';
 
 /**
  * Settings › Speech — the speech-model manager.
@@ -76,7 +77,7 @@ export const SpeechModelsView: React.FC = () => {
       setCatalogue(await listSpeechModels());
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
     } finally {
       setLoading(false);
     }
@@ -134,7 +135,7 @@ export const SpeechModelsView: React.FC = () => {
       // failure from leaving the row spinning forever.
       setDownloads((prev) => ({
         ...prev,
-        [id]: { kind: 'failed', message: err instanceof Error ? err.message : String(err) },
+        [id]: { kind: 'failed', message: describeError(err) },
       }));
     }
     await refresh();
@@ -146,7 +147,7 @@ export const SpeechModelsView: React.FC = () => {
       await deleteSpeechModel(model.id);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
     } finally {
       setBusyId(null);
     }
@@ -158,7 +159,7 @@ export const SpeechModelsView: React.FC = () => {
       await setMeetingSpeechModel(id);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
     } finally {
       setBusyId(null);
     }

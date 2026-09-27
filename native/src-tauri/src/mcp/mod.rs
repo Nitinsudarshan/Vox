@@ -1,8 +1,14 @@
 //! MCP (Model Context Protocol) Integration Layer.
 //!
-//! Exposes Relay's unified knowledge architecture (Retrieval, Context Assembly,
+//! Exposes Vox's unified knowledge architecture (Retrieval, Context Assembly,
 //! Context Pack, Memory, and Relationships) to MCP clients while enforcing the same
 //! confirmation boundaries on mutations as the native UI.
+//!
+//! There is no outbound MCP client here. Actions against external services
+//! (calendar, Notion, Drive) were once stubbed in this module as functions that
+//! reported success without doing anything; they were removed rather than left
+//! to lie, and are tracked in `maybe_later.md` ("Voice triggers that run
+//! actions").
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -70,67 +76,6 @@ impl McpRouter {
             success: true,
             result_summary: format!("Executed action '{}' successfully", action.action_type.as_str()),
             payload: Some(res),
-        })
-    }
-
-    /// Dispatches an MCP external action.
-    pub async fn dispatch_action(
-        action_type: &str,
-        target_tool: &str,
-        extracted_text: &str,
-    ) -> Result<McpToolCallResult, McpError> {
-        tracing::info!(
-            "Dispatching MCP action: type={}, tool={}, text='{}'",
-            action_type,
-            target_tool,
-            extracted_text
-        );
-
-        match action_type {
-            "mcp_calendar" => Self::execute_calendar(target_tool, extracted_text).await,
-            "local_reminder" => Self::execute_local_reminder(extracted_text).await,
-            "mcp_notion" => Self::execute_notion(target_tool, extracted_text).await,
-            "mcp_gdrive" => Self::execute_gdrive(target_tool, extracted_text).await,
-            _ => Err(McpError::ClientError(format!(
-                "Unknown action type: {}",
-                action_type
-            ))),
-        }
-    }
-
-    async fn execute_calendar(tool: &str, text: &str) -> Result<McpToolCallResult, McpError> {
-        Ok(McpToolCallResult {
-            tool_name: tool.to_string(),
-            success: true,
-            result_summary: format!("Scheduled calendar event: '{}'", text),
-            payload: None,
-        })
-    }
-
-    async fn execute_local_reminder(text: &str) -> Result<McpToolCallResult, McpError> {
-        Ok(McpToolCallResult {
-            tool_name: "os_notification".to_string(),
-            success: true,
-            result_summary: format!("Created local OS reminder: '{}'", text),
-            payload: None,
-        })
-    }
-
-    async fn execute_notion(tool: &str, text: &str) -> Result<McpToolCallResult, McpError> {
-        Ok(McpToolCallResult {
-            tool_name: tool.to_string(),
-            success: true,
-            result_summary: format!("Pushed entry to Notion: '{}'", text),
-            payload: None,
-        })
-    }
-
-    async fn execute_gdrive(tool: &str, text: &str) -> Result<McpToolCallResult, McpError> {
-        Ok(McpToolCallResult {
-            tool_name: tool.to_string(),
-            success: true,
-            result_summary: format!("Saved document to Google Drive: '{}'", text),
-            payload: None,
         })
     }
 }

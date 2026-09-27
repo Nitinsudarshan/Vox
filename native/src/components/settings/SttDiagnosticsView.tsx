@@ -29,11 +29,13 @@ import {
   EvaluationResult,
   SttDiagnosticSnapshot,
 } from '../../types';
+import { describeError } from '@/lib/errors';
 
 interface SttDiagnosticsViewProps {
   settings: AppSettings;
   onUpdateSettings: (updater: (prev: AppSettings) => AppSettings) => void;
-  onSaveSettings: () => Promise<void>;
+  /** Saves `next` when given, otherwise the settings as last rendered. */
+  onSaveSettings: (next?: AppSettings) => Promise<void>;
 }
 
 const DEFAULT_VOX_PROMPT =
@@ -119,16 +121,24 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
         customModelPath: settings.stt.whisper_model_path || null,
       });
       setEvalResult(res);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Evaluation run failed:', err);
-      setEvalError(err?.message || String(err));
+      setEvalError(describeError(err, String(err)));
     } finally {
       setRunningEval(false);
     }
   };
 
+  // The backend reads these settings for every decode, so a change is saved,
+  // not only shown: the switch used to change the screen and nothing else.
+  const apply = (updater: (prev: AppSettings) => AppSettings, save = true) => {
+    const next = updater(settings);
+    onUpdateSettings(() => next);
+    if (save) void onSaveSettings(next);
+  };
+
   const handleTogglePrompt = (enabled: boolean) => {
-    onUpdateSettings((prev) => ({
+    apply((prev) => ({
       ...prev,
       stt: {
         ...prev.stt,
@@ -139,18 +149,22 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
     }));
   };
 
+  // Typing updates the screen; leaving the field saves what was typed.
   const handlePromptTextChange = (text: string) => {
-    onUpdateSettings((prev) => ({
-      ...prev,
-      stt: {
-        ...prev.stt,
-        custom_initial_prompt: text,
-      },
-    }));
+    apply(
+      (prev) => ({
+        ...prev,
+        stt: {
+          ...prev.stt,
+          custom_initial_prompt: text,
+        },
+      }),
+      false,
+    );
   };
 
   const handleResetPrompt = () => {
-    onUpdateSettings((prev) => ({
+    apply((prev) => ({
       ...prev,
       stt: {
         ...prev.stt,
@@ -481,6 +495,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
               id="custom-prompt-input"
               value={settings.stt.custom_initial_prompt || DEFAULT_VOX_PROMPT}
               onChange={(e) => handlePromptTextChange(e.target.value)}
+              onBlur={() => void onSaveSettings(settings)}
               rows={2}
               className="w-full p-2.5 text-xs font-mono rounded-lg bg-background border border-border text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
               placeholder="Enter comma-separated domain vocabulary..."
@@ -554,7 +569,7 @@ export const SttDiagnosticsView: React.FC<SttDiagnosticsViewProps> = ({
             </label>
             <select
               value={testVariant}
-              onChange={(e: any) => setTestVariant(e.target.value)}
+              onChange={(e) => setTestVariant(e.target.value as typeof testVariant)}
               className="w-full h-8 px-2 text-xs rounded-lg bg-background border border-border text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
             >
               <option value="baseline">Baseline (Greedy, best_of=1)</option>

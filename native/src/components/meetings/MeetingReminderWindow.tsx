@@ -6,6 +6,7 @@ import { Video, Calendar, Clock, Disc, X, Users, ExternalLink, Loader2 } from 'l
 import { MeetingReminderPayload, ReminderKind } from '../../types';
 import { useOverlayTheme } from '../../lib/overlayTheme';
 import { VoxLogo } from '../common/VoxLogo';
+import { describeError } from '../../lib/errors';
 
 /**
  * How long the exit animation runs before the window is hidden.
@@ -45,6 +46,7 @@ export const MeetingReminderWindow: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // The show protocol, both halves at once: pull whatever is already staged
   // (this window outlives any one reminder, so the event may have been emitted
@@ -58,6 +60,7 @@ export const MeetingReminderWindow: React.FC = () => {
       setLeaving(false);
       setSnoozeOpen(false);
       setBusy(false);
+      setActionError(null);
       setReminder(payload);
     };
 
@@ -116,7 +119,15 @@ export const MeetingReminderWindow: React.FC = () => {
     try {
       await run(current);
     } catch (err) {
+      // The card was hidden before the action ran; bring it back with the
+      // reason. A Record that failed silently left the user believing the
+      // meeting was being captured.
       console.error('Reminder action failed:', err);
+      setReminder(current);
+      setActionError(describeError(err, 'That did not work.'));
+      getCurrentWindow()
+        .show()
+        .catch((showErr) => console.error('Failed to show the reminder window:', showErr));
     } finally {
       setBusy(false);
     }
@@ -208,6 +219,11 @@ export const MeetingReminderWindow: React.FC = () => {
         {/* Actions sit on one row; snooze opens its durations in place rather
             than in a popover, because the window is a fixed size and anything
             escaping it would simply be clipped. */}
+        {actionError && (
+          <p role="alert" className="mt-1.5 text-[11px] leading-snug text-red-600 dark:text-red-400 line-clamp-2">
+            {actionError}
+          </p>
+        )}
         <div className="mt-auto pt-2.5 flex items-center gap-2 border-t border-border">
           {snoozeOpen ? (
             <>

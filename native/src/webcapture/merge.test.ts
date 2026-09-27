@@ -160,6 +160,23 @@ describe('SampleMerger', () => {
     expect(result.messages.map((m) => (m.blocks[0] as { text: string }).text)).toEqual(['one', 'two']);
   });
 
+  it('keeps two identical turns seen together, and matches them across samples', () => {
+    const merger = new SampleMerger();
+    merger.add([
+      item({ offset: 0, blocks: [para('continue')] }),
+      item({ offset: 100, blocks: [para('A')] }),
+      item({ offset: 200, blocks: [para('continue')] }),
+      item({ offset: 300, blocks: [para('B')] }),
+    ]);
+    // A later, scrolled window sees only the second "continue".
+    merger.add([
+      item({ offset: 200, blocks: [para('continue')] }),
+      item({ offset: 300, blocks: [para('B')] }),
+    ]);
+    const texts = merger.result().messages.map((m) => (m.blocks[0] as { text: string }).text);
+    expect(texts).toEqual(['continue', 'A', 'continue', 'B']);
+  });
+
   it('ignores ordinals the page repeats rather than trusting them', () => {
     // Duplicate ordinals mean the attribute is not what Relay thought it was;
     // falling back is safer than sorting a conversation by a broken key.
@@ -215,6 +232,14 @@ describe('BlockMerger', () => {
       'revealed by scrolling',
     ]);
     expect(result.duplicatesDropped).toBe(2);
+  });
+
+  it('keeps a block repeated within one sample as often as it appears', () => {
+    const merger = new BlockMerger();
+    merger.add([para('Example'), para('one'), para('Example'), para('two')]);
+    merger.add([para('Example'), para('two')]);
+    const texts = merger.result().blocks.map((b) => (b as { text: string }).text);
+    expect(texts).toEqual(['Example', 'one', 'Example', 'two']);
   });
 
   it('keeps two paragraphs that merely start alike', () => {

@@ -192,8 +192,9 @@ fn main() {
     println!("VOX PHASE 4.5 — COMPREHENSIVE STT MODEL BENCHMARK (WHISPER + PARAKEET)");
     println!("==========================================================================================");
 
-    let settings_raw = fs::read_to_string(&settings_path).expect("Failed to read settings.json");
-    let settings: AppSettings = serde_json::from_str(&settings_raw).expect("Failed to parse settings.json");
+    // `load`, not a bare parse: provider API keys live in the OS credential
+    // store, and only `load` puts them back.
+    let settings = AppSettings::load(&settings_path).expect("Failed to read settings.json");
 
     let num_logical_cores = std::thread::available_parallelism()
         .map(|n| n.get())

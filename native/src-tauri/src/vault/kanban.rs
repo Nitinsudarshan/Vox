@@ -252,13 +252,8 @@ impl KanbanCard {
     /// Every field introduced after the first version is optional, which is
     /// what keeps a vault written by the previous code readable.
     pub fn parse_markdown(content: &str) -> Option<Self> {
-        let parts: Vec<&str> = content.split("---").collect();
-        if parts.len() < 3 {
-            return None;
-        }
-
-        let frontmatter = parts[1];
-        let description = parts[2..].join("---").trim().to_string();
+        let (frontmatter, body) = super::frontmatter::split(content)?;
+        let description = body.trim().to_string();
 
         let mut id = String::new();
         let mut title = String::new();
@@ -437,6 +432,29 @@ mod tests {
         assert_eq!(source_ref.id, "meeting_7");
         assert_eq!(source_ref.turn_ordinal, Some(42));
         assert_eq!(source_ref.label.as_deref(), Some("Pricing sync"));
+    }
+
+    /// A `---` inside a title or label used to end the frontmatter there,
+    /// costing the card its status and provenance.
+    #[test]
+    fn triple_dashes_in_a_title_or_label_keep_the_card_whole() {
+        let mut card = KanbanCard::from_source(
+            "Q3 --- ship the deck",
+            TodoSourceKind::Meeting,
+            TodoSourceRef {
+                id: "meeting_8".to_string(),
+                turn_ordinal: Some(3),
+                label: Some("Sync --- pricing".to_string()),
+            },
+            None,
+            None,
+        );
+        card.status = "in_progress".to_string();
+        card.description = "First\n---\nSecond".to_string();
+
+        let parsed = KanbanCard::parse_markdown(&card.format_markdown()).expect("parses");
+
+        assert_eq!(parsed, card);
     }
 
     /// Titles come from speech and from typing. Fails if a quote or a

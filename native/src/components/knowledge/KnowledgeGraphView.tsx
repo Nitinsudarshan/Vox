@@ -694,7 +694,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   const handleConfirmTrash = async () => {
     if (!trashCandidateId) return;
     try {
-      await invoke('move_to_trash', { itemType: 'scribble', id: trashCandidateId });
+      await invoke('delete_scribble', { id: trashCandidateId });
       if (onScribbleDeleted) {
         onScribbleDeleted(trashCandidateId);
       }

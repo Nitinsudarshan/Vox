@@ -13,8 +13,8 @@
 
 import type { CapturePayload } from './types';
 import type { ContentCaptureResult } from './content';
+import { CONTENT_BUNDLE_FILE as CONTENT_BUNDLE } from './bundle';
 
-const CONTENT_BUNDLE = 'relay-extract.js';
 const DEFAULT_PORT = 8765;
 const REQUEST_TIMEOUT_MS = 20_000;
 /**
@@ -90,18 +90,18 @@ async function postToRelay(
     if (!response.ok) {
       return {
         ok: false,
-        message: body.message ?? `Relay refused the capture (${response.status}).`,
+        message: body.message ?? `Vox refused the capture (${response.status}).`,
       };
     }
-    return { ok: true, message: body.title ?? 'Saved to Relay' };
+    return { ok: true, message: body.title ?? 'Saved to Vox' };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      return { ok: false, message: 'Relay did not respond in time.' };
+      return { ok: false, message: 'Vox did not respond in time.' };
     }
     return {
       ok: false,
       message:
-        'Relay is not reachable. Make sure Relay is running and that capture is switched on in its settings.',
+        'Vox is not reachable. Make sure Vox is running and that capture is switched on in its settings.',
     };
   } finally {
     clearTimeout(timeout);

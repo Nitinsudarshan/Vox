@@ -80,3 +80,34 @@ describe('mermaid configuration', () => {
     expect(mermaidConfig(false).theme).toBe('default');
   });
 });
+
+describe('MarkdownView with untrusted content', () => {
+  test('does not fetch remote images until asked', async () => {
+    const { container } = render(
+      <MarkdownView content="![pixel](https://tracker.example/p.gif)" untrusted />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    const button = screen.getByRole('button', { name: /tracker\.example/ });
+    button.click();
+    expect(await screen.findByAltText('pixel')).toBeDefined();
+  });
+
+  test('never renders a diagram, fenced or bare', () => {
+    const { container } = render(
+      <MarkdownView content={'```text\ngraph TD\nA-->B\n```\n\npie title x'} untrusted />,
+    );
+    expect(container.querySelector('pre')?.textContent).toContain('graph TD');
+    expect(container.textContent).toContain('pie title x');
+    expect(container.querySelector('[data-mermaid], svg')).toBeNull();
+  });
+
+  test('a longer fence is not closed by a shorter one inside it', () => {
+    const { container } = render(
+      <MarkdownView content={'````\n```\n![x](https://e.com/i.png)\n````'} untrusted />,
+    );
+    const pre = container.querySelector('pre');
+    expect(pre?.textContent).toContain('![x](https://e.com/i.png)');
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+});

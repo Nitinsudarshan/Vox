@@ -51,7 +51,7 @@ python scripts/benchmark_transcription.py --model native/src-tauri/.vox/config/m
 > [!NOTE]
 > **Measurement Discrepancy & Provenance Notice:**
 > - Earlier documentation listed a theoretical estimate of `RTF ~0.25` for Whisper Small.
-> - **Empirical measurement** on production CPU hardware (`TRANSCRIPTION_BENCHMARK_V1.md` / Stage 13 baseline) demonstrates that single-threaded/multi-core CPU inference with `ggml-small.bin` achieves **Decode RTF = 3.029** and **Pipeline RTF = 2.873** on 340s audio, resulting in **WER = 15.17%** and **CER = 8.03%**.
+> - **Empirical measurement** on production CPU hardware (`docs/benchmarks/TRANSCRIPTION_BENCHMARK_V1.md` as first committed — a `corpus-v1` run whose accuracy numbers `docs/asr-shootout.md` §6 has since declared void, and which a later `corpus-real-v1` run has overwritten / Stage 13 baseline) demonstrates that single-threaded/multi-core CPU inference with `ggml-small.bin` achieves **Decode RTF = 3.029** and **Pipeline RTF = 2.873** on 340s audio, resulting in **WER = 15.17%** and **CER = 8.03%**.
 > - An RTF > 1.0 means decoding on CPU is slower than real time; real-time decoding ($\text{RTF} < 1.0$) requires GPU acceleration, a lighter model tier (Base / Tiny), or INT8-quantized streaming engines (Parakeet).
 > - All values below are explicitly categorized as `[MEASURED]` (from reproducible benchmark runs), `[THEORETICAL ESTIMATE]` (GPU target), or `[HISTORICAL]`.
 

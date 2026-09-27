@@ -1,5 +1,4 @@
-use crate::providers::{LLMClient, ProviderError};
-use crate::vault::{VaultManager, VaultNote};
+use crate::providers::ProviderError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -15,6 +14,7 @@ pub use enrichment::{
     AiEnrichmentResponse, CANONICAL_ANALYSIS_SYSTEM_PROMPT, CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS,
     CANONICAL_SUMMARY_SYSTEM_PROMPT,
 };
+pub(crate) use enrichment::find_ignoring_ascii_case;
 
 #[derive(Error, Debug)]
 pub enum PipelineError {
@@ -47,60 +47,3 @@ pub struct ProcessedPipelineResult {
     pub spoken_audio_base64: Option<String>,
 }
 
-pub struct PipelineEngine;
-
-impl PipelineEngine {
-
-    pub async fn process_scribble(
-        llm: &LLMClient,
-        vault: &VaultManager,
-        transcript: &str,
-    ) -> Result<ProcessedPipelineResult, PipelineError> {
-        let system_prompt = r#"
-You are Relay's Voice Scribble Structurer.
-Transform rambling, raw voice notes into a polished Markdown document.
-
-Include:
-# Executive Summary
-- Concise bullet points summarizing main ideas
-
-## Key Decisions & Context
-- Structured breakdown of thoughts
-
-## Next Steps
-- Clear, actionable follow-ups
-"#;
-
-        let response = llm.complete(transcript, Some(system_prompt)).await?;
-        let now_str = chrono::Utc::now().to_rfc3339();
-        let note_id = format!("note_{}", uuid::Uuid::new_v4());
-
-        let note = VaultNote {
-            id: note_id.clone(),
-            title: "Voice Scribble Note".to_string(),
-            note_type: "scribble".to_string(),
-            created_at: now_str.clone(),
-            updated_at: now_str,
-            tags: vec!["scribble".to_string(), "structured".to_string()],
-            source_audio: None,
-            content: response.text.clone(),
-            raw_content: None,
-            cleanup_style: None,
-            merged_from: None,
-        };
-
-        vault
-            .save_note(&note)
-            .map_err(|e| PipelineError::VaultError(e.to_string()))?;
-
-        Ok(ProcessedPipelineResult {
-            mode: "scribble".to_string(),
-            transcript: transcript.to_string(),
-            note_id: Some(note_id),
-            kanban_cards_created: 0,
-            output_markdown: response.text,
-            sources: Vec::new(),
-            spoken_audio_base64: None,
-        })
-    }
-}

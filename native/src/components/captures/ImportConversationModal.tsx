@@ -76,7 +76,8 @@ export const ImportConversationModal: React.FC<ImportConversationModalProps> = (
 
     setInspecting(true);
     try {
-      const rawPath = (file as any).path as string | undefined;
+      // The Tauri webview adds the absolute path to a dropped File.
+      const rawPath = (file as File & { path?: string }).path;
       // 1. Desktop native path if provided by webview
       if (rawPath && (rawPath.includes(':\\') || rawPath.startsWith('/'))) {
         await inspectPath(rawPath);

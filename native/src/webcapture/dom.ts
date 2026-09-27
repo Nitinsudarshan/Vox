@@ -108,15 +108,18 @@ function isSkippable(el: Element): boolean {
   return SKIP_TAGS.has(el.tagName.toLowerCase()) || isHidden(el);
 }
 
-function pushText(blocks: ContentBlock[], text: string, seen: Set<string>): void {
+function pushText(blocks: ContentBlock[], text: string): void {
   const cleaned = normalizeWhitespace(text);
   if (!cleaned) return;
+  const paragraph = clampText(cleaned);
   // Consecutive duplicates are a rendering artifact (sticky headers, screen
-  // reader copies of the same string), not repetition the author wrote.
-  const key = cleaned.slice(0, 200);
-  if (seen.has(key)) return;
-  seen.add(key);
-  blocks.push({ type: 'paragraph', text: clampText(cleaned) });
+  // reader copies of the same string), not repetition the author wrote. Only
+  // the one immediately before is compared: a whole-page set keyed on the
+  // first 200 characters dropped a song's repeated chorus, and any paragraph
+  // that happened to open like an earlier one.
+  const previous = blocks[blocks.length - 1];
+  if (previous?.type === 'paragraph' && previous.text === paragraph) return;
+  blocks.push({ type: 'paragraph', text: paragraph });
 }
 
 function listBlock(el: Element): ContentBlock | null {
@@ -197,6 +200,31 @@ function captionFor(el: Element): string | undefined {
 }
 
 /**
+ * A relative `src` or `href`, resolved against the page it was captured
+ * from. Sent as-is, `/img/a.png` was dropped by the app as "not an ordinary
+ * http(s) URL", and an image with no alt text disappeared entirely.
+ */
+function resolveRelative(el: Element, raw: string): string | undefined {
+  try {
+    const url = new URL(raw, el.ownerDocument?.baseURI);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `decodeURIComponent` that returns its input for a malformed escape. */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // One `%zz` in a download link used to throw out of the whole generic
+    // pass and drop the capture to text only.
+    return value;
+  }
+}
+
+/**
  * Turns an `<img>` into an image block.
  *
  * `src` carries only ordinary `http(s)` references. A `blob:` or `data:`
@@ -214,7 +242,7 @@ export function imageBlockFrom(el: Element, origin: ImageOrigin = 'page'): Conte
   const raw = (el.getAttribute('src') ?? el.getAttribute('data-src') ?? '').trim();
   const isHttp = /^https?:\/\//i.test(raw);
   const isRelative = raw.length > 0 && !isHttp && !/^[a-z][a-z0-9+.-]*:/i.test(raw);
-  const src = isHttp || isRelative ? raw : undefined;
+  const src = isHttp ? raw : isRelative ? resolveRelative(el, raw) : undefined;
   const reference = !src && raw ? raw.slice(0, 300) : undefined;
   const caption = captionFor(el);
 
@@ -252,7 +280,6 @@ function imageBlock(el: Element): ContentBlock | null {
  */
 export function extractBlocks(root: Element): { blocks: ContentBlock[]; truncated: boolean } {
   const blocks: ContentBlock[] = [];
-  const seenText = new Set<string>();
   let truncated = false;
 
   const visit = (node: Node, depth: number): void => {
@@ -262,7 +289,7 @@ export function extractBlocks(root: Element): { blocks: ContentBlock[]; truncate
     }
 
     if (node.nodeType === 3 /* TEXT_NODE */) {
-      pushText(blocks, node.textContent ?? '', seenText);
+      pushText(blocks, node.textContent ?? '');
       return;
     }
     if (node.nodeType !== 1 /* ELEMENT_NODE */) return;
@@ -283,7 +310,7 @@ export function extractBlocks(root: Element): { blocks: ContentBlock[]; truncate
         return;
       }
       case 'p': {
-        pushText(blocks, textOf(el), seenText);
+        pushText(blocks, textOf(el));
         return;
       }
       case 'ul':
@@ -333,13 +360,13 @@ export function extractBlocks(root: Element): { blocks: ContentBlock[]; truncate
 
     if (depth >= MAX_DEPTH) {
       // Pathologically nested markup: stop descending and keep the text.
-      pushText(blocks, textOf(el), seenText);
+      pushText(blocks, textOf(el));
       truncated = true;
       return;
     }
 
     if (!el.childNodes.length) {
-      pushText(blocks, textOf(el), seenText);
+      pushText(blocks, textOf(el));
       return;
     }
 
@@ -644,13 +671,14 @@ export function attachmentBlockFrom(
   const isHttp = /^https?:\/\//i.test(raw);
   const isRelative = raw.length > 0 && !isHttp && !/^[a-z][a-z0-9+.-]*:/i.test(raw);
 
-  const explicit = options.name ?? el.getAttribute('download') ?? el.getAttribute('title') ?? '';
+  // `||`, not `??`: an empty `download=""` is common and names nothing.
+  const explicit = options.name || el.getAttribute('download') || el.getAttribute('title') || '';
   const name =
     normalizeWhitespace(explicit) ||
     ATTACHMENT_NAME_PATTERN.exec(label)?.[1] ||
-    (isHttp || isRelative ? decodeURIComponent(raw.split(/[?#]/)[0].split('/').pop() ?? '') : '');
+    (isHttp || isRelative ? safeDecode(raw.split(/[?#]/)[0].split('/').pop() ?? '') : '');
 
-  const href = isHttp || isRelative ? raw : undefined;
+  const href = isHttp ? raw : isRelative ? resolveRelative(el, raw) : undefined;
   const reference = !href && raw ? raw.slice(0, 300) : undefined;
 
   if (!name && !href && !reference) return null;

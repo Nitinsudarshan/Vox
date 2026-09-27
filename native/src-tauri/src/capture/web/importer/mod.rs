@@ -2,13 +2,13 @@
 //!
 //! Handles official export packages from ChatGPT and Claude (.zip or .json),
 //! allows inspecting multi-conversation archives, extracts available binary assets
-//! (PDFs, code, images, docs) into the Relay vault, normalizes conversations into
+//! (PDFs, code, images, docs) into the Vox vault, normalizes conversations into
 //! canonical `WebCapturePayload`, and triggers structured context analysis.
 
 pub mod chatgpt;
 pub mod claude;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -153,61 +153,152 @@ pub fn text_to_blocks(text: &str) -> Vec<ContentBlock> {
     blocks
 }
 
-type ExtractedArchive = (Vec<u8>, Option<HashMap<String, Vec<u8>>>);
+/// An attachment name from an export, reduced to one plain file name.
+///
+/// Names come from the export's JSON and from its zip entries, and are
+/// joined onto the capture's assets directory: a `..`, a separator of either
+/// kind, or a drive prefix would write outside the vault. Returns `None` when
+/// nothing safe is left.
+pub(crate) fn safe_asset_file_name(name: &str) -> Option<String> {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = last
+        .chars()
+        .filter(|c| !c.is_control() && *c != ':')
+        .collect();
+    // Windows drops trailing dots and spaces, so `..` in disguise is still `..`.
+    let cleaned = cleaned.trim_end_matches(['.', ' ']).trim_start();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        return None;
+    }
+    Some(cleaned.to_string())
+}
 
-/// Reads file bytes either from raw JSON or from a ZIP archive containing `conversations.json`.
-fn extract_conversations_json(path: &Path) -> Result<ExtractedArchive, CommandError> {
+/// The first `max_chars` characters of `text`, with an ellipsis if any were
+/// left out. Export text is untrusted and multilingual, so this never cuts
+/// at a byte count.
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_string(),
+    }
+}
+
+/// The largest `conversations.json` read. Heavy users' exports run to
+/// hundreds of megabytes; past this the import refuses rather than
+/// exhausting memory.
+const MAX_CONVERSATIONS_JSON_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// The largest single attachment copied out of an archive.
+const MAX_ASSET_BYTES: u64 = 50_000_000;
+
+/// What the first pass over an export finds: the conversations JSON, and how
+/// many attachment files the archive holds (none for a bare JSON file).
+struct ExportContents {
+    conversations_json: Vec<u8>,
+    asset_count: usize,
+}
+
+fn read_capped(reader: impl Read, limit: u64) -> Result<Vec<u8>, CommandError> {
+    let mut buf = Vec::new();
+    reader
+        .take(limit + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| CommandError::new("FILE_READ_FAILED", &e.to_string()))?;
+    if buf.len() as u64 > limit {
+        return Err(CommandError::new(
+            "EXPORT_TOO_LARGE",
+            "The conversations file in this export is larger than Vox can import",
+        ));
+    }
+    Ok(buf)
+}
+
+fn is_asset_entry(name: &str, is_dir: bool, size: u64) -> bool {
+    !is_dir && !name.ends_with(".json") && size > 0 && size < MAX_ASSET_BYTES
+}
+
+/// Reads an export's conversations JSON, from a ZIP archive or a bare JSON
+/// file, without reading any attachment.
+fn read_export_contents(path: &Path) -> Result<ExportContents, CommandError> {
     let file = File::open(path).map_err(|e| CommandError::new("FILE_READ_FAILED", &e.to_string()))?;
 
-    // Try reading as ZIP
     if let Ok(mut archive) = zip::ZipArchive::new(file) {
-        let mut conv_bytes = None;
-        let mut any_json_bytes = None;
-        let mut assets = HashMap::new();
-
+        let mut conversations_index = None;
+        let mut any_json_index = None;
+        let mut asset_count = 0;
         for idx in 0..archive.len() {
-            let Ok(mut entry) = archive.by_index(idx) else { continue };
+            let Ok(entry) = archive.by_index_raw(idx) else { continue };
             let name = entry.name().to_string();
-
             if name.ends_with(".json") && !name.contains("__MACOSX") {
                 if name == "conversations.json" || name.ends_with("/conversations.json") {
-                    let mut buf = Vec::new();
-                    if entry.read_to_end(&mut buf).is_ok() {
-                        conv_bytes = Some(buf);
-                    }
-                } else if any_json_bytes.is_none() {
-                    let mut buf = Vec::new();
-                    if entry.read_to_end(&mut buf).is_ok() {
-                        any_json_bytes = Some(buf);
-                    }
+                    conversations_index = Some(idx);
+                } else if any_json_index.is_none() {
+                    any_json_index = Some(idx);
                 }
-            } else if !entry.is_dir() && entry.size() > 0 && entry.size() < 50_000_000 {
-                // Buffer assets (up to 50MB per file)
-                let base_name = name.split('/').next_back().unwrap_or(&name).to_string();
-                let mut buf = Vec::new();
-                if entry.read_to_end(&mut buf).is_ok() {
-                    assets.insert(base_name, buf);
-                }
+            } else if is_asset_entry(&name, entry.is_dir(), entry.size()) {
+                asset_count += 1;
             }
         }
-
-        if let Some(bytes) = conv_bytes.or(any_json_bytes) {
-            return Ok((bytes, Some(assets)));
+        if let Some(idx) = conversations_index.or(any_json_index) {
+            let entry = archive
+                .by_index(idx)
+                .map_err(|e| CommandError::new("FILE_READ_FAILED", &e.to_string()))?;
+            return Ok(ExportContents {
+                conversations_json: read_capped(entry, MAX_CONVERSATIONS_JSON_BYTES)?,
+                asset_count,
+            });
         }
     }
 
     // Fallback: direct JSON file
-    let mut bytes = Vec::new();
-    let mut file = File::open(path).map_err(|e| CommandError::new("FILE_READ_FAILED", &e.to_string()))?;
-    file.read_to_end(&mut bytes)
-        .map_err(|e| CommandError::new("FILE_READ_FAILED", &e.to_string()))?;
+    let file = File::open(path).map_err(|e| CommandError::new("FILE_READ_FAILED", &e.to_string()))?;
+    Ok(ExportContents {
+        conversations_json: read_capped(file, MAX_CONVERSATIONS_JSON_BYTES)?,
+        asset_count: 0,
+    })
+}
 
-    Ok((bytes, None))
+/// Reads only the attachments a conversation refers to out of an archive.
+/// A bare JSON export has none.
+fn read_referenced_assets(path: &Path, wanted: &HashSet<String>) -> HashMap<String, Vec<u8>> {
+    let mut assets = HashMap::new();
+    if wanted.is_empty() {
+        return assets;
+    }
+    let Ok(file) = File::open(path) else { return assets };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else { return assets };
+    for idx in 0..archive.len() {
+        let Ok(entry) = archive.by_index(idx) else { continue };
+        if !is_asset_entry(entry.name(), entry.is_dir(), entry.size()) {
+            continue;
+        }
+        let Some(name) = safe_asset_file_name(entry.name()) else { continue };
+        if !wanted.contains(&name) || assets.contains_key(&name) {
+            continue;
+        }
+        let mut buf = Vec::new();
+        if entry.take(MAX_ASSET_BYTES).read_to_end(&mut buf).is_ok() {
+            assets.insert(name, buf);
+        }
+    }
+    assets
+}
+
+/// Runs archive reading off the async runtime: a large export takes seconds
+/// to read, and an async worker blocked on it stalls every other command.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| CommandError::new("IMPORT_TASK_FAILED", &e.to_string()))?
 }
 
 /// Inspects an export file without writing to the vault, discovering conversations and providers.
-pub fn inspect_export_file(path: &Path, vault: &VaultManager) -> Result<ExportInspection, CommandError> {
-    let (bytes, assets) = extract_conversations_json(path)?;
+pub async fn inspect_export_file(path: &Path, vault: &VaultManager) -> Result<ExportInspection, CommandError> {
+    let owned = path.to_path_buf();
+    let contents = blocking(move || read_export_contents(&owned)).await?;
+    let bytes = contents.conversations_json;
 
     // Fetch existing captures for duplicate matching
     let existing_captures = vault.list_captures().unwrap_or_default();
@@ -221,7 +312,7 @@ pub fn inspect_export_file(path: &Path, vault: &VaultManager) -> Result<ExportIn
         })
     };
 
-    let total_assets = assets.as_ref().map(|a| a.len()).unwrap_or(0);
+    let total_assets = contents.asset_count;
 
     // 1. Try ChatGPT
     if let Ok(chatgpt_convs) = chatgpt::parse_chatgpt_conversations(&bytes) {
@@ -298,7 +389,7 @@ pub fn inspect_export_file(path: &Path, vault: &VaultManager) -> Result<ExportIn
     Err(CommandError::new("UNRECOGNIZED_EXPORT", "Could not recognize file as a ChatGPT or Claude export archive"))
 }
 
-/// Imports a selected conversation from an export package into the Relay Vault.
+/// Imports a selected conversation from an export package into the vault.
 pub async fn import_export_conversation(
     export_path: &Path,
     target_conversation_id: &str,
@@ -306,8 +397,12 @@ pub async fn import_export_conversation(
     vault: &VaultManager,
     settings: &crate::settings::AppSettings,
 ) -> Result<crate::vault::VaultFile, CommandError> {
-    let (bytes, assets_map) = extract_conversations_json(export_path)?;
-    let assets = assets_map.unwrap_or_default();
+    let owned = export_path.to_path_buf();
+    let bytes = blocking(move || read_export_contents(&owned)).await?.conversations_json;
+    let assets_of = |wanted: HashSet<String>| {
+        let owned = export_path.to_path_buf();
+        blocking(move || Ok(read_referenced_assets(&owned, &wanted)))
+    };
 
     // 1. Try ChatGPT
     if let Ok(chatgpt_convs) = chatgpt::parse_chatgpt_conversations(&bytes) {
@@ -315,6 +410,7 @@ pub async fn import_export_conversation(
             c.conversation_id.as_deref() == Some(target_conversation_id)
                 || c.id.as_deref() == Some(target_conversation_id)
         }) {
+            let assets = assets_of(chatgpt::referenced_asset_names(&target)).await?;
             return save_and_analyze_imported(
                 target.title.as_deref().unwrap_or("ChatGPT Conversation"),
                 |assets_dir| chatgpt::chatgpt_to_capture_payload(&target, Some(assets_dir), &assets),
@@ -330,6 +426,7 @@ pub async fn import_export_conversation(
     // 2. Try Claude
     if let Ok(claude_convs) = claude::parse_claude_conversations(&bytes) {
         if let Some(target) = claude_convs.into_iter().find(|c| c.uuid == target_conversation_id) {
+            let assets = assets_of(claude::referenced_asset_names(&target)).await?;
             return save_and_analyze_imported(
                 target.name.as_deref().unwrap_or("Claude Conversation"),
                 |assets_dir| claude::claude_to_capture_payload(&target, Some(assets_dir), &assets),
@@ -356,15 +453,33 @@ async fn save_and_analyze_imported<F>(
 where
     F: FnOnce(&Path) -> crate::capture::web::WebCapturePayload,
 {
-    // Generate new capture ID
-    let capture_id = format!("capture_{}", uuid::Uuid::new_v4());
-    let captures_base = vault.vault_dir().join("captures").join(&capture_id);
-    let assets_dir = captures_base.join("assets");
+    // Attachments are written to a staging folder first: the capture's own
+    // id is only known once `save_capture` has run, and it may resolve to an
+    // existing capture of the same conversation. Assets used to be written
+    // under a second, invented id that nothing pointed to.
+    let staging = vault
+        .vault_dir()
+        .join("captures")
+        .join(format!(".import-{}", uuid::Uuid::new_v4()));
+    let assets_dir = staging.join("assets");
     std::fs::create_dir_all(&assets_dir)
         .map_err(|e| CommandError::new("ASSET_DIR_FAILED", &e.to_string()))?;
+    let result = save_staged_import(&assets_dir, payload_builder, duplicate_mode, vault, settings).await;
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
 
-    // Build payload with assets extracted to assets_dir
-    let mut payload = payload_builder(&assets_dir);
+async fn save_staged_import<F>(
+    assets_dir: &Path,
+    payload_builder: F,
+    duplicate_mode: Option<&str>,
+    vault: &VaultManager,
+    settings: &crate::settings::AppSettings,
+) -> Result<crate::vault::VaultFile, CommandError>
+where
+    F: FnOnce(&Path) -> crate::capture::web::WebCapturePayload,
+{
+    let mut payload = payload_builder(assets_dir);
 
     // If duplicate_mode == Some("new"), assign unique URL so it doesn't merge/update previous capture
     if duplicate_mode == Some("new") {
@@ -379,6 +494,8 @@ where
     let vault_file = vault
         .save_capture(normalized)
         .map_err(|e| CommandError::new("SAVE_CAPTURE_FAILED", &e.to_string()))?;
+    move_staged_assets(assets_dir, &vault.vault_file_dir(&vault_file).join("assets"))
+        .map_err(|e| CommandError::new("ASSET_MOVE_FAILED", &e.to_string()))?;
 
     // Run context analysis
     let llm = LLMClient::new(settings.provider.clone());
@@ -394,9 +511,101 @@ where
     Ok(vault_file)
 }
 
+/// Moves staged attachments into the capture they belong to, replacing any
+/// same-named file an earlier import of the conversation left there.
+fn move_staged_assets(staged: &Path, target: &Path) -> std::io::Result<()> {
+    let mut entries = std::fs::read_dir(staged)?.peekable();
+    if entries.peek().is_none() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(target)?;
+    for entry in entries {
+        let entry = entry?;
+        let dest = target.join(entry.file_name());
+        if dest.exists() {
+            std::fs::remove_file(&dest)?;
+        }
+        std::fs::rename(entry.path(), dest)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("vox_import_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
+        for (name, bytes) in entries {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    /// The first pass reads only the conversations; the second reads only
+    /// the attachments the chosen conversation names.
+    #[test]
+    fn export_archives_are_read_in_two_bounded_passes() {
+        let dir = scratch_dir();
+        let archive = dir.join("export.zip");
+        write_zip(
+            &archive,
+            &[
+                ("conversations.json", b"[]"),
+                ("files/spec.md", b"# spec"),
+                ("files/unrelated.bin", b"xxxx"),
+            ],
+        );
+
+        let contents = read_export_contents(&archive).unwrap();
+        assert_eq!(contents.conversations_json, b"[]");
+        assert_eq!(contents.asset_count, 2);
+
+        let wanted: HashSet<String> = ["spec.md".to_string()].into_iter().collect();
+        let assets = read_referenced_assets(&archive, &wanted);
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets["spec.md"], b"# spec");
+
+        let bare = dir.join("conversations.json");
+        std::fs::write(&bare, b"[1]").unwrap();
+        assert_eq!(read_export_contents(&bare).unwrap().conversations_json, b"[1]");
+        assert!(read_referenced_assets(&bare, &wanted).is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Staged attachments end up inside the capture that was saved, and a
+    /// re-import replaces rather than duplicates them.
+    #[test]
+    fn staged_assets_move_into_the_saved_capture() {
+        let dir = scratch_dir();
+        let staged = dir.join(".import-x").join("assets");
+        let target = dir.join("capture_1").join("assets");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(staged.join("spec.md"), "new").unwrap();
+        std::fs::write(target.join("spec.md"), "old").unwrap();
+
+        move_staged_assets(&staged, &target).unwrap();
+
+        assert_eq!(std::fs::read_to_string(target.join("spec.md")).unwrap(), "new");
+        assert!(std::fs::read_dir(&staged).unwrap().next().is_none());
+
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        move_staged_assets(&empty, &dir.join("capture_2").join("assets")).unwrap();
+        assert!(!dir.join("capture_2").exists(), "no attachments, no assets folder");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn text_to_blocks_handles_mixed_markdown() {

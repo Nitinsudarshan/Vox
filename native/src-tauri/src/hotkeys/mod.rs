@@ -54,6 +54,10 @@ const WATCHDOG_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 /// 2 checks @ 500ms = ~1.0s of confirmed physical release.
 const LOST_RELEASE_CONFIRMATION_COUNT: u32 = 2;
 
+/// How long injection waits for the user to return to the window they
+/// dictated into before leaving the text on the clipboard instead.
+const INJECTION_RETURN_WAIT: Duration = Duration::from_secs(15);
+
 /// Explicit reason for ending a dictation session, distinguishing normal user actions
 /// from emergency safety watchdog recoveries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +144,19 @@ impl DictationState {
 
     /// Attempts to transition the session from active to stopped.
     /// Confirms `expected_generation` if provided.
-    pub fn try_stop(&mut self, expected_generation: Option<u64>) -> Option<u64> {
+    ///
+    /// A toggle stop happens on a *press*, so the key is still physically
+    /// down and `key_down` must stay set: the OS keeps re-firing "pressed"
+    /// while the key is held, and clearing the flag here made the first of
+    /// those repeats start a brand-new session. The release that follows
+    /// clears it. Every other stop either already saw the release or is the
+    /// watchdog concluding the release was lost, and in both cases the key is
+    /// up.
+    pub fn try_stop(
+        &mut self,
+        expected_generation: Option<u64>,
+        reason: DictationStopReason,
+    ) -> Option<u64> {
         if !self.active {
             return None;
         }
@@ -150,7 +166,9 @@ impl DictationState {
             }
         }
         self.active = false;
-        self.key_down = false;
+        if reason != DictationStopReason::TogglePress {
+            self.key_down = false;
+        }
         Some(self.generation)
     }
 
@@ -158,9 +176,12 @@ impl DictationState {
     pub fn try_stop_with_focus(
         &mut self,
         expected_generation: Option<u64>,
+        reason: DictationStopReason,
     ) -> Option<(u64, Option<injection::TargetFocusContext>)> {
-        let focus = self.target_focus.take();
-        self.try_stop(expected_generation).map(|gen| (gen, focus))
+        // Taken only once the stop is accepted: a stale watchdog whose stop is
+        // refused must not strip the live session of the window it types into.
+        let gen = self.try_stop(expected_generation, reason)?;
+        Some((gen, self.target_focus.take()))
     }
 }
 
@@ -196,18 +217,46 @@ pub fn parse_shortcut_to_vk_codes(shortcut: &str) -> Option<Vec<i32>> {
             "tab" => 0x09,              // VK_TAB
             "esc" | "escape" => 0x1B,   // VK_ESCAPE
             "backspace" => 0x08,        // VK_BACK
-            "f1" => 0x70,
-            "f2" => 0x71,
-            "f3" => 0x72,
-            "f4" => 0x73,
-            "f5" => 0x74,
-            "f6" => 0x75,
-            "f7" => 0x76,
-            "f8" => 0x77,
-            "f9" => 0x78,
-            "f10" => 0x79,
-            "f11" => 0x7A,
-            "f12" => 0x7B,
+            // Every name `HotkeyRecorder.tsx` can emit. An unknown name makes
+            // this return `None`, which silently turns off the stuck-key stop
+            // for that binding, so the two lists have to agree.
+            "up" | "arrowup" => 0x26,
+            "down" | "arrowdown" => 0x28,
+            "left" | "arrowleft" => 0x25,
+            "right" | "arrowright" => 0x27,
+            "insert" => 0x2D,
+            "delete" | "del" => 0x2E,
+            "home" => 0x24,
+            "end" => 0x23,
+            "pageup" => 0x21,
+            "pagedown" => 0x22,
+            "numdecimal" => 0x6E,
+            "numadd" => 0x6B,
+            "numsubtract" => 0x6D,
+            "nummultiply" => 0x6A,
+            "numdivide" => 0x6F,
+            "period" => 0xBE,
+            "comma" => 0xBC,
+            "semicolon" => 0xBA,
+            "slash" => 0xBF,
+            "backslash" => 0xDC,
+            "minus" => 0xBD,
+            "equal" => 0xBB,
+            "backquote" => 0xC0,
+            "bracketleft" => 0xDB,
+            "bracketright" => 0xDD,
+            "quote" => 0xDE,
+            // F1–F24 are VK_F1 (0x70) onwards.
+            f if f.len() >= 2
+                && f.starts_with('f')
+                && f[1..].parse::<i32>().is_ok_and(|n| (1..=24).contains(&n)) =>
+            {
+                0x6F + f[1..].parse::<i32>().unwrap_or(1)
+            }
+            // Num0–Num9 are VK_NUMPAD0 (0x60) onwards.
+            n if n.len() == 4 && n.starts_with("num") && n.as_bytes()[3].is_ascii_digit() => {
+                0x60 + i32::from(n.as_bytes()[3] - b'0')
+            }
             // Single character keys
             s if s.len() == 1 => {
                 let ch = s.chars().next().unwrap();
@@ -276,30 +325,68 @@ pub fn register_hotkeys(
     try_register_hotkeys(app, show_hide_hotkey, dictation_hotkey, capture_hotkey);
 }
 
+/// The three global bindings, in the order `apply_hotkeys` takes them.
+#[derive(Debug, Clone, Copy)]
+pub struct HotkeyBindings<'a> {
+    pub show_hide: &'a str,
+    pub dictation: &'a str,
+    pub capture: &'a str,
+}
+
+impl<'a> From<&'a crate::settings::HotkeySettings> for HotkeyBindings<'a> {
+    fn from(settings: &'a crate::settings::HotkeySettings) -> Self {
+        Self {
+            show_hide: &settings.show_hide_hotkey,
+            dictation: &settings.dictation_hotkey,
+            capture: &settings.capture_hotkey,
+        }
+    }
+}
+
 /// Re-registers hotkeys with new bindings, replacing whatever is
 /// currently bound. Used both at startup and whenever Settings saves new
 /// hotkeys — hotkeys take effect immediately, no app restart required.
+///
+/// When the new dictation or show/hide binding is refused and `previous` is
+/// given, the previous bindings are registered again before the error
+/// returns. Clearing everything first and then failing used to leave the app
+/// with no dictation hotkey at all until restart, while the error implied the
+/// old one still worked.
 pub fn apply_hotkeys(
     app: &AppHandle,
-    show_hide_hotkey: &str,
-    dictation_hotkey: &str,
-    capture_hotkey: &str,
+    bindings: HotkeyBindings<'_>,
+    previous: Option<HotkeyBindings<'_>>,
 ) -> Result<(), String> {
     app.global_shortcut()
         .unregister_all()
         .map_err(|e| format!("Could not clear existing hotkeys: {}", e))?;
-    let status = try_register_hotkeys(app, show_hide_hotkey, dictation_hotkey, capture_hotkey);
-    if !status.dictation_registered {
-        return Err(status
-            .dictation_error
-            .unwrap_or_else(|| "Dictation hotkey registration failed".to_string()));
+    let status = try_register_hotkeys(app, bindings.show_hide, bindings.dictation, bindings.capture);
+    let failure = if !status.dictation_registered {
+        Some(
+            status
+                .dictation_error
+                .unwrap_or_else(|| "Dictation hotkey registration failed".to_string()),
+        )
+    } else if !status.show_hide_registered {
+        Some(
+            status
+                .show_hide_error
+                .unwrap_or_else(|| "Show/hide hotkey registration failed".to_string()),
+        )
+    } else {
+        None
+    };
+    let Some(failure) = failure else {
+        return Ok(());
+    };
+    match previous {
+        Some(previous) => {
+            let _ = app.global_shortcut().unregister_all();
+            try_register_hotkeys(app, previous.show_hide, previous.dictation, previous.capture);
+            Err(format!("{failure}. Your previous hotkeys are still active."))
+        }
+        None => Err(failure),
     }
-    if !status.show_hide_registered {
-        return Err(status
-            .show_hide_error
-            .unwrap_or_else(|| "Show/hide hotkey registration failed".to_string()));
-    }
-    Ok(())
 }
 
 /// Registers each hotkey *independently* — one binding failing (e.g. a
@@ -428,23 +515,77 @@ fn on_dictation_pressed_with_mode(app: &AppHandle, dictation_state: &SharedDicta
         }
         PressOutcome::StartSession(generation) => {
             tracing::debug!("[Dictation] Start requested via hotkey for mode: {}", mode);
-            let audio_dir = state.config_dir.join("audio");
-            match state.recorder.start(mode, &audio_dir, Some(app.clone())) {
-                Ok(_) => {
-                    tracing::debug!("[Audio] Capture started for mode: {}", mode);
-                    emit_capture_state(app, &state.recorder);
-                    spawn_release_watchdog(
-                        app.clone(),
-                        dictation_state.clone(),
+            // Opening a cold microphone can take seconds, and this handler
+            // runs on the thread that pumps every window's messages: starting
+            // here froze the whole app until the device answered. The focus
+            // target was already taken synchronously in `on_press`.
+            let session_app = app.clone();
+            let session_state = dictation_state.clone();
+            let mode = mode.to_string();
+            let spawned = std::thread::Builder::new()
+                .name("vox-dictation-start".to_string())
+                .spawn(move || {
+                    start_dictation_capture(
+                        &session_app,
+                        &session_state,
+                        &mode,
                         generation,
                         dictation_hotkey,
                         toggle_to_talk,
-                    );
+                    )
+                });
+            if spawned.is_err() {
+                tracing::error!("[Dictation] Could not start the capture thread");
+                let mut guard = dictation_state.lock_or_recover();
+                if guard.generation == generation {
+                    guard.active = false;
                 }
-                Err(e) => {
-                    tracing::info!("Dictation hotkey could not start capture: {}", e);
-                    dictation_state.lock_or_recover().active = false;
-                }
+            }
+        }
+    }
+}
+
+/// Opens the microphone for a hotkey session, off the window thread.
+fn start_dictation_capture(
+    app: &AppHandle,
+    dictation_state: &SharedDictationState,
+    mode: &str,
+    generation: u64,
+    dictation_hotkey: String,
+    toggle_to_talk: bool,
+) {
+    let state = app.state::<AppState>();
+    let audio_dir = state.config_dir.join("audio");
+    match state.recorder.start(mode, &audio_dir, Some(app.clone())) {
+        Ok(_) => {
+            // A release, or a second toggle press, that arrived before the
+            // recorder took its lock found nothing to stop. Honour it now
+            // rather than leave the microphone open with no stop coming.
+            let still_live = {
+                let guard = dictation_state.lock_or_recover();
+                guard.active && guard.generation == generation
+            };
+            if !still_live {
+                tracing::debug!("[Dictation] Session {} ended while the microphone opened", generation);
+                let _ = tauri::async_runtime::block_on(state.recorder.stop());
+                emit_capture_state(app, &state.recorder);
+                return;
+            }
+            tracing::debug!("[Audio] Capture started for mode: {}", mode);
+            emit_capture_state(app, &state.recorder);
+            spawn_release_watchdog(
+                app.clone(),
+                dictation_state.clone(),
+                generation,
+                dictation_hotkey,
+                toggle_to_talk,
+            );
+        }
+        Err(e) => {
+            tracing::info!("Dictation hotkey could not start capture: {}", e);
+            let mut guard = dictation_state.lock_or_recover();
+            if guard.generation == generation {
+                guard.active = false;
             }
         }
     }
@@ -493,7 +634,7 @@ fn stop_dictation_session(
 
     let (session_generation, target_focus) = {
         let mut guard = dictation_state.lock_or_recover();
-        match guard.try_stop_with_focus(expected_generation) {
+        match guard.try_stop_with_focus(expected_generation, reason) {
             Some(res) => res,
             None => return,
         }
@@ -538,218 +679,94 @@ fn stop_dictation_session(
             None,
         );
 
-        let models_dir = state.config_dir.join("models");
-        let language_settings = state.settings.lock_or_recover().language.clone();
-        let stt_settings = state.settings.lock_or_recover().stt.clone();
-        let model_path = crate::capture::stt::resolve_dictation_model_path(&models_dir, &stt_settings).await;
-        let language_config = crate::capture::SttLanguageConfig::from_settings(&language_settings, crate::capture::stt::SttWindow::ShortForm);
-        let mut decoding_config = crate::capture::stt::WhisperDecodingConfig::for_dictation(&stt_settings);
-        if let Some(prompt) = state.settings.lock_or_recover().build_stt_prompt() {
-            decoding_config.initial_prompt = Some(prompt);
-        }
-
-        let parakeet_dir = models_dir.join("parakeet");
-        let use_parakeet = stt_settings.dictation_engine.as_deref() == Some("parakeet")
-            && crate::capture::parakeet::ModelFiles::is_installed_in(&parakeet_dir);
-
-        let t_whisper_start = std::time::Instant::now();
-
-        let (text_res, diag, err) = if use_parakeet {
-            let stt = state.stt.clone();
-            let samples = captured.samples.clone();
-            let p_dir = parakeet_dir.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                match stt.transcribe_parakeet(&p_dir, &samples) {
-                    Ok((t, d)) => (t, Some(d), None),
-                    Err(e) => (String::new(), None, Some(e.to_string())),
-                }
-            })
-            .await
-            .unwrap_or_else(|e| (String::new(), None, Some(e.to_string())))
-        } else {
-            let stt = state.stt.clone();
-            let samples = captured.samples.clone();
-            let mp_clone = model_path.clone();
-            let lang_clone = language_config.clone();
-            let dec_clone = decoding_config.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                match stt.transcribe_with_config(
-                    mp_clone.as_deref(),
-                    &samples,
-                    &lang_clone,
-                    &dec_clone,
-                ) {
-                    Ok((t, d)) => (t, Some(d), None),
-                    Err(e) => (String::new(), None, Some(e.to_string())),
-                }
-            })
-            .await
-            .unwrap_or_else(|e| (String::new(), None, Some(e.to_string())))
-        };
-
-        let t_whisper_complete = std::time::Instant::now();
-
-        let model_str = if use_parakeet {
-            "parakeet-tdt-0.6b-v3"
-        } else {
-            model_path.as_deref().unwrap_or(crate::capture::stt::DEFAULT_MODEL_FILENAME)
-        };
-        let snapshot = crate::capture::build_diagnostic_snapshot(
-            &captured.mode,
-            Some(captured.audio_path.clone()),
-            &captured,
-            &language_settings,
-            &language_config,
-            &decoding_config,
-            model_str,
-            &text_res,
-            diag.as_ref(),
-            err.clone(),
-        );
-        crate::commands::record_stt_diagnostics(&app, &state, snapshot);
-
-        let _t_diagnostics_complete = std::time::Instant::now();
-
-        if let Some(err_msg) = err {
-            tracing::error!("Dictation transcription failed: {}", err_msg);
-            emit_capture_status_event(
-                &app,
-                false,
-                None,
-                "ERROR",
-                Some("Transcription failed".to_string()),
-            );
-            return;
-        }
-
-        if !text_res.trim().is_empty() {
-            // Deterministic cleanup before snippets, so a trigger is matched
-            // against tidied text and the snippet's own replacement is never
-            // re-normalized afterwards. No model runs here.
-            let (cleaned, expanded_text) = {
-                let s = state.settings.lock_or_recover();
-                let cleaned = crate::capture::text_normalize::normalize_text(
-                    &text_res,
-                    crate::capture::text_normalize::Vocabulary::new(
-                        &s.dictionary,
-                        &s.vocabulary_corrections,
-                    ),
-                    crate::capture::text_normalize::TextProfile::Dictated,
-                )
-                .text;
-                let expanded = s.expand_snippets(&cleaned);
-                (cleaned, expanded)
-            };
-            let final_text = if !expanded_text.trim().is_empty() { expanded_text } else { cleaned };
-            let final_text = {
-                let s = state.settings.lock_or_recover();
-                let script = crate::capture::romanize::OutputScript::from_setting(&s.language.output_script);
-                crate::capture::romanize::project(&final_text, script).into_owned()
-            };
-            let t_snippet_complete = std::time::Instant::now();
-
-            let raw_text = final_text.clone();
-            let (provider, cleanup_style) = {
-                let s = state.settings.lock_or_recover();
-                (
-                    s.provider.clone(),
-                    crate::capture::rewrite::CleanupStyle::from_setting(&s.stt.cleanup_style),
-                )
-            };
-
-            let (final_text, cleanup_style_recorded) = if cleanup_style != crate::capture::rewrite::CleanupStyle::Raw {
+        let transcription = match crate::capture::dictation::transcribe(&app, &state, &captured).await {
+            Ok(t) => t,
+            Err(err_msg) => {
+                tracing::error!("Dictation transcription failed: {}", err_msg);
                 emit_capture_status_event(
                     &app,
                     false,
-                    Some(captured.mode.clone()),
-                    "REFINING",
-                    Some("Polishing...".to_string()),
+                    None,
+                    "ERROR",
+                    Some("Transcription failed".to_string()),
                 );
-
-                let client = crate::providers::LLMClient::new(provider);
-                let rewrite_fut = crate::capture::rewrite::propose(&client, &final_text, cleanup_style);
-                match tokio::time::timeout(std::time::Duration::from_secs(5), rewrite_fut).await {
-                    Ok(proposal) if proposal.changed => {
-                        (proposal.rewritten, Some(cleanup_style.as_str().to_string()))
-                    }
-                    Ok(_) => (final_text, None),
-                    Err(_) => {
-                        tracing::warn!("Dictation rewrite timed out after 5s; falling back to raw text");
-                        (final_text, None)
-                    }
-                }
-            } else {
-                (final_text, None)
-            };
-
-            let (auto_paste, copy_to_clipboard, injection_method) = {
-                let s = state.settings.lock_or_recover();
-                (
-                    s.clipboard.auto_paste,
-                    s.clipboard.copy_to_clipboard,
-                    s.clipboard.injection_method,
-                )
-            };
-
-            // 1. Copy to OS clipboard FIRST and NATIVELY in Rust.
-            // Using arboard directly at the OS level ensures the transcription is in the
-            // clipboard unconditionally, bypassing webview focus restrictions.
-            // When injection_method is ClipboardPaste and auto_paste is enabled, clipboard must be populated.
-            let should_copy_to_clipboard = copy_to_clipboard
-                || (auto_paste && injection_method == crate::settings::InjectionMethod::ClipboardPaste);
-
-            if should_copy_to_clipboard {
-                if let Err(e) = injection::copy_to_clipboard(&final_text) {
-                    tracing::warn!("Native dictation clipboard copy failed: {}", e);
-                } else {
-                    tracing::debug!("Native dictation clipboard copy succeeded ({} chars)", final_text.len());
-                }
-                if copy_to_clipboard {
-                    let _ = app.emit("dictation-clipboard-copy", &final_text);
-                }
+                return;
             }
+        };
 
-            // 2. Inject text into the active field, guarded against tab or window switching.
-            // If the user moved to another tab or window, wait up to 15s for them to return
-            // so text is injected directly into the original field without spraying into the wrong place.
-            // Every abort branch below tells the user the transcription is on
-            // the clipboard, so it has to actually be there. It is not always:
-            // `should_copy_to_clipboard` is false when clipboard copying is off
-            // *and* the method is Keystrokes, which is a legitimate
-            // configuration — and in it, an aborted injection used to lose the
-            // text outright while promising it was recoverable.
-            //
-            // Guaranteeing it here rather than widening the condition above
-            // keeps the normal path unchanged: on a successful injection with
-            // copying off, nothing touches the clipboard.
-            let ensure_recoverable = |text: &str| {
+        let settings = state.settings.lock_or_recover().clone();
+        let Some(finished) = crate::capture::dictation::finish_text(&settings, &transcription.text) else {
+            tracing::info!("[Dictation] Produced no speech (silence or too short, reason: {})", reason);
+            emit_capture_status_event(&app, false, None, "NO_SPEECH", None);
+            return;
+        };
+        let t_text_ready = std::time::Instant::now();
+
+        let cleanup_style = crate::capture::rewrite::CleanupStyle::from_setting(&settings.stt.cleanup_style);
+        if cleanup_style != crate::capture::rewrite::CleanupStyle::Raw {
+            emit_capture_status_event(
+                &app,
+                false,
+                Some(captured.mode.clone()),
+                "REFINING",
+                Some("Polishing...".to_string()),
+            );
+        }
+        let client = crate::providers::LLMClient::new(settings.provider.clone());
+        let cleanup = crate::capture::dictation::clean_up(
+            &client,
+            finished,
+            cleanup_style,
+            crate::capture::dictation::CLEANUP_TIMEOUT,
+        )
+        .await;
+        let final_text = cleanup.text.clone();
+
+        let auto_paste = settings.clipboard.auto_paste;
+        let copy_to_clipboard = settings.clipboard.copy_to_clipboard;
+        let injection_method = settings.clipboard.injection_method;
+
+        // When clipboard-paste injection is on, the clipboard has to hold the
+        // text for Ctrl+V to deliver it.
+        //
+        // TODO(clipboard-restore): with copying off, the clipboard is still
+        // overwritten by paste injection and never restored. Restoring it
+        // needs a delay long enough for the target app to have consumed the
+        // paste, which can only be tuned against real Windows apps.
+        let should_copy_to_clipboard = copy_to_clipboard
+            || (auto_paste && injection_method == crate::settings::InjectionMethod::ClipboardPaste);
+
+        if copy_to_clipboard {
+            let _ = app.emit("dictation-clipboard-copy", &final_text);
+        }
+
+        let t_injection_start = std::time::Instant::now();
+
+        // Clipboard writes retry with sleeps, and the focus guard below can
+        // wait up to fifteen seconds for the user to come back, so all of it
+        // runs on the blocking pool rather than stalling the async runtime
+        // that also drives the hotkey watchdog and every IPC call.
+        let outcome = if auto_paste {
+            let app_for_wait = app.clone();
+            let dictation_state_for_cancel = dictation_state.clone();
+            let text = final_text.clone();
+            tauri::async_runtime::spawn_blocking(move || {
                 if should_copy_to_clipboard {
-                    return;
+                    if let Err(e) = injection::copy_to_clipboard(&text) {
+                        tracing::warn!("Native dictation clipboard copy failed: {}", e);
+                    }
                 }
-                if let Err(e) = injection::copy_to_clipboard(text) {
-                    tracing::warn!(
-                        "Dictation: injection was aborted and the fallback clipboard copy also failed: {}",
-                        e
-                    );
-                }
-            };
-
-            let t_injection_start = std::time::Instant::now();
-
-            if auto_paste {
-                let app_for_wait = app.clone();
-                let dictation_state_for_cancel = dictation_state.clone();
-
                 let outcome = injection::inject_text_with_return_wait(
-                    &final_text,
+                    &text,
                     target_focus.as_ref(),
-                    std::time::Duration::from_secs(15),
+                    INJECTION_RETURN_WAIT,
                     std::time::Duration::from_millis(100),
                     injection_method,
-                    |_target_title| {
+                    |target_title| {
                         tracing::info!(
-                            "[Dictation] Active focus moved from '{}'. Waiting up to 15s for return...",
-                            _target_title
+                            "[Dictation] Active focus moved from '{}'. Waiting up to {:?} for return...",
+                            target_title,
+                            INJECTION_RETURN_WAIT
                         );
                         emit_capture_status_event(
                             &app_for_wait,
@@ -763,172 +780,126 @@ fn stop_dictation_session(
                         dictation_state_for_cancel.lock_or_recover().generation != session_generation
                     },
                 );
-
-                match outcome {
-                    Ok(injection::InjectionOutcome::Success) => {
-                        // Remember what landed and where, so the cleanup
-                        // offered afterwards can select exactly this text back.
-                        // Only on Success: every other branch left the text in
-                        // the clipboard rather than in a field, and there is
-                        // nothing in place to replace.
-                        *state.last_dictation.lock_or_recover() =
-                            Some(crate::commands::LastDictation {
-                                text: final_text.clone(),
-                                focus: injection::capture_target_focus_context(),
-                            });
-                        emit_capture_status_event(&app, false, None, "SUCCESS", None);
-                    }
-                    Ok(injection::InjectionOutcome::TimedOutWaitingForReturn { target_title }) => {
-                        ensure_recoverable(&final_text);
-                        tracing::info!(
-                            "[Dictation] Timed out waiting for return to '{}'. Transcription kept in clipboard.",
-                            target_title
-                        );
-                        send_os_dictation_toast(
-                            &app,
-                            "Vox Dictation",
-                            "Tab wait timed out — transcription copied to clipboard (Ctrl+V)",
-                        );
-                        emit_capture_status_event(
-                            &app,
-                            false,
-                            None,
-                            "FOCUS_CHANGED",
-                            Some("Copied (Ctrl+V)".to_string()),
-                        );
-                    }
-                    Ok(injection::InjectionOutcome::Cancelled) => {
-                        tracing::info!("[Dictation] Focus return wait cancelled by newer session.");
-                    }
-                    Ok(injection::InjectionOutcome::TabChanged { target_title, current_title }) => {
-                        ensure_recoverable(&final_text);
-                        tracing::info!(
-                            "[Dictation] Active tab changed from '{}' to '{}'. Prevented typing into wrong tab.",
-                            target_title, current_title
-                        );
-                        send_os_dictation_toast(
-                            &app,
-                            "Vox Dictation",
-                            "Tab changed — transcription copied to clipboard (Ctrl+V)",
-                        );
-                        emit_capture_status_event(
-                            &app,
-                            false,
-                            None,
-                            "FOCUS_CHANGED",
-                            Some("Copied (Ctrl+V)".to_string()),
-                        );
-                    }
-                    Ok(injection::InjectionOutcome::AppChanged { target_title, current_title }) => {
-                        ensure_recoverable(&final_text);
-                        tracing::info!(
-                            "[Dictation] Foreground app changed from '{}' to '{}'. Prevented typing into wrong app.",
-                            target_title, current_title
-                        );
-                        send_os_dictation_toast(
-                            &app,
-                            "Vox Dictation",
-                            "App changed — transcription copied to clipboard (Ctrl+V)",
-                        );
-                        emit_capture_status_event(
-                            &app,
-                            false,
-                            None,
-                            "FOCUS_CHANGED",
-                            Some("Copied (Ctrl+V)".to_string()),
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("Dictation text injection failed: {}", e);
-                        emit_capture_status_event(
-                            &app,
-                            false,
-                            None,
-                            "ERROR",
-                            Some("Couldn't insert text".to_string()),
+                // Every abort branch tells the user the transcription is on
+                // the clipboard, so it has to actually be there — including
+                // when copying is off and the method is Keystrokes, where
+                // nothing above put it there.
+                let aborted = matches!(
+                    outcome,
+                    Ok(injection::InjectionOutcome::TimedOutWaitingForReturn { .. }
+                        | injection::InjectionOutcome::TabChanged { .. }
+                        | injection::InjectionOutcome::AppChanged { .. })
+                );
+                if aborted && !should_copy_to_clipboard {
+                    if let Err(e) = injection::copy_to_clipboard(&text) {
+                        tracing::warn!(
+                            "Dictation: injection was aborted and the fallback clipboard copy also failed: {}",
+                            e
                         );
                     }
                 }
-            } else {
+                Some(outcome)
+            })
+            .await
+            .unwrap_or_else(|e| Some(Err(injection::InjectionError::SimulationFailed(e.to_string()))))
+        } else {
+            if should_copy_to_clipboard {
+                let text = final_text.clone();
+                let copied = tauri::async_runtime::spawn_blocking(move || injection::copy_to_clipboard(&text)).await;
+                if let Ok(Err(e)) = copied {
+                    tracing::warn!("Native dictation clipboard copy failed: {}", e);
+                }
+            }
+            None
+        };
+
+        match outcome {
+            None | Some(Ok(injection::InjectionOutcome::Success)) => {
                 emit_capture_status_event(&app, false, None, "SUCCESS", None);
             }
-
-            let t_injection_complete = std::time::Instant::now();
-
-            // 3. Persist voice note in vault after injection so vault disk I/O does not delay paste
-            let t_vault_start = std::time::Instant::now();
-            let raw_opt = if raw_text != final_text { Some(raw_text.as_str()) } else { None };
-            let _ = crate::commands::save_voice_note(
-                &app,
-                &state.vault,
-                &final_text,
-                raw_opt,
-                cleanup_style_recorded.as_deref(),
-            );
-            let t_vault_complete = std::time::Instant::now();
-
-            let metrics = captured.timing_metrics.clone().unwrap_or_default();
-            let recording_to_audio_ready = t_recorder_stop_complete.duration_since(t_release).as_millis();
-            let audio_ready_to_stt_start = t_whisper_start.duration_since(t_recorder_stop_complete).as_millis();
-            let stt_execution = t_whisper_complete.duration_since(t_whisper_start).as_millis();
-            let stt_to_text_available = t_snippet_complete.duration_since(t_whisper_complete).as_millis();
-            let text_available_to_injection = t_injection_complete.duration_since(t_snippet_complete).as_millis();
-            let injection_duration = t_injection_complete.duration_since(t_injection_start).as_millis();
-            let total_e2e_latency = t_injection_complete.duration_since(t_release).as_millis();
-
-            let now = std::time::SystemTime::now();
-            let format_ts = |t_inst: std::time::Instant| -> String {
-                let dt = if t_inst <= t_injection_complete {
-                    let diff = t_injection_complete.duration_since(t_inst);
-                    now.checked_sub(diff).unwrap_or(now)
-                } else {
-                    now
-                };
-                let dur = dt.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-                let secs = dur.as_secs();
-                let millis = dur.subsec_millis();
-                let hours = (secs / 3600) % 24;
-                let mins = (secs / 60) % 60;
-                let s = secs % 60;
-                format!("{:02}:{:02}:{:02}.{:03}", hours, mins, s, millis)
-            };
-
-            println!("\n==================================================");
-            println!("DICTATION LATENCY TRACE");
-            println!("-----------------------");
-            println!("stop_reason          : {}", reason);
-            println!("recording_stop       : {}", format_ts(t_release));
-            println!("audio_ready          : {}", format_ts(t_recorder_stop_complete));
-            println!("stt_start            : {}", format_ts(t_whisper_start));
-            println!("stt_end              : {}", format_ts(t_whisper_complete));
-            println!("text_available       : {}", format_ts(t_snippet_complete));
-            println!("injection_start      : {}", format_ts(t_injection_start));
-            println!("injection_complete   : {}", format_ts(t_injection_complete));
-            println!("\nDurations:");
-            println!("recording → audio_ready       : {} ms", recording_to_audio_ready);
-            println!("audio_ready → STT start       : {} ms", audio_ready_to_stt_start);
-            println!("STT execution                 : {} ms", stt_execution);
-            println!("STT → text available          : {} ms", stt_to_text_available);
-            println!("text available → injection    : {} ms", text_available_to_injection);
-            println!("TOTAL                         : {} ms", total_e2e_latency);
-            println!("==================================================\n");
-
-            tracing::info!(
-                "[DICTATION_LATENCY] reason={}, total={}ms, whisper={}ms, rec_stop={}ms, vad={}ms, wav_io={}ms, vault_io={}ms, inject={}ms",
-                reason,
-                total_e2e_latency,
-                stt_execution,
-                recording_to_audio_ready,
-                metrics.vad_ms,
-                metrics.wav_write_ms,
-                t_vault_complete.duration_since(t_vault_start).as_millis(),
-                injection_duration
-            );
-        } else {
-            tracing::info!("[Dictation] Produced no speech (silence or too short, reason: {})", reason);
-            emit_capture_status_event(&app, false, None, "NO_SPEECH", None);
+            Some(Ok(injection::InjectionOutcome::Cancelled)) => {
+                tracing::info!("[Dictation] Focus return wait cancelled by newer session.");
+            }
+            Some(Ok(injection::InjectionOutcome::TimedOutWaitingForReturn { target_title })) => {
+                report_injection_abort(
+                    &app,
+                    &format!("Timed out waiting for return to '{target_title}'"),
+                    "Tab wait timed out — transcription copied to clipboard (Ctrl+V)",
+                );
+            }
+            Some(Ok(injection::InjectionOutcome::TabChanged { target_title, current_title })) => {
+                report_injection_abort(
+                    &app,
+                    &format!("Active tab changed from '{target_title}' to '{current_title}'"),
+                    "Tab changed — transcription copied to clipboard (Ctrl+V)",
+                );
+            }
+            Some(Ok(injection::InjectionOutcome::AppChanged { target_title, current_title })) => {
+                report_injection_abort(
+                    &app,
+                    &format!("Foreground app changed from '{target_title}' to '{current_title}'"),
+                    "App changed — transcription copied to clipboard (Ctrl+V)",
+                );
+            }
+            Some(Err(e)) => {
+                tracing::error!("Dictation text injection failed: {}", e);
+                emit_capture_status_event(
+                    &app,
+                    false,
+                    None,
+                    "ERROR",
+                    Some("Couldn't insert text".to_string()),
+                );
+            }
         }
+
+        let t_injection_complete = std::time::Instant::now();
+
+        // Persisted after injection so vault disk I/O never delays the paste.
+        let t_vault_start = std::time::Instant::now();
+        let _ = crate::commands::save_voice_note(
+            &app,
+            &state.vault,
+            &final_text,
+            cleanup.before_if_changed(),
+            cleanup.applied_style_name(),
+        );
+        let vault_ms = t_vault_start.elapsed().as_millis();
+
+        let metrics = captured.timing_metrics.clone().unwrap_or_default();
+        tracing::info!(
+            "[DICTATION_LATENCY] reason={}, total={}ms, rec_stop={}ms (vad={}ms, wav_io={}ms), \
+             stt_wait={}ms, stt={}ms, text={}ms, cleanup={}ms{}, inject_incl_focus_wait={}ms, vault_io={}ms",
+            reason,
+            t_injection_complete.duration_since(t_release).as_millis(),
+            t_recorder_stop_complete.duration_since(t_release).as_millis(),
+            metrics.vad_ms,
+            metrics.wav_write_ms,
+            transcription.started_at.duration_since(t_recorder_stop_complete).as_millis(),
+            transcription.decode.as_millis(),
+            t_text_ready
+                .duration_since(transcription.started_at + transcription.decode)
+                .as_millis(),
+            cleanup.elapsed.map(|d| d.as_millis()).unwrap_or(0),
+            if cleanup.timed_out { " (timed out)" } else { "" },
+            t_injection_complete.duration_since(t_injection_start).as_millis(),
+            vault_ms,
+        );
     });
+}
+
+/// Tells the user an injection was withheld to avoid typing into the wrong
+/// place, and that the text is on the clipboard instead.
+fn report_injection_abort(app: &AppHandle, log: &str, toast: &str) {
+    tracing::info!("[Dictation] {}. Transcription kept in clipboard.", log);
+    send_os_dictation_toast(app, "Vox Dictation", toast);
+    emit_capture_status_event(
+        app,
+        false,
+        None,
+        "FOCUS_CHANGED",
+        Some("Copied (Ctrl+V)".to_string()),
+    );
 }
 
 /// Spawns the safety watchdog for an active dictation session.
@@ -1073,6 +1044,16 @@ mod tests {
             Some(vec![0x12, 0x41])
         );
         assert_eq!(parse_shortcut_to_vk_codes("UnknownNonExistentKey"), None);
+        // Names the recorder emits beyond letters, digits and F1–F12.
+        assert_eq!(parse_shortcut_to_vk_codes("Ctrl+Backquote"), Some(vec![0x11, 0xC0]));
+        assert_eq!(parse_shortcut_to_vk_codes("F13"), Some(vec![0x7C]));
+        assert_eq!(parse_shortcut_to_vk_codes("F24"), Some(vec![0x87]));
+        assert_eq!(parse_shortcut_to_vk_codes("F25"), None);
+        assert_eq!(parse_shortcut_to_vk_codes("Num0"), Some(vec![0x60]));
+        assert_eq!(parse_shortcut_to_vk_codes("Shift+PageUp"), Some(vec![0x10, 0x21]));
+        assert_eq!(parse_shortcut_to_vk_codes("Alt+Period"), Some(vec![0x12, 0xBE]));
+        assert_eq!(parse_shortcut_to_vk_codes("Up"), Some(vec![0x26]));
+        assert_eq!(parse_shortcut_to_vk_codes("F"), Some(vec![0x46]));
     }
 
     #[test]
@@ -1106,7 +1087,7 @@ mod tests {
         assert_eq!(release, ReleaseOutcome::StopHold(1));
         assert!(!state.key_down);
 
-        let stopped_gen = state.try_stop(None);
+        let stopped_gen = state.try_stop(None, DictationStopReason::NormalRelease);
         assert_eq!(stopped_gen, Some(1));
         assert!(!state.active);
     }
@@ -1129,9 +1110,35 @@ mod tests {
         let second_press = state.on_press(true);
         assert_eq!(second_press, PressOutcome::StopToggle(1));
 
-        let stopped_gen = state.try_stop(None);
+        let stopped_gen = state.try_stop(None, DictationStopReason::TogglePress);
         assert_eq!(stopped_gen, Some(1));
         assert!(!state.active);
+    }
+
+    #[test]
+    fn toggle_stop_ignores_auto_repeat_while_the_key_is_still_held() {
+        let mut state = DictationState::new();
+        assert_eq!(state.on_press(true), PressOutcome::StartSession(1));
+        state.on_release(true);
+
+        // The stopping press, then the OS auto-repeating it while held.
+        assert_eq!(state.on_press(true), PressOutcome::StopToggle(1));
+        assert_eq!(state.try_stop(None, DictationStopReason::TogglePress), Some(1));
+        assert_eq!(state.on_press(true), PressOutcome::IgnoredRepeat);
+        assert_eq!(state.on_press(true), PressOutcome::IgnoredRepeat);
+        assert!(!state.active, "a held stop key must not start a new session");
+
+        // Only a release and a fresh press start the next one.
+        state.on_release(true);
+        assert_eq!(state.on_press(true), PressOutcome::StartSession(2));
+    }
+
+    #[test]
+    fn a_lost_release_does_not_leave_the_next_press_ignored() {
+        let mut state = DictationState::new();
+        state.on_press(false);
+        assert_eq!(state.try_stop(Some(1), DictationStopReason::WatchdogLostRelease), Some(1));
+        assert_eq!(state.on_press(false), PressOutcome::StartSession(2));
     }
 
     #[test]
@@ -1143,7 +1150,7 @@ mod tests {
 
         // Session 1 stops normally
         state.on_release(false);
-        state.try_stop(Some(1));
+        state.try_stop(Some(1), DictationStopReason::NormalRelease);
         assert!(!state.active);
 
         // Session 2 starts
@@ -1152,7 +1159,7 @@ mod tests {
         assert!(state.active);
 
         // Old watchdog from generation 1 attempts to stop session
-        let stopped_by_old_watchdog = state.try_stop(Some(1));
+        let stopped_by_old_watchdog = state.try_stop(Some(1), DictationStopReason::WatchdogLostRelease);
         assert_eq!(stopped_by_old_watchdog, None);
         assert!(state.active); // Generation 2 is still active and untouched!
         assert_eq!(state.generation, 2);
@@ -1167,9 +1174,35 @@ mod tests {
         assert_eq!(state.generation, 1);
 
         // Simulate watchdog discovering physical key is no longer pressed and recovering
-        let stopped = state.try_stop(Some(1));
+        let stopped = state.try_stop(Some(1), DictationStopReason::WatchdogLostRelease);
         assert_eq!(stopped, Some(1));
         assert!(!state.active);
+    }
+
+    #[test]
+    fn a_refused_stop_keeps_the_live_sessions_focus_target() {
+        let mut state = DictationState::new();
+        state.on_press(false);
+        state.on_release(false);
+        state.try_stop(Some(1), DictationStopReason::NormalRelease);
+        state.on_press(false);
+        state.target_focus = Some(injection::TargetFocusContext {
+            hwnd: 7,
+            title: "Untitled - Notepad".into(),
+            process_id: 42,
+        });
+
+        assert_eq!(
+            state.try_stop_with_focus(Some(1), DictationStopReason::WatchdogLostRelease),
+            None
+        );
+        assert!(state.target_focus.is_some(), "generation 2 still needs its target");
+
+        let (gen, focus) = state
+            .try_stop_with_focus(Some(2), DictationStopReason::NormalRelease)
+            .expect("the live session stops");
+        assert_eq!(gen, 2);
+        assert_eq!(focus.map(|f| f.hwnd), Some(7));
     }
 
     #[test]

@@ -12,11 +12,45 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { DiagramViewport } from '@/components/shared/DiagramViewport';
+import { describeError } from '@/lib/errors';
 
 interface MarkdownViewProps {
   content: string;
   className?: string;
+  /**
+   * Content from an external source — a captured page, or text derived from
+   * one. Mermaid is never run on it, however it is fenced or worded, and its
+   * remote images are not fetched until the reader asks: opening a capture
+   * used to fire every tracking pixel the page carried.
+   */
+  untrusted?: boolean;
 }
+
+/**
+ * A remote image that loads only when asked. Shows where it would come from
+ * first, so opening untrusted content never makes a request on its own.
+ */
+const DeferredImage: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
+  const [shown, setShown] = React.useState(false);
+  let host = src;
+  try {
+    host = new URL(src).host;
+  } catch {
+    // Not an absolute URL; show it as written.
+  }
+  if (shown) {
+    return <img src={src} alt={alt} className="max-w-full h-auto rounded-lg object-contain max-h-96" />;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setShown(true)}
+      className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+    >
+      Show image{alt && alt !== 'image' ? ` "${alt}"` : ''} from {host}
+    </button>
+  );
+};
 
 // Regex to identify if a line marks the beginning of a Mermaid diagram
 const MERMAID_START_REGEX = /^(graph\s+(LR|RL|TD|TB|BT|)|flowchart\s+(LR|RL|TD|TB|BT|)|sequenceDiagram|classDiagram|stateDiagram(-v2)?|erDiagram|journey|gantt|pie|quadrantChart|requirementDiagram|gitGraph|mindmap|timeline|sankey(-beta)?|block(-beta)?|architecture(-beta)?|c4(Context|Container|Component|Dynamic|Deployment)|zenuml)(\s|$)/i;
@@ -153,10 +187,10 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
         if (isMounted) {
           setSvgContent(svg);
         }
-      } catch (err: any) {
+      } catch (err) {
         if (isMounted) {
           console.warn('[MermaidBlock] Render error:', err);
-          setError(err?.message || 'Could not parse Mermaid diagram syntax.');
+          setError(describeError(err, 'Could not parse Mermaid diagram syntax.'));
         }
       }
     };
@@ -315,7 +349,7 @@ function isTableSeparator(line: string): boolean {
   return /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?$/.test(trimmed);
 }
 
-export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className = '' }) => {
+export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className = '', untrusted = false }) => {
   if (!content) return null;
 
   const lines = content.split('\n');
@@ -324,6 +358,21 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className =
   let inCodeBlock = false;
   let codeBlockType = '';
   let codeBlockBuffer: string[] = [];
+  // A fence closes only on a run of backticks at least as long as the one
+  // that opened it (CommonMark). Closing on any three let captured code that
+  // contained a ``` line escape its block and render as markup.
+  let codeFenceLength = 0;
+
+  const isDiagramFence = (type: string, code: string) =>
+    !untrusted &&
+    (type === 'mermaid' ||
+      type === 'flowchart' ||
+      type === 'graph' ||
+      type === 'diagram' ||
+      type === 'mmd' ||
+      type === 'sequence' ||
+      type === 'mindmap' ||
+      isMermaidCode(code));
 
   let inRawDiagram = false;
   let rawDiagramBuffer: string[] = [];
@@ -352,22 +401,16 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className =
     const explicitIndentLevel = Math.floor(leadingSpacesCount / 2);
 
     // 1. Triple backtick code block boundary
-    if (trimmed.startsWith('```')) {
+    const fenceRun = trimmed.match(/^`{3,}/)?.[0].length ?? 0;
+    const closesFence = inCodeBlock && fenceRun >= codeFenceLength && trimmed.slice(fenceRun).trim() === '';
+    if (fenceRun > 0 && (!inCodeBlock || closesFence)) {
       flushRawDiagram(`flush_${i}`);
       inNumberedContext = false;
 
       if (inCodeBlock) {
         // Closing code block
         const code = codeBlockBuffer.join('\n');
-        const isMermaid =
-          codeBlockType === 'mermaid' ||
-          codeBlockType === 'flowchart' ||
-          codeBlockType === 'graph' ||
-          codeBlockType === 'diagram' ||
-          codeBlockType === 'mmd' ||
-          codeBlockType === 'sequence' ||
-          codeBlockType === 'mindmap' ||
-          isMermaidCode(code);
+        const isMermaid = isDiagramFence(codeBlockType, code);
 
         if (isMermaid) {
           elements.push(<MermaidBlock key={`mermaid_${i}`} code={code} />);
@@ -384,6 +427,7 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className =
       } else {
         // Opening code block
         inCodeBlock = true;
+        codeFenceLength = fenceRun;
         codeBlockType = trimmed.replace(/^```+/, '').trim().toLowerCase();
         codeBlockBuffer = [];
       }
@@ -396,7 +440,7 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className =
     }
 
     // 2. Unenclosed Raw Mermaid diagram detection
-    if (!inRawDiagram && MERMAID_START_REGEX.test(trimmed)) {
+    if (!untrusted && !inRawDiagram && MERMAID_START_REGEX.test(trimmed)) {
       inRawDiagram = true;
       inNumberedContext = false;
       rawDiagramBuffer.push(rawLine);
@@ -482,7 +526,11 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className =
       const src = imgMatch[2];
       elements.push(
         <div key={`img_${i}`} className="my-2 max-w-full overflow-hidden rounded-lg">
-          <img src={src} alt={alt} className="max-w-full h-auto rounded-lg object-contain max-h-96" loading="lazy" />
+          {untrusted ? (
+            <DeferredImage src={src} alt={alt} />
+          ) : (
+            <img src={src} alt={alt} className="max-w-full h-auto rounded-lg object-contain max-h-96" loading="lazy" />
+          )}
         </div>
       );
       continue;
@@ -618,13 +666,7 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className =
 
   if (inCodeBlock && codeBlockBuffer.length > 0) {
     const code = codeBlockBuffer.join('\n');
-    const isMermaid =
-      codeBlockType === 'mermaid' ||
-      codeBlockType === 'flowchart' ||
-      codeBlockType === 'graph' ||
-      codeBlockType === 'diagram' ||
-      codeBlockType === 'mmd' ||
-      isMermaidCode(code);
+    const isMermaid = isDiagramFence(codeBlockType, code);
 
     if (isMermaid) {
       elements.push(<MermaidBlock key="mermaid_end" code={code} />);

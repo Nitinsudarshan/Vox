@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { cn, applyThemeWithoutTransition } from '@/lib/utils';
 import { playDictationStartSound, playDictationStopSound } from '@/lib/soundEffects';
+import { describeError } from '@/lib/errors';
+import type { CaptureStatusPayload, OllamaStatus, SttModelStatus } from '@/types/models';
 
 export function getPillLanguageFromSettings(lang?: LanguageSettings): SpeechLanguage {
   if (!lang) return 'auto';
@@ -89,13 +91,16 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   
   // Settings & Toggles
   const [autoPaste, setAutoPaste] = useState(true);
-  const [cleanupStyle, setCleanupStyle] = useState<CleanupStyle>('faithful');
+  const [cleanupStyle, setCleanupStyle] = useState<CleanupStyle>('raw');
   const [language, setLanguage] = useState<SpeechLanguage>('auto');
   const [dictationShortcut, setDictationShortcut] = useState('Ctrl+Space');
 
   // Audio Level & Mode-Aware Status
   const [levelHistory, setLevelHistory] = useState<number[]>(SILENT_LEVEL_HISTORY);
-  const [captureMode, setCaptureMode] = useState<string | null>(null);
+  // A ref, not state: it is read only inside the capture listener, and as an
+  // effect dependency it re-subscribed every listener (clearing the hover
+  // timers) whenever the mode changed.
+  const captureModeRef = useRef<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string>('Text inserted');
@@ -120,6 +125,15 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   const hoverLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsRef = useRef<AppSettings | null>(null);
   const isRecordingRef = useRef<boolean>(false);
+
+  /** Collapses a result message after `ms`, unless something replaced it. */
+  const collapseAfter = (ms: number) => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    successTimerRef.current = setTimeout(
+      () => setPhase((p) => (p === 'success' ? 'collapsed' : p)),
+      ms,
+    );
+  };
 
   const isExpanded = (phase !== 'collapsed' && phase !== 'hidden_notch' && phase !== 'error' && phase !== 'warning') || hovering || popoverOpen;
 
@@ -300,7 +314,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
         }
         if (payload.stt) {
           setCleanupStyle(
-            (payload.stt.cleanup_style || payload.stt.cleanupStyle || 'faithful') as CleanupStyle
+            (payload.stt.cleanup_style || payload.stt.cleanupStyle || 'raw') as CleanupStyle
           );
         }
         if (payload.hotkeys?.dictation_hotkey) {
@@ -351,7 +365,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       }
       if (appSettings?.stt) {
         setCleanupStyle(
-          (appSettings.stt.cleanup_style || (appSettings.stt as any).cleanupStyle || 'faithful') as CleanupStyle
+          (appSettings.stt.cleanup_style || appSettings.stt.cleanupStyle || 'raw') as CleanupStyle
         );
       }
       if (appSettings?.clipboard?.auto_paste !== undefined) {
@@ -363,25 +377,27 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       }
 
       try {
-        const sttResult = await invoke<any>('ensure_stt_model_ready');
-        if (sttResult.state === 'ready' || sttResult.Ready) {
-          setWhisperStatus({ status: 'ready', modelPath: sttResult.Ready?.path || sttResult.path });
+        // Status only. Opening the pill must never start a download; that is
+        // handleDownloadWhisper, behind the user's click.
+        const sttResult = await invoke<SttModelStatus>('get_dictation_model_status');
+        if (sttResult.state === 'ready') {
+          setWhisperStatus({ status: 'ready', modelPath: sttResult.path });
         } else {
-          setWhisperStatus({ status: 'download_required', message: 'Whisper model required' });
+          setWhisperStatus({ status: 'download_required', message: 'Speech model required' });
         }
       } catch {
         setWhisperStatus({ status: 'download_required', message: 'Whisper check failed' });
       }
 
       try {
-        const llmResult = await invoke<any>('ensure_local_llm_ready');
+        const llmResult = await invoke<OllamaStatus>('ensure_local_llm_ready');
         if (appSettings.provider.active_provider !== 'ollama') {
           setOllamaStatus({
             status: 'cloud_active',
             host: 'cloud',
             model: appSettings.provider.cloud_model || 'cloud',
           });
-        } else if (llmResult === 'Running' || llmResult.state === 'running') {
+        } else if (llmResult.state === 'running' || llmResult.state === 'started') {
           setOllamaStatus({
             status: 'ready',
             host: appSettings.provider.ollama_host,
@@ -409,11 +425,11 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   const handleDownloadWhisper = async () => {
     setWhisperStatus({ status: 'downloading' });
     try {
-      const res = await invoke<any>('ensure_stt_model_ready');
-      if (res.state === 'ready' || res.Ready) {
-        setWhisperStatus({ status: 'ready', modelPath: res.Ready?.path || res.path });
+      const res = await invoke<SttModelStatus>('ensure_stt_model_ready');
+      if (res.state === 'ready') {
+        setWhisperStatus({ status: 'ready', modelPath: res.path });
       } else {
-        setWhisperStatus({ status: 'failed', message: 'Download failed' });
+        setWhisperStatus({ status: 'failed', message: res.message });
       }
     } catch {
       setWhisperStatus({ status: 'failed', message: 'Download failed' });
@@ -423,7 +439,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
   useEffect(() => {
     refreshDependencies();
 
-    invoke<any>('get_capture_status')
+    invoke<CaptureStatusPayload>('get_capture_status')
       .then((status) => {
         if (status.active) {
           isRecordingRef.current = true;
@@ -434,9 +450,13 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
 
     const unlistenState = listen<CaptureStatePayload>('capture-state-changed', ({ payload }) => {
       if (payload.mode) {
-        setCaptureMode(payload.mode);
+        captureModeRef.current = payload.mode;
       }
       if (payload.active) {
+        // A new recording outlives whatever was about to collapse the pill:
+        // the previous session's "Text inserted" timer and a hover-leave.
+        if (successTimerRef.current) clearTimeout(successTimerRef.current);
+        if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current);
         if (!isRecordingRef.current) {
           isRecordingRef.current = true;
           if (settingsRef.current?.sound?.dictation_sounds ?? true) {
@@ -467,19 +487,19 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           setProcessingMessage(payload.message || 'Waiting for tab...');
         } else if (payload.status === 'SUCCESS') {
           setPhase('success');
-          const isDictation = payload.mode === 'dictation' || captureMode === 'dictation';
-          if (isDictation) {
+          const mode = payload.mode ?? captureModeRef.current;
+          if (mode === 'dictation') {
             setSuccessMessage('Text inserted');
+          } else if (mode === 'todo') {
+            setSuccessMessage('Todo added');
           } else {
             setSuccessMessage('Voice note saved');
           }
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => setPhase('collapsed'), 2200);
+          collapseAfter(2200);
         } else if (payload.status === 'FOCUS_CHANGED') {
           setPhase('success');
           setSuccessMessage(payload.message || 'Copied (Ctrl+V)');
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => setPhase('collapsed'), 3200);
+          collapseAfter(3200);
         } else if (payload.status === 'ERROR' || payload.message) {
           setPhase('error');
           setErrorMessage(payload.message || 'Capture processing failed');
@@ -532,7 +552,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
       if (hoverEnterTimerRef.current) clearTimeout(hoverEnterTimerRef.current);
       if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current);
     };
-  }, [captureMode]);
+  }, []);
 
   // Update Rust native window geometry
   useEffect(() => {
@@ -554,7 +574,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
     if (!hovering) {
       hoverEnterTimerRef.current = setTimeout(() => {
         setHovering(true);
-        if (phase === 'collapsed' || phase === 'hidden_notch') setPhase('expanded');
+        setPhase((p) => (p === 'collapsed' || p === 'hidden_notch' ? 'expanded' : p));
       }, HOVER_EXPAND_DELAY_MS);
     }
   };
@@ -565,7 +585,9 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
 
     hoverLeaveTimerRef.current = setTimeout(() => {
       setHovering(false);
-      if (phase === 'expanded') setPhase('collapsed');
+      // Read the phase when the timer fires, not when the mouse left: a
+      // recording may have started in between.
+      setPhase((p) => (p === 'expanded' ? 'collapsed' : p));
     }, HOVER_COLLAPSE_DELAY_MS);
   };
 
@@ -585,20 +607,19 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           setPhase('success');
           setSuccessMessage('Voice note saved');
           if (onProcessComplete) onProcessComplete(result);
-          if (successTimerRef.current) clearTimeout(successTimerRef.current);
-          successTimerRef.current = setTimeout(() => setPhase('collapsed'), 2200);
+          collapseAfter(2200);
         } else {
           setPhase('collapsed');
         }
-      } catch (err: any) {
-        setErrorMessage(err.message || 'Audio capture failed');
+      } catch (err) {
+        setErrorMessage(describeError(err, 'Audio capture failed'));
         setPhase('error');
       }
     } else {
       try {
         setErrorMessage(null);
         setWarningMessage(null);
-        setCaptureMode('voice_note');
+        captureModeRef.current = 'voice_note';
         // No optimistic setPhase('listening') here either — the native
         // recorder is the source of truth for whether capture actually
         // started. Claiming "listening" before start_capture resolves (or
@@ -607,8 +628,8 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
         // anything was actually recording. The capture-state-changed
         // listener above flips this to 'listening' once Rust confirms it.
         await invoke('start_capture', { mode: 'voice_note' });
-      } catch (err: any) {
-        setErrorMessage(err.message || 'Failed to start capture');
+      } catch (err) {
+        setErrorMessage(describeError(err, 'Failed to start capture'));
         setPhase('error');
       }
     }
@@ -620,7 +641,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
     llmStatus: ollamaStatus.status,
     hotkeyStatus: hotkeyStatus.status,
     windowMode: popoverOpen ? 'popover' : isExpanded ? 'expanded' : 'resting',
-    activeApp: 'Relay',
+    activeApp: 'Vox',
   };
 
   const pillPos = settings?.ui?.pill_position || 'bottom_center';
@@ -646,7 +667,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           )}
         >
           <div className="flex items-center gap-1 font-bold border-b border-emerald-500/20 pb-0.5">
-            <Bug className="w-3 h-3 text-emerald-400" /> Relay Inspection HUD
+            <Bug className="w-3 h-3 text-emerald-400" /> Vox Inspection HUD
           </div>
           <div>State: <span className="text-white">{diagnosticsInfo.state}</span> | Window: <span className="text-white">{diagnosticsInfo.windowMode}</span></div>
           <div>STT: <span className="text-white">{diagnosticsInfo.sttStatus}</span> | LLM: <span className="text-white">{diagnosticsInfo.llmStatus}</span></div>
@@ -716,7 +737,7 @@ export const DictationPill: React.FC<DictationPillProps> = ({ onProcessComplete 
           </div>
         )}
 
-      {/* Main Relay Pill Surface (Process label removed, dark theme matching #171717) */}
+      {/* Main Vox Pill Surface (Process label removed, dark theme matching #171717) */}
       <div
         className={cn(
           'absolute bottom-[16px] transition-all duration-200 ease-out pointer-events-none z-30',

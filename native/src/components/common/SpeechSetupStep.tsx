@@ -12,6 +12,7 @@ import {
 } from '@/lib/speechModels';
 import { listInputDevices } from '@/lib/meetings';
 import type { SpeechModel, SpeechModelCatalogue } from '@/types/models';
+import { describeError } from '@/lib/errors';
 
 interface SpeechSetupStepProps {
   /** Called when the user is done here, whether or not a model was installed. */
@@ -170,7 +171,7 @@ export const SpeechSetupStep: React.FC<SpeechSetupStepProps> = ({ onDone }) => {
               setProgress({ id: recommended.id, fraction: null });
               void downloadSpeechModel(recommended.id).catch((err) => {
                 setProgress(null);
-                setError(err instanceof Error ? err.message : String(err));
+                setError(describeError(err));
               });
             }}
           >

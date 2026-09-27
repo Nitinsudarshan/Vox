@@ -16,72 +16,50 @@ pub struct GoogleOAuthConfig {
     pub client_secret: Option<String>,
 }
 
+/// A client id that is Google's own documentation sample, which some copies
+/// of the setup guide carried. Sending it only produces a confusing
+/// `invalid_client` from Google, so it is treated as unset.
+const PLACEHOLDER_CLIENT_ID_FRAGMENT: &str = "1055740445695";
+
 impl GoogleOAuthConfig {
     /// Resolves the Google Client ID in priority order:
     /// 1. Custom developer override if provided
-    /// 2. Compile-time environment variable `RELAY_GOOGLE_CLIENT_ID`
-    /// 3. Runtime environment variable `RELAY_GOOGLE_CLIENT_ID`
+    /// 2. Build-time `VOX_GOOGLE_CLIENT_ID` (legacy: `RELAY_GOOGLE_CLIENT_ID`)
+    /// 3. Run-time `VOX_GOOGLE_CLIENT_ID` (legacy: `RELAY_GOOGLE_CLIENT_ID`)
     ///
     /// If no valid Client ID is configured, returns a clean typed error rather than sending a broken placeholder to Google.
     pub fn resolve_client_id(custom_client_id: Option<String>) -> Result<String, String> {
-        // 1. Explicit custom override
-        if let Some(c_id) = custom_client_id {
-            let clean = c_id.trim().to_string();
-            if !clean.is_empty() && !clean.contains("1055740445695") {
-                return Ok(clean);
-            }
-        }
-
-        // 2. Compile-time env
-        if let Some(c_id) = option_env!("RELAY_GOOGLE_CLIENT_ID") {
-            let clean = c_id.trim().to_string();
-            if !clean.is_empty() && !clean.contains("1055740445695") {
-                return Ok(clean);
-            }
-        }
-
-        // 3. Runtime env
-        if let Ok(c_id) = std::env::var("RELAY_GOOGLE_CLIENT_ID") {
-            let clean = c_id.trim().to_string();
-            if !clean.is_empty() && !clean.contains("1055740445695") {
-                return Ok(clean);
-            }
-        }
-
-        tracing::warn!("Google OAuth Client ID is not configured. Set RELAY_GOOGLE_CLIENT_ID environment variable at build or runtime.");
-        Err("Google service isn't configured for this installation.".to_string())
+        let usable = |id: &String| !id.is_empty() && !id.contains(PLACEHOLDER_CLIENT_ID_FRAGMENT);
+        custom_client_id
+            .map(|id| id.trim().to_string())
+            .filter(usable)
+            .or_else(|| crate::env_config::build_time!("GOOGLE_CLIENT_ID").filter(usable))
+            .or_else(|| crate::env_config::runtime("GOOGLE_CLIENT_ID").filter(usable))
+            .ok_or_else(|| {
+                tracing::warn!(
+                    "Google OAuth Client ID is not configured. Set VOX_GOOGLE_CLIENT_ID at build or run time."
+                );
+                "Google service isn't configured for this installation.".to_string()
+            })
     }
 
     /// Resolves the Google Client Secret in priority order:
     /// 1. Custom developer override if provided
-    /// 2. Compile-time environment variable `RELAY_GOOGLE_CLIENT_SECRET`
-    /// 3. Runtime environment variable `RELAY_GOOGLE_CLIENT_SECRET`
+    /// 2. Build-time `VOX_GOOGLE_CLIENT_SECRET` (legacy: `RELAY_GOOGLE_CLIENT_SECRET`)
+    /// 3. Run-time `VOX_GOOGLE_CLIENT_SECRET` (legacy: `RELAY_GOOGLE_CLIENT_SECRET`)
+    ///
+    /// A secret baked in at build time ends up inside the binary. That is
+    /// acceptable only because Google treats a desktop ("installed app")
+    /// client secret as non-confidential — PKCE is what protects the flow —
+    /// and it is why the build-time path must never be used for any other
+    /// kind of credential (`rules/security.md`).
     pub fn resolve_client_secret(custom_client_secret: Option<String>) -> Result<String, String> {
-        // 1. Explicit custom override
-        if let Some(c_secret) = custom_client_secret {
-            let clean = c_secret.trim().to_string();
-            if !clean.is_empty() {
-                return Ok(clean);
-            }
-        }
-
-        // 2. Compile-time env
-        if let Some(c_secret) = option_env!("RELAY_GOOGLE_CLIENT_SECRET") {
-            let clean = c_secret.trim().to_string();
-            if !clean.is_empty() {
-                return Ok(clean);
-            }
-        }
-
-        // 3. Runtime env
-        if let Ok(c_secret) = std::env::var("RELAY_GOOGLE_CLIENT_SECRET") {
-            let clean = c_secret.trim().to_string();
-            if !clean.is_empty() {
-                return Ok(clean);
-            }
-        }
-
-        Err("Google OAuth Client Secret is missing.".to_string())
+        custom_client_secret
+            .map(|secret| secret.trim().to_string())
+            .filter(|secret| !secret.is_empty())
+            .or_else(|| crate::env_config::build_time!("GOOGLE_CLIENT_SECRET"))
+            .or_else(|| crate::env_config::runtime("GOOGLE_CLIENT_SECRET"))
+            .ok_or_else(|| "Google OAuth Client Secret is missing.".to_string())
     }
 }
 
@@ -105,7 +83,9 @@ mod tests {
         // Explicit placeholder must be rejected
         let res = GoogleOAuthConfig::resolve_client_id(Some("1055740445695-k8i7k2m9h4r2mvgkqu9t03l8b5n4p1q9.apps.googleusercontent.com".to_string()));
         // If no env is set in test runner, it should return Err
-        if std::env::var("RELAY_GOOGLE_CLIENT_ID").is_err() && option_env!("RELAY_GOOGLE_CLIENT_ID").is_none() {
+        if crate::env_config::runtime("GOOGLE_CLIENT_ID").is_none()
+            && crate::env_config::build_time!("GOOGLE_CLIENT_ID").is_none()
+        {
             assert!(res.is_err());
             assert!(res.unwrap_err().contains("isn't configured"));
         }

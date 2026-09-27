@@ -93,11 +93,31 @@ impl ImportRegistry {
 // (`rules/api-conventions.md`). Each maps to a code the frontend can branch on
 // and a message a user can act on.
 
+/// Refuses work that rewrites a meeting's transcript while the recorder is
+/// still appending to it.
+///
+/// Translation and the report's English pass both load the transcript, wait
+/// on a model for minutes, and save what they loaded: every line transcribed
+/// in the meantime was erased.
+fn ensure_not_live(state: &AppState, meeting_id: &str, action: &str) -> Result<(), CommandError> {
+    let engine = &state.meeting_engine;
+    let live = engine.status().meeting_id.as_deref() == Some(meeting_id)
+        || engine.finalizing_meeting_id().as_deref() == Some(meeting_id);
+    if live {
+        return Err(CommandError::new(
+            "MEETING_STILL_RECORDING",
+            &format!("{action} once the recording has finished; its transcript is still being written."),
+        ));
+    }
+    Ok(())
+}
+
 impl From<MeetingEngineError> for CommandError {
     fn from(err: MeetingEngineError) -> Self {
         let code = match err {
             MeetingEngineError::AlreadyRecording => "MEETING_ALREADY_RECORDING",
             MeetingEngineError::NotRecording => "MEETING_NOT_RECORDING",
+            MeetingEngineError::StillFinishing => "MEETING_STILL_FINISHING",
             MeetingEngineError::NoSpeechModel => "MEETING_NO_SPEECH_MODEL",
             MeetingEngineError::Capture(_) => "MEETING_CAPTURE_FAILED",
             MeetingEngineError::Store(_) => "MEETING_STORAGE_FAILED",
@@ -404,6 +424,7 @@ pub async fn translate_meeting_transcript(
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
+        ensure_not_live(&state, &meeting_id, "Translate")?;
         let mut segments = state.meeting_store.load_transcript(&meeting_id)?;
         if segments.is_empty() {
             return Err(CommandError::new(
@@ -564,6 +585,12 @@ pub fn delete_meeting(state: State<'_, AppState>, meeting_id: String) -> Result<
         return Err(CommandError::new(
             "MEETING_ALREADY_RECORDING",
             "That meeting is still being recorded. Stop it first.",
+        ));
+    }
+    if state.meeting_engine.finalizing_meeting_id().as_deref() == Some(meeting_id.as_str()) {
+        return Err(CommandError::new(
+            "MEETING_STILL_FINISHING",
+            "That meeting is still being transcribed. Delete it when it finishes.",
         ));
     }
     state.summary_service.cancel(&meeting_id);
@@ -768,6 +795,7 @@ pub fn generate_meeting_summary(
     instructions: Option<String>,
     force: Option<bool>,
 ) -> Result<(), CommandError> {
+    ensure_not_live(&state, &meeting_id, "Generate the report")?;
     let (provider, meetings) = {
         let settings = state.settings.lock_or_recover();
         (settings.provider.clone(), settings.meetings.clone())

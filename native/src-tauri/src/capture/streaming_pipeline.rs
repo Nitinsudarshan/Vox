@@ -1,8 +1,17 @@
-//! Shadow streaming dictation pipeline.
+//! Shadow streaming dictation pipeline — a measurement instrument, not a
+//! production path.
 //!
-//! Provides a segment-based streaming pipeline that processes live dictation PCM
-//! in the background (shadow mode), measuring latency, backlog, and accuracy
-//! without modifying production Universal Dictation behavior.
+//! Provides a segment-based streaming pipeline that processes dictation PCM
+//! segment by segment, measuring latency, backlog, and accuracy. Production
+//! dictation does **not** run it: the hotkey still decodes the whole utterance
+//! after release (`capture::dictation`). Its only driver today is the ignored
+//! benchmark harness in `capture::benchmark` (`run_phase4_diagnostics`), which
+//! replays recorded audio through it.
+//!
+//! Feeding it live audio is the deferred "streaming dictation" item in
+//! `maybe_later.md`. Whoever wires it must hand it 16 kHz mono: the recorder's
+//! capture callback works at the device rate, and the segmenter's timing
+//! assumes 16 kHz.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,8 +36,6 @@ pub enum SegmentStatus {
     FaithfulPending,
     /// Faithful cleanup completed successfully.
     FaithfulReady,
-    /// Requires final reconciliation pass at release.
-    NeedsFinalReconcile,
 }
 
 /// Timing breakdown for an individual segment's STT decode.

@@ -54,11 +54,24 @@ fn ollama_command() -> Command {
         .ok()
         .and_then(|guard| guard.clone())
         .filter(|path| path.is_file());
-    match managed {
+    let command = match managed {
         Some(path) => Command::new(path),
         None => Command::new("ollama"),
-    }
+    };
+    // Vox is a windowed app; without this, Windows gives the child its own
+    // console window, and closing that window kills the server.
+    #[cfg(windows)]
+    let command = {
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    command
 }
+
+/// Windows' `CREATE_NO_WINDOW` process-creation flag.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub async fn ensure_ollama_ready(host: &str, model: &str) -> OllamaStatus {
     if ping(host).await {
@@ -74,6 +87,9 @@ pub async fn ensure_ollama_ready(host: &str, model: &str) -> OllamaStatus {
 
     match ollama_command()
         .arg("serve")
+        // Serve where Settings points, not on Ollama's default port: a
+        // configured `localhost:8080` otherwise started a server nobody pinged.
+        .env("OLLAMA_HOST", host)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -107,7 +123,8 @@ async fn ping(host: &str) -> bool {
 }
 
 fn is_local_host(host: &str) -> bool {
-    host.contains("localhost") || host.contains("127.0.0.1")
+    // Substring matching let `localhost.example.com` start a local server.
+    super::is_loopback_url(host)
 }
 
 /// Fire-and-forget: if `model` isn't already pulled, ask Ollama to pull it.
@@ -123,22 +140,27 @@ fn spawn_background_pull(host: &str, model: &str) {
         }
 
         tracing::info!("Pulling Ollama model '{}' in the background…", model);
-        let client = reqwest::Client::new();
-        let result = client
-            .post(format!("{}/api/pull", host))
-            .json(&serde_json::json!({ "name": model, "stream": false }))
-            .timeout(Duration::from_secs(20 * 60))
-            .send()
-            .await;
-
-        match result {
-            Ok(res) if res.status().is_success() => {
-                tracing::info!("Ollama model '{}' is ready", model);
-            }
-            Ok(res) => tracing::warn!("Ollama pull for '{}' failed: HTTP {}", model, res.status()),
+        match pull_model(&host, &model).await {
+            Ok(()) => tracing::info!("Ollama model '{}' is ready", model),
             Err(e) => tracing::warn!("Ollama pull for '{}' failed: {}", model, e),
         }
     });
+}
+
+/// Asks Ollama to pull `model` and waits for it to finish.
+pub async fn pull_model(host: &str, model: &str) -> Result<(), String> {
+    let res = reqwest::Client::new()
+        .post(format!("{}/api/pull", host.trim_end_matches('/')))
+        .json(&serde_json::json!({ "name": model, "stream": false }))
+        .timeout(Duration::from_secs(20 * 60))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("HTTP {}", res.status()))
+    }
 }
 
 pub async fn model_is_present(host: &str, model: &str) -> bool {

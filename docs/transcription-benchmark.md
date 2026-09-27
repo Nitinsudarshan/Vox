@@ -107,6 +107,6 @@ python scripts/benchmark_transcription.py --model path/to/ggml-large-v3-turbo-q5
 
 ### Generated Reports
 Reports are automatically written to:
-- `TRANSCRIPTION_BENCHMARK_V1.md` (root human-readable report)
+- `docs/benchmarks/TRANSCRIPTION_BENCHMARK_V1.md` (the committed human-readable report; the same file is also written to `tests/transcription/reports/`)
 - `tests/transcription/reports/benchmark_report.json` (machine-readable metrics)
 - `tests/transcription/reports/benchmark_report.csv` (tabular metrics for charting)

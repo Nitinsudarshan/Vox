@@ -4,7 +4,7 @@ use crate::updates::UpdateInfo;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-// Relay Cloud Supabase defaults (can be overridden via settings or environment)
+// Supabase defaults, overridden by settings or VOX_SUPABASE_URL / VOX_SUPABASE_ANON_KEY
 pub const DEFAULT_SUPABASE_URL: &str = "https://app.relay.local"; // Fallback URL or env variable
 pub const DEFAULT_SUPABASE_ANON_KEY: &str = "relay_anon_key_placeholder";
 
@@ -16,14 +16,10 @@ pub struct SupabaseConfig {
 
 impl Default for SupabaseConfig {
     fn default() -> Self {
-        let url = std::env::var("RELAY_SUPABASE_URL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
+        let url = crate::env_config::runtime("SUPABASE_URL")
             .unwrap_or_else(|| DEFAULT_SUPABASE_URL.to_string());
 
-        let anon_key = std::env::var("RELAY_SUPABASE_ANON_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
+        let anon_key = crate::env_config::runtime("SUPABASE_ANON_KEY")
             .unwrap_or_else(|| DEFAULT_SUPABASE_ANON_KEY.to_string());
 
         Self { url, anon_key }
@@ -36,6 +32,12 @@ pub struct SupabaseClient {
 }
 
 impl SupabaseClient {
+    /// Whether a real project is configured. The built-in URL and key are
+    /// placeholders: with them there is no cloud account to reach.
+    pub fn is_configured(&self) -> bool {
+        self.config.url != DEFAULT_SUPABASE_URL && self.config.anon_key != DEFAULT_SUPABASE_ANON_KEY
+    }
+
     pub fn new(custom_url: Option<String>, custom_anon_key: Option<String>) -> Self {
         let mut config = SupabaseConfig::default();
         if let Some(u) = custom_url.filter(|s| !s.trim().is_empty()) {

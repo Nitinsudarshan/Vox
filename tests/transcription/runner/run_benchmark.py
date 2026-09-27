@@ -36,6 +36,9 @@ from shootout import audit_case_audio, find_vox_binary  # noqa: E402
 DEFAULT_CORPUS_MANIFEST = REPO_ROOT / "tests" / "transcription" / "corpus-v1" / "manifest.json"
 DEFAULT_MODEL_PATH = REPO_ROOT / "native" / "src-tauri" / ".vox" / "config" / "models" / "ggml-small.bin"
 REPORTS_DIR = REPO_ROOT / "tests" / "transcription" / "reports"
+# The committed copy of the human-readable report. Kept under docs/ rather than
+# at the repository root, where AGENTS.md asks for no new markdown files.
+PUBLISHED_REPORTS_DIR = REPO_ROOT / "docs" / "benchmarks"
 
 def find_benchmark_binary() -> Path:
     release_bin = REPO_ROOT / "native" / "src-tauri" / "target" / "release" / "benchmark.exe"
@@ -292,15 +295,16 @@ def basename_either_separator(value: str) -> str:
 
 
 def write_markdown(report_payload: dict, out_dir: Path) -> None:
-    """Writes the Markdown report to the reports directory and the repo root."""
+    """Writes the Markdown report to the reports directory and to docs/benchmarks/."""
     md_content = generate_markdown_report(report_payload)
     md_path = out_dir / "TRANSCRIPTION_BENCHMARK_V1.md"
-    root_md_path = REPO_ROOT / "TRANSCRIPTION_BENCHMARK_V1.md"
+    published_md_path = PUBLISHED_REPORTS_DIR / "TRANSCRIPTION_BENCHMARK_V1.md"
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
-    with open(root_md_path, "w", encoding="utf-8") as f:
+    published_md_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(published_md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
-    print(f"[REPORT] Markdown saved to {root_md_path}")
+    print(f"[REPORT] Markdown saved to {published_md_path}")
 
 
 def render_from(json_path: Path, corpus_path: Path, out_dir: Path) -> None:

@@ -65,9 +65,12 @@ export const HomeSystemPanel: React.FC<HomeSystemPanelProps> = ({
 }) => {
   const provider = settings?.provider;
   const usingOllama = provider?.active_provider === 'ollama';
-  const llmConfigured = usingOllama
-    ? Boolean(provider?.ollama_model)
-    : Boolean(provider?.cloud_api_key);
+  // Per-provider key first, then the legacy single key — the order the
+  // backend resolves them in.
+  const hasApiKey = Boolean(
+    provider && (provider.provider_keys?.[provider.active_provider] || provider.cloud_api_key),
+  );
+  const llmConfigured = usingOllama ? Boolean(provider?.ollama_model) : hasApiKey;
   const llmValue = !provider
     ? 'Settings unavailable'
     : usingOllama
@@ -75,7 +78,7 @@ export const HomeSystemPanel: React.FC<HomeSystemPanelProps> = ({
         ? `${PROVIDER_LABELS.ollama} · ${provider.ollama_model}`
         : `${PROVIDER_LABELS.ollama} · no model selected`
       : `${PROVIDER_LABELS[provider.active_provider] ?? provider.active_provider} · ${
-          provider.cloud_api_key ? provider.cloud_model || 'default model' : 'no API key'
+          hasApiKey ? provider.cloud_model || 'default model' : 'no API key'
         }`;
 
   const whisperPath = settings?.stt?.whisper_model_path;

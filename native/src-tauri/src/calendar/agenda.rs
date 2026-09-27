@@ -25,7 +25,12 @@ pub fn build_agenda(events: Vec<CalendarEvent>) -> Vec<DayAgenda> {
         let Some(start) = event.start_timestamp() else {
             continue;
         };
-        by_day.entry(local_day(start)).or_default().push(event);
+        // Listed under every day it overlaps, not only its first: a
+        // conference that began yesterday, or a call from 23:00 to 01:00, is
+        // still on today's agenda.
+        for day in local_days_spanned(start, event.end_timestamp()) {
+            by_day.entry(day).or_default().push(event.clone());
+        }
     }
 
     by_day
@@ -45,14 +50,26 @@ pub fn build_agenda(events: Vec<CalendarEvent>) -> Vec<DayAgenda> {
         .collect()
 }
 
-/// `YYYY-MM-DD` in the viewer's own timezone.
-///
-/// Converted rather than taken from the string: an event at 00:30 IST is
-/// stored with a `+05:30` offset and belongs to that day, not to the UTC day
-/// before it.
-fn local_day(when: DateTime<FixedOffset>) -> String {
-    let local = when.with_timezone(&Local);
-    format!("{:04}-{:02}-{:02}", local.year(), local.month(), local.day())
+/// The most days one event is listed under; a mistyped end date should not
+/// fill the agenda for a year.
+const MAX_DAYS_SPANNED: usize = 31;
+
+/// Every local day from `start`'s to the one containing the last moment
+/// before `end`. The end is exclusive, the way Google stores it: an all-day
+/// event ends at the next midnight, and a meeting ending at 00:00 is over
+/// before the new day starts.
+fn local_days_spanned(start: DateTime<FixedOffset>, end: Option<DateTime<FixedOffset>>) -> Vec<String> {
+    let first = start.with_timezone(&Local).date_naive();
+    let last = end
+        .filter(|end| *end > start)
+        .map(|end| (end - chrono::Duration::seconds(1)).with_timezone(&Local).date_naive())
+        .unwrap_or(first);
+    first
+        .iter_days()
+        .take_while(|day| *day <= last)
+        .take(MAX_DAYS_SPANNED)
+        .map(|day| format!("{:04}-{:02}-{:02}", day.year(), day.month(), day.day()))
+        .collect()
 }
 
 /// Drops the second copy of one invitation that reached two accounts.
@@ -256,6 +273,33 @@ mod tests {
             start: at(start),
             end: at(end),
         }
+    }
+
+    /// A three-day conference is on each of its days, not only the first.
+    /// Mid-morning UTC keeps the day count the same in every timezone.
+    #[test]
+    fn a_multi_day_event_is_listed_on_every_day_it_spans() {
+        let conference = event(
+            "conf",
+            "me@work.com",
+            "Conference",
+            "2026-09-14T10:00:00+00:00",
+            "2026-09-16T10:00:00+00:00",
+        );
+        let agenda = build_agenda(vec![conference]);
+        assert_eq!(agenda.len(), 3);
+        assert!(agenda.iter().all(|day| day.events.len() == 1));
+    }
+
+    /// The end is exclusive: an event that stops exactly when the next day
+    /// begins is not listed on it.
+    #[test]
+    fn an_exclusive_end_does_not_add_a_day() {
+        let start = at("2026-09-14T10:00:00+00:00");
+        let days = local_days_spanned(start, Some(start + chrono::Duration::hours(1)));
+        assert_eq!(days.len(), 1);
+        assert_eq!(local_days_spanned(start, None).len(), 1);
+        assert_eq!(local_days_spanned(start, Some(start)).len(), 1);
     }
 
     #[test]

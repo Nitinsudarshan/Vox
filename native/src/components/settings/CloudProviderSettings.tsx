@@ -2,7 +2,7 @@ import React from 'react';
 import { Cloud, KeyRound, Server, ShieldAlert } from 'lucide-react';
 
 import { Input } from '@/components/ui/input';
-import type { ProviderConfig } from '@/types';
+import { STORED_KEY_PLACEHOLDER, type ProviderConfig } from '@/types';
 
 interface CloudProviderSettingsProps {
   provider: ProviderConfig;
@@ -192,7 +192,9 @@ export const CloudProviderSettings: React.FC<CloudProviderSettingsProps> = ({
           className="text-xs font-mono"
         />
         <p className="text-[11px] text-muted-foreground">
-          {active?.keyHint} Kept per provider, so switching between them does not lose it.
+          {currentKey === STORED_KEY_PLACEHOLDER
+            ? 'A key is saved in your system credential store. Type a new one to replace it, or clear the field to remove it.'
+            : `${active?.keyHint ?? ''} Kept per provider in your system credential store, so switching between them does not lose it.`}
         </p>
         {insecure && (
           <p className="flex items-start gap-1.5 text-[11px] text-destructive">

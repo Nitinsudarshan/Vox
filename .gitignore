@@ -61,3 +61,6 @@ __pycache__/
 # Public transcription benchmark audio datasets (large audio files not committed)
 tests/transcription/public/audio/
 
+
+# Claude Code agent worktrees (local tooling, never committed)
+.claude/worktrees/

@@ -47,6 +47,17 @@ impl TokenNamespace {
     }
 }
 
+/// The OS credential store entry, except under test: the suite writes and
+/// deletes tokens, and pointing it at the real store signed the developer out
+/// of their own Vox every time AGENTS.md's pre-commit `cargo test` ran. Tests
+/// use the fallback file inside their own temp directory instead.
+fn keyring_entry(service: &str, username: &str) -> Option<Entry> {
+    if cfg!(test) {
+        return None;
+    }
+    Entry::new(service, username).ok()
+}
+
 pub struct KeyringTokenStore;
 
 impl KeyringTokenStore {
@@ -54,6 +65,11 @@ impl KeyringTokenStore {
         config_dir.join(fallback_filename)
     }
 
+    /// XOR with a fixed key: obfuscation, not encryption. It keeps a token
+    /// from being readable at a glance or by a naive grep, and nothing more —
+    /// anyone with this source and the file can reverse it. It exists only
+    /// for the case where the OS credential store is unavailable, and the
+    /// file lives in the per-user config directory, never the vault.
     fn obfuscate_bytes(data: &[u8]) -> Vec<u8> {
         let key = b"relay_secure_oauth_store_key_2026";
         data.iter()
@@ -104,7 +120,7 @@ impl KeyringTokenStore {
             .map_err(|e| format!("Failed to serialize tokens: {}", e))?;
 
         // 1. Attempt to store in OS Keyring
-        if let Ok(entry) = Entry::new(service, username) {
+        if let Some(entry) = keyring_entry(service, username) {
             if entry.set_password(&json).is_ok() {
                 let fallback = Self::get_fallback_path(config_dir, fallback_filename);
                 if fallback.exists() {
@@ -114,13 +130,13 @@ impl KeyringTokenStore {
             }
         }
 
-        // 2. Fallback to obfuscated storage in .relay/config/ (outside vault)
+        // 2. Fallback to obfuscated (not encrypted) storage in config/, outside the vault
         let fallback = Self::get_fallback_path(config_dir, fallback_filename);
         if let Some(parent) = fallback.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let encrypted = Self::obfuscate_bytes(json.as_bytes());
-        fs::write(fallback, encrypted)
+        let obfuscated = Self::obfuscate_bytes(json.as_bytes());
+        fs::write(fallback, obfuscated)
             .map_err(|e| format!("Failed to write secure tokens fallback: {}", e))?;
 
         Ok(())
@@ -133,7 +149,7 @@ impl KeyringTokenStore {
         fallback_filename: &str,
     ) -> Option<OAuthTokens> {
         // 1. Check OS Keyring
-        if let Ok(entry) = Entry::new(service, username) {
+        if let Some(entry) = keyring_entry(service, username) {
             if let Ok(password) = entry.get_password() {
                 if let Ok(tokens) = serde_json::from_str::<OAuthTokens>(&password) {
                     return Some(tokens);
@@ -163,7 +179,7 @@ impl KeyringTokenStore {
         username: &str,
         fallback_filename: &str,
     ) -> Result<(), String> {
-        if let Ok(entry) = Entry::new(service, username) {
+        if let Some(entry) = keyring_entry(service, username) {
             let _ = entry.delete_password();
         }
 

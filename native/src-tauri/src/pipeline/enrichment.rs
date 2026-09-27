@@ -70,9 +70,37 @@ const DOMAIN_TOPIC_PATTERNS: &[(&str, &str)] = &[
     ("architecture", "System Architecture"),
 ];
 
+/// Where `needle` first occurs in `haystack`, ignoring ASCII case, as a byte
+/// offset into `haystack` itself.
+///
+/// Finding a marker in `haystack.to_lowercase()` and slicing the original at
+/// that offset is wrong whenever lowercasing changes a character's length
+/// (`İ` becomes two characters, the Kelvin sign becomes `k`), and panics when
+/// the offset lands inside a character. The markers and fillers here are
+/// ASCII apart from exact punctuation such as `—`, so matching bytes with ASCII
+/// case folding finds the same text without changing a single offset.
+pub(crate) fn find_ignoring_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    if n.is_empty() || n.len() > h.len() {
+        return None;
+    }
+    (0..=h.len() - n.len())
+        .find(|&i| haystack.is_char_boundary(i) && h[i..i + n.len()].eq_ignore_ascii_case(n))
+}
+
+/// `text` without `prefix`, compared ignoring ASCII case; see
+/// [`find_ignoring_ascii_case`] for why not via `to_lowercase`.
+fn strip_prefix_ignoring_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let n = prefix.len();
+    (text.len() >= n
+        && text.as_bytes()[..n].eq_ignore_ascii_case(prefix.as_bytes())
+        && text.is_char_boundary(n))
+    .then(|| &text[n..])
+}
+
 /// Known technical entities for deterministic entity extraction.
 const KNOWN_ENTITIES: &[&str] = &[
-    "Relay",
+    "Vox",
     "Google Calendar",
     "Google Sign In",
     "Google",
@@ -153,9 +181,8 @@ pub fn extract_deterministic_title(content: &str) -> String {
     }
 
     // 2. Look for strong insight lead-ins (e.g. "The important distinction is:", "Core Insight:", "Architecture:")
-    let lower = clean_text.to_lowercase();
     for marker in &["the important distinction is:", "core insight:", "architecture:", "key insight:", "the goal is:"] {
-        if let Some(pos) = lower.find(marker) {
+        if let Some(pos) = find_ignoring_ascii_case(clean_text, marker) {
             let after = &clean_text[pos + marker.len()..].trim_start();
             let first_sentence = after.split(&['.', '\n', ';', '!'][..]).next().unwrap_or(after).trim();
             let words: Vec<&str> = first_sentence.split_whitespace().take(8).collect();
@@ -173,11 +200,9 @@ pub fn extract_deterministic_title(content: &str) -> String {
             continue;
         }
 
-        let mut lower_line = line_clean.to_lowercase();
         for filler in FILLER_PREFIXES {
-            if lower_line.starts_with(filler) {
-                line_clean = line_clean[filler.len()..].trim_start_matches(&[' ', ',', '—', '-', ':'][..]).trim().to_string();
-                lower_line = line_clean.to_lowercase();
+            if let Some(rest) = strip_prefix_ignoring_ascii_case(&line_clean, filler) {
+                line_clean = rest.trim_start_matches(&[' ', ',', '—', '-', ':'][..]).trim().to_string();
             }
         }
 
@@ -281,11 +306,17 @@ pub fn extract_deterministic_questions(content: &str, title: &str, topics: &[Str
     let mut questions = Vec::new();
     let lower = content.to_lowercase();
 
-    let primary_entity = entities.first().cloned().unwrap_or_else(|| "Relay".to_string());
     let primary_topic = topics.first().cloned().unwrap_or_else(|| title.to_string());
 
     if lower.contains("local") && (lower.contains("cloud") || lower.contains("sync") || lower.contains("hybrid")) {
-        questions.push(format!("What are the architectural implications of keeping {}'s knowledge layer local while supporting cloud features?", primary_entity));
+        // Named after the note's own subject when it has one. The fallback
+        // used to be the app's former name, which put "Relay" into questions
+        // about notes that never mentioned it.
+        let subject = entities
+            .first()
+            .map(|entity| format!("{entity}'s"))
+            .unwrap_or_else(|| "the system's".to_string());
+        questions.push(format!("What are the architectural implications of keeping {subject} knowledge layer local while supporting cloud features?"));
         questions.push("What information should remain strictly device-local versus cloud-synchronized?".to_string());
     }
 
@@ -526,8 +557,10 @@ pub async fn enrich_scribble(
     let mut scribble = vault
         .get_scribble(scribble_id)
         .map_err(|e| format!("Scribble not found: {}", e))?;
+    let analyzed = scribble.clone();
+    let source = untrusted_source_description(&scribble);
 
-    let parsed_opt = match enrich_content(llm, &scribble.content).await {
+    let parsed_opt = match enrich_content_from(llm, &scribble.content, source.as_deref()).await {
         Ok(parsed) => Some(parsed),
         Err(err) => {
             tracing::warn!("AI enrichment LLM call failed for scribble {}: {}", scribble_id, err);
@@ -681,12 +714,67 @@ pub async fn enrich_scribble(
         }
     }
 
-    scribble.updated_at = chrono::Utc::now().to_rfc3339();
+    // The model call can take a minute on a local model; merge onto what is
+    // on disk now rather than writing back the copy read before it.
+    let mut current = vault
+        .get_scribble(scribble_id)
+        .map_err(|e| format!("Scribble not found: {}", e))?;
+    if !merge_enrichment(&analyzed, scribble, &mut current) {
+        return Ok(current);
+    }
+    current.updated_at = chrono::Utc::now().to_rfc3339();
     vault
-        .save_scribble(&scribble)
+        .save_scribble(&current)
         .map_err(|e| format!("Failed to save enriched scribble: {}", e))?;
 
-    Ok(scribble)
+    Ok(current)
+}
+
+/// How to describe a Scribble's origin to a model, when that origin is an
+/// external source whose text must be read as material rather than
+/// instructions. `None` for the user's own words.
+fn untrusted_source_description(scribble: &Scribble) -> Option<String> {
+    let meta = &scribble.source_metadata;
+    if meta.get("trust").and_then(|t| t.as_str()) != Some(crate::capture::web::TRUST_EXTERNAL_UNTRUSTED) {
+        return None;
+    }
+    let application = meta.get("application").and_then(|v| v.as_str()).unwrap_or("a website");
+    Some(match meta.get("url").and_then(|v| v.as_str()) {
+        Some(url) => format!("content captured from {application} at {url}"),
+        None => format!("content captured from {application}"),
+    })
+}
+
+/// Applies what enrichment produced from `analyzed` onto `current`, the
+/// Scribble as it is on disk after the model answered.
+///
+/// Only derived fields move: the summary, topics, entities, AI metadata and
+/// AI relationships, and the title unless the user renamed it meanwhile.
+/// PARA, tags, status and the user's own links stay as the user left them.
+/// Returns `false`, changing nothing, when the content itself was edited
+/// during the call — the analysis no longer describes it.
+fn merge_enrichment(analyzed: &Scribble, enriched: Scribble, current: &mut Scribble) -> bool {
+    if current.content != analyzed.content {
+        return false;
+    }
+    if current.title == analyzed.title {
+        current.title = enriched.title;
+    }
+    current.summary = enriched.summary;
+    current.topics = enriched.topics;
+    current.entities = enriched.entities;
+    current.ai_metadata = enriched.ai_metadata;
+
+    current.relationships.retain(|r| r.source == "user");
+    let user_targets: HashSet<String> =
+        current.relationships.iter().map(|r| r.target_id.clone()).collect();
+    current.relationships.extend(
+        enriched
+            .relationships
+            .into_iter()
+            .filter(|r| r.source != "user" && !user_targets.contains(&r.target_id)),
+    );
+    true
 }
 
 /// Enriches an imported vault file using the exact canonical Relay Analysis contract.
@@ -975,19 +1063,26 @@ pub async fn summarize_scribble(
     }
 
     let bounded = bound_summary_content(&scribble.content, 12_000);
+    let source = untrusted_source_description(&scribble);
 
-    match summarize_content(llm, &bounded).await {
-        Ok(summary_text) => {
-            scribble.summary = Some(summary_text);
-            scribble.updated_at = chrono::Utc::now().to_rfc3339();
-            vault
-                .save_scribble(&scribble)
-                .map_err(|e| format!("Failed to save scribble summary: {}", e))?;
-        }
-        Err(err) => {
-            return Err(format!("LLM summarization failed: {}", err));
-        }
+    let summary_text = summarize_content_from(llm, &bounded, source.as_deref())
+        .await
+        .map_err(|err| format!("LLM summarization failed: {}", err))?;
+
+    // Re-read after the model call so edits made while it ran survive; a
+    // summary of content that has since changed is not saved at all.
+    let mut current = vault
+        .get_scribble(scribble_id)
+        .map_err(|e| format!("Scribble not found: {}", e))?;
+    if current.content != scribble.content {
+        return Ok(current);
     }
+    current.summary = Some(summary_text);
+    current.updated_at = chrono::Utc::now().to_rfc3339();
+    vault
+        .save_scribble(&current)
+        .map_err(|e| format!("Failed to save scribble summary: {}", e))?;
+    scribble = current;
 
     Ok(scribble)
 }
@@ -996,9 +1091,87 @@ pub async fn summarize_scribble(
 mod tests {
     use super::*;
 
+    fn relationship(target: &str, source: &str) -> ScribbleRelationship {
+        ScribbleRelationship {
+            id: format!("rel_{target}_{source}"),
+            target_id: target.to_string(),
+            relationship_type: REL_SAME_TOPIC.to_string(),
+            confidence: 0.85,
+            source: source.to_string(),
+        }
+    }
+
+    /// Edits the user saved while the model was running survive the merge;
+    /// only what enrichment derives is replaced.
+    #[test]
+    fn enrichment_merges_onto_the_scribble_as_it_is_now() {
+        let analyzed = Scribble::new_text("The body", Some("Old title"));
+        let mut enriched = analyzed.clone();
+        enriched.title = "AI title".to_string();
+        enriched.topics = vec!["Rust".to_string()];
+        enriched.relationships = vec![relationship("s_ai", "ai")];
+
+        let mut current = analyzed.clone();
+        current.tags = vec!["mine".to_string()];
+        current.relationships = vec![relationship("s_user", "user")];
+        assert!(merge_enrichment(&analyzed, enriched.clone(), &mut current));
+        assert_eq!(current.title, "AI title");
+        assert_eq!(current.topics, vec!["Rust"]);
+        assert_eq!(current.tags, vec!["mine"]);
+        let targets: Vec<&str> = current.relationships.iter().map(|r| r.target_id.as_str()).collect();
+        assert_eq!(targets, vec!["s_user", "s_ai"]);
+
+        let mut renamed = analyzed.clone();
+        renamed.title = "User title".to_string();
+        assert!(merge_enrichment(&analyzed, enriched.clone(), &mut renamed));
+        assert_eq!(renamed.title, "User title");
+
+        let mut edited = analyzed.clone();
+        edited.content = "A different body".to_string();
+        assert!(!merge_enrichment(&analyzed, enriched, &mut edited));
+        assert!(edited.topics.is_empty());
+    }
+
+    /// A Scribble promoted from a capture reaches the model framed as an
+    /// external source; the user's own Scribble does not.
+    #[test]
+    fn only_captured_scribbles_are_framed_as_external() {
+        let mut captured = Scribble::new_text("page text", None);
+        captured.source_metadata = serde_json::json!({
+            "trust": "external_untrusted",
+            "application": "GitHub",
+            "url": "https://github.com/a/b",
+        });
+        assert_eq!(
+            untrusted_source_description(&captured).as_deref(),
+            Some("content captured from GitHub at https://github.com/a/b")
+        );
+        assert_eq!(untrusted_source_description(&Scribble::new_text("mine", None)), None);
+    }
+
+    #[test]
+    fn a_title_marker_after_text_that_changes_length_when_lowercased_does_not_panic() {
+        // "İ" lowercases to two characters, so an offset found in the
+        // lowercased copy points somewhere else in the original.
+        let text = "İstanbul notes. The important distinction is: keep the knowledge layer on the device";
+        assert_eq!(
+            extract_deterministic_title(text),
+            clean_title_formatting("keep the knowledge layer on the device")
+        );
+    }
+
+    #[test]
+    fn a_filler_prefix_is_matched_without_lowercasing_the_line() {
+        // The Kelvin sign lowercases to an ASCII "k" while being three bytes.
+        assert_eq!(strip_prefix_ignoring_ascii_case("So Basically ship it", "so basically"), Some(" ship it"));
+        assert_eq!(strip_prefix_ignoring_ascii_case("\u{212A}now this", "know"), None);
+        assert_eq!(find_ignoring_ascii_case("İİ Core Insight: x", "core insight:"), Some(5));
+        assert!(extract_deterministic_title("\u{212A}elvin readings drifted overnight in the lab").len() > 5);
+    }
+
     #[test]
     fn test_extract_deterministic_title_strips_conversational_fillers() {
-        let text1 = "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. The important distinction is: Google Sign In should not mean Relay is becoming a cloud app.";
+        let text1 = "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. The important distinction is: Google Sign In should not mean Vox is becoming a cloud app.";
         let title1 = extract_deterministic_title(text1);
         assert!(!title1.to_lowercase().starts_with("yes"));
         assert!(!title1.to_lowercase().contains("makes a lot"));
@@ -1018,7 +1191,7 @@ mod tests {
     fn test_extract_deterministic_knowledge_full_payload() {
         let content = "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration.\n\
             The important distinction is:\n\
-            Google Sign In should not mean Relay is becoming a cloud app.\n\
+            Google Sign In should not mean Vox is becoming a cloud app.\n\
             It should initially be an identity + product telemetry/update layer, while the user's knowledge remains local.\n\
             That gives you a clean path from local → hybrid without forcing users through a painful migration later.\n\
             I would structure it as 3 modes: 100% Local, Google Account only for telemetry, and Hybrid with encrypted cloud sync.";
@@ -1037,13 +1210,13 @@ mod tests {
 
         // 3. Named entities must be extracted
         assert!(!extracted.entities.is_empty());
-        assert!(extracted.entities.contains(&"Relay".to_string()));
+        assert!(extracted.entities.contains(&"Vox".to_string()));
         assert!(extracted.entities.contains(&"Google Calendar".to_string()) || extracted.entities.contains(&"Google Sign In".to_string()) || extracted.entities.contains(&"Google".to_string()));
 
         // 4. Questions must be relevant exploration questions
         assert!(!extracted.questions.is_empty());
         assert!(extracted.questions.len() <= 4);
-        assert!(extracted.questions.iter().any(|q| q.contains("Relay") || q.contains("local") || q.contains("cloud") || q.contains("Calendar")));
+        assert!(extracted.questions.iter().any(|q| q.contains("Vox") || q.contains("local") || q.contains("cloud") || q.contains("Calendar")));
     }
 
     #[test]
@@ -1053,7 +1226,7 @@ mod tests {
         let llm = LLMClient::new(crate::providers::ProviderConfig::default());
 
         let mut scribble = Scribble::new_text(
-            "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. Google Sign In should not mean Relay is becoming a cloud app.",
+            "Yes — this makes a lot of sense, and I would actually do this before fixing Google Calendar integration. Google Sign In should not mean Vox is becoming a cloud app.",
             None,
         );
         // Pre-populate old topics to verify replacement
@@ -1079,7 +1252,7 @@ mod tests {
 
         // Verify entities replaced
         assert!(!enriched.entities.contains(&"OldEntity".to_string()));
-        assert!(enriched.entities.contains(&"Relay".to_string()) || enriched.entities.contains(&"Google Calendar".to_string()));
+        assert!(enriched.entities.contains(&"Vox".to_string()) || enriched.entities.contains(&"Google Calendar".to_string()));
 
         // Verify questions populated
         assert!(!enriched.ai_metadata.suggested_questions.is_empty());
@@ -1122,7 +1295,7 @@ mod tests {
         let mut file = vault
             .import_vault_file_bytes(
                 "architecture_spec.md",
-                "Yes — this makes a lot of sense. The important distinction is that Google Sign In should not make Relay a cloud app.".as_bytes(),
+                "Yes — this makes a lot of sense. The important distinction is that Google Sign In should not make Vox a cloud app.".as_bytes(),
                 None,
             )
             .unwrap();

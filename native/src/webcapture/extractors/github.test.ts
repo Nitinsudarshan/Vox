@@ -57,6 +57,20 @@ describe('github extractor', () => {
     expect(result.title).toBe('Capture is slow on long pages');
   });
 
+  it('counts a comment once when classic markup nests its containers', () => {
+    const doc = pageFrom(`
+      <bdi class="js-issue-title">Nested markup</bdi>
+      <div class="js-comment-container">
+        <div class="timeline-comment">
+          <a class="author">alice</a>
+          <div class="comment-body"><p>Only once, please.</p></div>
+        </div>
+      </div>
+    `);
+    const result = githubExtractor.extract(doc, new URL('https://github.com/relay/relay/issues/3'))!;
+    expect(result.messages).toHaveLength(1);
+  });
+
   it('extracts a pull request the same way as an issue', () => {
     const doc = pageFrom(`
       <h1 class="markdown-title">Add capture bridge</h1>

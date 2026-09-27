@@ -1,4 +1,4 @@
-//! The local capture bridge: a loopback HTTP endpoint the Relay browser
+//! The local capture bridge: a loopback HTTP endpoint the Vox browser
 //! extension posts captures to.
 //!
 //! ## Why loopback and not native messaging
@@ -20,16 +20,25 @@
 //! it is compared in constant time, and it is never logged.
 //!
 //! Browsers additionally enforce CORS on the extension's request, so the
-//! responses here name exactly one allowed origin — the paired extension —
-//! rather than `*`.
+//! responses echo back the requesting origin — and only when it is a browser
+//! extension origin ([`is_allowed_origin`]) — rather than `*`. That is a check
+//! of *kind*, not of identity: any installed extension passes it, so the
+//! pairing token remains the control that decides who may write.
+//!
+//! Connections are served one thread each, capped at
+//! [`MAX_CONCURRENT_CONNECTIONS`]; past that, new connections are closed
+//! unread, so a local process opening sockets in a loop costs a handful of
+//! threads rather than all of them.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::sync::MutexExt;
 
 use super::MAX_PAYLOAD_BYTES;
 
@@ -48,6 +57,32 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// seconds is far longer than a local POST needs.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How many connections may be served at once. Captures are human-paced — one
+/// at a time is the norm — so this only ever bites a client that is not the
+/// extension.
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+
+/// Counts a connection for as long as it is being served.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl ConnectionSlot {
+    /// Takes a slot, or `None` when all of them are in use.
+    fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        active
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n < MAX_CONCURRENT_CONNECTIONS).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(active.clone()))
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Where the bridge writes its port and token so the pairing UI can show them.
 pub const BRIDGE_STATE_FILE: &str = "capture-bridge.json";
 
@@ -64,9 +99,9 @@ pub struct BridgeState {
 
 /// Generates a fresh pairing token.
 ///
-/// Two v4 UUIDs' worth of randomness (256 bits) rendered as hex. Relay
-/// already depends on `uuid` for ids; a token is not worth a second RNG
-/// dependency.
+/// Two v4 UUIDs rendered as hex: 244 random bits (each UUID spends 6 of its
+/// 128 on version and variant). Vox already depends on `uuid` for ids; a
+/// token is not worth a second RNG dependency.
 pub fn generate_token() -> String {
     format!(
         "{}{}",
@@ -237,6 +272,26 @@ pub fn error_body(code: &str, message: &str) -> String {
     .unwrap_or_else(|_| r#"{"ok":false,"code":"INTERNAL","message":"error"}"#.to_string())
 }
 
+/// Reads one line of at most `limit` bytes.
+///
+/// Bounded while reading: an unbounded `read_line` buffered whatever a local
+/// process sent before any newline, so a request line with none could grow
+/// until memory ran out — before the pairing token was ever checked.
+fn read_capped_line(
+    reader: &mut BufReader<&TcpStream>,
+    line: &mut String,
+    limit: usize,
+) -> Result<usize, String> {
+    let read = reader
+        .take(limit as u64 + 1)
+        .read_line(line)
+        .map_err(|e| e.to_string())?;
+    if read > limit {
+        return Err("request headers exceeded the size limit".to_string());
+    }
+    Ok(read)
+}
+
 /// Reads and parses one HTTP request, enforcing the header and body caps
 /// while reading rather than after.
 fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
@@ -245,10 +300,8 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
     let mut header_bytes = 0usize;
 
     let mut line = String::new();
-    reader
-        .read_line(&mut line)
+    header_bytes += read_capped_line(&mut reader, &mut line, MAX_HEADER_BYTES)
         .map_err(|e| format!("could not read request line: {e}"))?;
-    header_bytes += line.len();
 
     let mut parts = line.split_whitespace();
     request.method = parts.next().unwrap_or_default().to_uppercase();
@@ -257,13 +310,9 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
 
     loop {
         let mut header = String::new();
-        let read = reader
-            .read_line(&mut header)
+        let read = read_capped_line(&mut reader, &mut header, MAX_HEADER_BYTES - header_bytes)
             .map_err(|e| format!("could not read headers: {e}"))?;
         header_bytes += read;
-        if header_bytes > MAX_HEADER_BYTES {
-            return Err("request headers exceeded the size limit".to_string());
-        }
         if read == 0 || header.trim().is_empty() {
             break;
         }
@@ -297,15 +346,24 @@ fn read_request(stream: &TcpStream) -> Result<BridgeRequest, String> {
 /// turns capture off.
 pub struct BridgeHandle {
     pub port: u16,
+    /// The port the settings asked for; `port` differs when it was taken.
+    pub preferred_port: u16,
     pub token: String,
     stop: Arc<AtomicBool>,
+    accept_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl BridgeHandle {
-    /// Signals the accept loop to exit. The loop notices within one accept
-    /// timeout, so this returns immediately rather than joining.
+    /// Stops the accept loop and waits for it to release the port.
+    ///
+    /// Joined, not only signalled: a restart binds straight afterwards, and
+    /// while the old loop still held the listener the new bind failed and
+    /// fell back to a random port the paired extension did not know.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.accept_thread.lock_or_recover().take() {
+            let _ = thread.join();
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -335,28 +393,37 @@ where
         .map_err(|e| format!("capture bridge could not configure its listener: {e}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
-    let handle = BridgeHandle {
-        port,
-        token: token.clone(),
-        stop: stop.clone(),
-    };
+    let handle_token = token.clone();
+    let handle_stop = stop.clone();
 
     let on_capture = Arc::new(on_capture);
-    std::thread::Builder::new()
-        .name("relay-capture-bridge".to_string())
+    let active = Arc::new(AtomicUsize::new(0));
+    let accept_thread = std::thread::Builder::new()
+        .name("vox-capture-bridge".to_string())
         .spawn(move || {
             tracing::info!("[Capture] Bridge listening on 127.0.0.1:{}", port);
             while !stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _peer)) => {
+                        let Some(slot) = ConnectionSlot::acquire(&active) else {
+                            tracing::warn!(
+                                "[Capture] Bridge refused a connection: {} already open",
+                                MAX_CONCURRENT_CONNECTIONS
+                            );
+                            drop(stream);
+                            continue;
+                        };
                         let token = token.clone();
                         let on_capture = on_capture.clone();
                         // One thread per connection so a stalled client
                         // cannot block the next capture. Captures are a
-                        // human-paced event; there is no pool to justify.
+                        // human-paced event; the slot cap above bounds it.
                         let _ = std::thread::Builder::new()
-                            .name("relay-capture-conn".to_string())
-                            .spawn(move || handle_connection(stream, &token, on_capture.as_ref()));
+                            .name("vox-capture-conn".to_string())
+                            .spawn(move || {
+                                let _slot = slot;
+                                handle_connection(stream, &token, on_capture.as_ref());
+                            });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(120));
@@ -371,7 +438,13 @@ where
         })
         .map_err(|e| format!("capture bridge thread could not start: {e}"))?;
 
-    Ok(handle)
+    Ok(BridgeHandle {
+        port,
+        preferred_port,
+        token: handle_token,
+        stop: handle_stop,
+        accept_thread: Mutex::new(Some(accept_thread)),
+    })
 }
 
 /// Binds loopback only, falling back to an ephemeral port if the preferred
@@ -396,6 +469,12 @@ fn handle_connection<F>(stream: TcpStream, token: &str, on_capture: &F)
 where
     F: Fn(&[u8]) -> (u16, String),
 {
+    // The listener is non-blocking so its loop can observe the stop flag, and
+    // on Windows an accepted socket inherits that. A non-blocking read here
+    // returns `WouldBlock` the moment the client pauses mid-body, which the
+    // parser would report as a malformed request — so switch back to blocking
+    // reads, bounded by the timeouts below.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
 
@@ -455,6 +534,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_slots_are_capped_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let held: Vec<_> = (0..MAX_CONCURRENT_CONNECTIONS)
+            .map(|_| ConnectionSlot::acquire(&active).expect("under the cap"))
+            .collect();
+        assert!(ConnectionSlot::acquire(&active).is_none(), "the cap holds");
+
+        drop(held);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert!(ConnectionSlot::acquire(&active).is_some(), "released slots are reusable");
+    }
 
     const TOKEN: &str = "0123456789abcdef";
 
@@ -644,5 +736,47 @@ mod tests {
         assert!(response.contains("PAIRING_TOKEN_INVALID"));
 
         handle.stop();
+    }
+
+    /// A request line with no end is refused once it passes the header cap,
+    /// instead of being buffered until memory runs out.
+    #[test]
+    fn an_endless_request_line_is_refused_at_the_header_cap() {
+        use std::io::Write as _;
+        use std::net::TcpStream;
+
+        let handle = start(0, generate_token(), |_| (200, "{}".to_string())).unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port)).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let flood = vec![b'A'; MAX_HEADER_BYTES * 4];
+        let _ = stream.write_all(&flood);
+
+        // The server answers 400 and closes. Closing with unread input sends
+        // a reset on some platforms, which can discard the answer before it
+        // is read; what matters is that the connection ends instead of the
+        // server buffering on.
+        let mut response = String::new();
+        match stream.read_to_string(&mut response) {
+            Ok(_) => assert!(response.starts_with("HTTP/1.1 400"), "got: {response:.80}"),
+            Err(e) => assert!(
+                !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+                "the server kept the connection open: {e}"
+            ),
+        }
+
+        handle.stop();
+    }
+
+    /// Restarting (every settings save used to) gets the same port back: the
+    /// old listener is released before the new one binds.
+    #[test]
+    fn a_restarted_bridge_keeps_its_port() {
+        let first = start(0, generate_token(), |_| (200, "{}".to_string())).unwrap();
+        let port = first.port;
+        first.stop();
+
+        let second = start(port, generate_token(), |_| (200, "{}".to_string())).unwrap();
+        assert_eq!(second.port, port);
+        second.stop();
     }
 }
