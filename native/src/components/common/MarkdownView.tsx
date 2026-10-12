@@ -12,6 +12,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { DiagramViewport } from '@/components/shared/DiagramViewport';
+import {
+  DIAGRAM_FONT,
+  DIAGRAM_SKIN,
+  mermaidThemeCss,
+  mermaidThemeVariables,
+} from '@/lib/diagramTheme';
 import { describeError } from '@/lib/errors';
 
 interface MarkdownViewProps {
@@ -85,61 +91,83 @@ function getDiagramLabel(code: string): string {
 /**
  * Mermaid's settings, in one place so the security posture is reviewable and
  * testable rather than buried in an effect.
+ *
+ * The colours are deliberately not here. They are the `diagram-design`
+ * editorial skin in `@/lib/diagramTheme`, addressed by semantic role, so this
+ * function decides *which* skin is in force and nothing about what any role is
+ * worth. That is also what keeps `rules/design-system.md`'s "no raw hex in a
+ * component" rule true of this file: Mermaid takes hex strings rather than
+ * Tailwind classes, so the hex has to live somewhere, and somewhere is a token
+ * module both skins and a contrast test can be read off.
  */
-export const mermaidConfig = (isDark: boolean): Parameters<typeof mermaid.initialize>[0] => ({
-  startOnLoad: false,
-  theme: isDark ? 'dark' : 'default',
-  themeVariables: isDark
-    ? {
-        darkMode: true,
-        background: '#18181b',
-        primaryColor: '#3b82f6',
-        primaryTextColor: '#f8fafc',
-        primaryBorderColor: '#3b82f6',
-        lineColor: '#94a3b8',
-        secondaryColor: '#27272a',
-        tertiaryColor: '#1e293b',
-        fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
-        fontSize: '12px',
-      }
-    : {
-        darkMode: false,
-        background: '#ffffff',
-        primaryColor: '#2563eb',
-        primaryTextColor: '#0f172a',
-        primaryBorderColor: '#2563eb',
-        lineColor: '#64748b',
-        secondaryColor: '#f1f5f9',
-        tertiaryColor: '#e2e8f0',
-        fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
-        fontSize: '12px',
-      },
-  // Never 'loose'. Vox renders markdown it did not write — a model's meeting
-  // summary, a captured web page — and 'loose' passes HTML in diagram labels
-  // straight through to the SVG this component injects, in a webview with the
-  // full Tauri command surface behind it. 'strict' encodes that HTML and
-  // disables click bindings; `sanitizeSvgMarkup` is the second line, at the
-  // point of injection.
-  securityLevel: 'strict',
-  flowchart: {
-    // The diagram keeps its own size and `DiagramViewport` decides what is
-    // visible. Letting mermaid fit it to the container is what made a wide
-    // flowchart render as an unreadable strip: every label scaled below body
-    // text, with no way to get closer.
-    useMaxWidth: false,
-    htmlLabels: true,
-    curve: 'basis',
-  },
-  sequence: { useMaxWidth: false },
-  gantt: { useMaxWidth: false },
-  class: { useMaxWidth: false },
-  state: { useMaxWidth: false },
-  er: { useMaxWidth: false },
-  journey: { useMaxWidth: false },
-  pie: { useMaxWidth: false },
-  mindmap: { useMaxWidth: false },
-  timeline: { useMaxWidth: false },
-});
+export const mermaidConfig = (isDark: boolean): Parameters<typeof mermaid.initialize>[0] => {
+  const skin = isDark ? DIAGRAM_SKIN.dark : DIAGRAM_SKIN.light;
+
+  return {
+    startOnLoad: false,
+    // 'base' rather than 'default'/'dark'. The stock themes only partly honour
+    // `themeVariables` — they compute a good deal of their palette before the
+    // variables are applied — so a skin laid over one of them half-takes and
+    // the diagram comes out a mix of two palettes, which is how a sequence
+    // diagram ended up with stock lavender actors next to editorial arrows.
+    // 'base' is the theme that exists to be driven entirely by the variables.
+    theme: 'base',
+    themeVariables: mermaidThemeVariables(skin),
+    themeCSS: mermaidThemeCss(skin),
+    fontFamily: DIAGRAM_FONT.sans,
+    // Never 'loose'. Vox renders markdown it did not write — a model's meeting
+    // summary, a captured web page — and 'loose' passes HTML in diagram labels
+    // straight through to the SVG this component injects, in a webview with the
+    // full Tauri command surface behind it. 'strict' encodes that HTML and
+    // disables click bindings; `sanitizeSvgMarkup` is the second line, at the
+    // point of injection.
+    securityLevel: 'strict',
+    flowchart: {
+      // The diagram keeps its own size and `DiagramViewport` decides what is
+      // visible. Letting mermaid fit it to the container is what made a wide
+      // flowchart render as an unreadable strip: every label scaled below body
+      // text, with no way to get closer.
+      useMaxWidth: false,
+      htmlLabels: true,
+      curve: 'basis',
+    },
+    sequence: { useMaxWidth: false },
+    gantt: { useMaxWidth: false },
+    class: { useMaxWidth: false },
+    state: { useMaxWidth: false },
+    er: { useMaxWidth: false },
+    journey: { useMaxWidth: false },
+    pie: { useMaxWidth: false },
+    mindmap: { useMaxWidth: false },
+    timeline: { useMaxWidth: false },
+  };
+};
+
+/**
+ * Whether the app is in dark mode right now, and not merely whether it was
+ * when the diagram first mounted.
+ *
+ * A rendered diagram is a baked SVG: its colours are attributes on the
+ * elements, so flipping the theme does nothing to one already on screen. Until
+ * this existed, a diagram kept the palette it was born with until something
+ * else forced a remount — on a page of meeting summaries, switching to light
+ * mode left a column of dark diagrams down the middle of a light page.
+ */
+const useIsDarkTheme = (): boolean => {
+  const [isDark, setIsDark] = useState(
+    () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
+  );
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains('dark'));
+    });
+    observer.observe(document.documentElement, { attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  return isDark;
+};
 
 interface MermaidBlockProps {
   code: string;
@@ -169,6 +197,7 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const uniqueId = useId().replace(/[^a-zA-Z0-9_-]/g, 'm');
+  const isDark = useIsDarkTheme();
 
   useEffect(() => {
     let isMounted = true;
@@ -179,7 +208,6 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
         const cleanCode = sanitizeMermaidCode(code);
         if (!cleanCode) return;
 
-        const isDark = document.documentElement.classList.contains('dark');
         mermaid.initialize(mermaidConfig(isDark));
 
         const renderId = `m_${uniqueId}_${Date.now()}`;
@@ -200,7 +228,7 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
     return () => {
       isMounted = false;
     };
-  }, [code, uniqueId]);
+  }, [code, uniqueId, isDark]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code.trim());

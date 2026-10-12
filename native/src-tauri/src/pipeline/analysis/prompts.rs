@@ -179,7 +179,7 @@ pub fn definition(id: PromptId) -> PromptDefinition {
     match id {
         PromptId::Summary => PromptDefinition {
             id,
-            version: 1,
+            version: 2,
             purpose: "Short, structured prose summary of any source.",
             body: PromptBody::Static(crate::pipeline::CANONICAL_SUMMARY_SYSTEM_PROMPT),
             output_contract: OutputContract::Prose,
@@ -189,7 +189,7 @@ pub fn definition(id: PromptId) -> PromptDefinition {
         },
         PromptId::Enrichment => PromptDefinition {
             id,
-            version: 1,
+            version: 2,
             purpose: "Title, summary, topics, entities and exploration questions.",
             body: PromptBody::Static(crate::pipeline::CANONICAL_ANALYSIS_SYSTEM_PROMPT),
             output_contract: OutputContract::Json,
