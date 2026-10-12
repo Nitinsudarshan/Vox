@@ -380,8 +380,12 @@ Formatting & Hierarchy Rules for Summary:
   1. Use structured numbered sections for main takeaways (e.g. "1. Core Insight: ..." or "1. Architecture: ...").
   2. Sub-bullets under numbered headers MUST be indented with 2-4 spaces (e.g. "   - Detailed action or key context...").
   3. Bold key takeaways and terms for rapid scanning without raw asterisks in title headers.
-- Flowcharts & Diagrams:
-  If the content describes a workflow, sequential steps, state transitions, or system architecture, ALWAYS include a compact 2-4 node Mermaid flowchart wrapped in a ```mermaid code block (e.g. "```mermaid\ngraph LR\nA[Input] -->|Process| B[Result]\n```"). Do NOT use trailing '|>' on edge labels (use '-->|label| B', NOT '-->|label|> B') and do NOT put backticks inside bracketed node labels.
+- Diagrams:
+  Include a Mermaid diagram only when a reader would learn more from it than from the sentence it would replace. A two-node chain is that sentence — write the sentence instead. A list of things is bullets; an attribute-only before/after is a table.
+  When one earns its place, choose the grammar from what the content is: branching decision logic or a process with handoffs -> `flowchart LR`; time-ordered messages between actors -> `sequenceDiagram`; states, transitions and guards -> `stateDiagram-v2`.
+  Three to six nodes. Every node is one distinct idea; two that always travel together are one node. Leave out a connection whose relationship is already obvious from the layout.
+  Mark at most one or two nodes as focal with `:::focal` (e.g. `B[Review]:::focal`) and no more — the emphasis is editorial, not a status flag. Set no colours yourself: no `style`, `classDef`, `linkStyle` or `%%{init}%%` directives. The app owns every colour in the diagram, and a hex in the source overrides it.
+  Wrap it in a ```mermaid code block. Do NOT use trailing '|>' on edge labels (use '-->|label| B', NOT '-->|label|> B') and do NOT put backticks inside bracketed node labels.
 "#;
 
 /// The full canonical summary system prompt.
@@ -399,8 +403,12 @@ Formatting & Hierarchy Rules for Summary:
   1. Use structured numbered sections for main takeaways (e.g. "1. Core Insight: ..." or "1. Architecture: ...").
   2. Sub-bullets under numbered headers MUST be indented with 2-4 spaces (e.g. "   - Detailed action or key context...").
   3. Bold key takeaways and terms for rapid scanning without raw asterisks in title headers.
-- Flowcharts & Diagrams:
-  If the content describes a workflow, sequential steps, state transitions, or system architecture, ALWAYS include a compact 2-4 node Mermaid flowchart wrapped in a ```mermaid code block (e.g. "```mermaid\ngraph LR\nA[Input] -->|Process| B[Result]\n```"). Do NOT use trailing '|>' on edge labels (use '-->|label| B', NOT '-->|label|> B') and do NOT put backticks inside bracketed node labels.
+- Diagrams:
+  Include a Mermaid diagram only when a reader would learn more from it than from the sentence it would replace. A two-node chain is that sentence — write the sentence instead. A list of things is bullets; an attribute-only before/after is a table.
+  When one earns its place, choose the grammar from what the content is: branching decision logic or a process with handoffs -> `flowchart LR`; time-ordered messages between actors -> `sequenceDiagram`; states, transitions and guards -> `stateDiagram-v2`.
+  Three to six nodes. Every node is one distinct idea; two that always travel together are one node. Leave out a connection whose relationship is already obvious from the layout.
+  Mark at most one or two nodes as focal with `:::focal` (e.g. `B[Review]:::focal`) and no more — the emphasis is editorial, not a status flag. Set no colours yourself: no `style`, `classDef`, `linkStyle` or `%%{init}%%` directives. The app owns every colour in the diagram, and a hex in the source overrides it.
+  Wrap it in a ```mermaid code block. Do NOT use trailing '|>' on edge labels (use '-->|label| B', NOT '-->|label|> B') and do NOT put backticks inside bracketed node labels.
 
 Return ONLY the clean markdown summary text without conversational preamble.
 "#;
@@ -416,7 +424,7 @@ Return ONLY a valid JSON object with the following fields:
   Formatting Rules:
   1. Use structured numbered sections (e.g. "1. Core Insight: ..." or "1. Architecture:") with sub-bullets indented with 2-4 spaces (e.g. "   - Detailed action or context...").
   2. Use bold lead-ins for key terms and actionable takeaways without raw asterisks in title headers.
-  3. If the content describes a workflow, state transitions, or system architecture, ALWAYS include a concise 2-4 node Mermaid flowchart wrapped in a ```mermaid code block (e.g. "```mermaid\ngraph LR\nA[Capture] -->|Enrich| B[Graph]\n```"). Do NOT use trailing '|>' on edge labels (use '-->|label| B', NOT '-->|label|> B') and do NOT put backticks inside bracketed node labels.
+  3. Include a Mermaid diagram only when a reader would learn more from it than from the sentence it would replace; a two-node chain is that sentence, so write the sentence instead. When one earns its place: branching decision logic or a process with handoffs -> `flowchart LR`; time-ordered messages between actors -> `sequenceDiagram`; states, transitions and guards -> `stateDiagram-v2`. Three to six nodes, one distinct idea each. Mark at most one or two nodes focal with `:::focal` and set no colours yourself — no `style`, `classDef`, `linkStyle` or `%%{init}%%`. Wrap it in a ```mermaid code block. Do NOT use trailing '|>' on edge labels (use '-->|label| B', NOT '-->|label|> B') and do NOT put backticks inside bracketed node labels.
 - "topics": an array of 5 to 7 high-level domain topics and conceptual themes (e.g. ["Local-First Architecture", "Knowledge Management", "Cloud Synchronization", "Google Calendar Integration", "Identity Management"]). Return the top 5-7 most relevant topics based on the complete content.
 - "entities": an array of 5 to 7 specific named entities (technologies, tools, organizations, people, frameworks, platforms, projects) mentioned or central to the text. If fewer than 5 exist, return only the meaningful ones without inventing.
 - "concepts": an array of notable concepts or ideas
@@ -1266,7 +1274,7 @@ mod tests {
     fn test_canonical_prompts_integrity() {
         assert!(CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS.contains("under 75 words"));
         assert!(CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS.contains("1. Core Insight:"));
-        assert!(CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS.contains("2-4 node Mermaid flowchart"));
+        assert!(CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS.contains("only when a reader would learn more"));
 
         assert!(CANONICAL_ANALYSIS_SYSTEM_PROMPT.contains("under 75 words"));
         assert!(CANONICAL_ANALYSIS_SYSTEM_PROMPT.contains("5 to 7 high-level domain topics"));
@@ -1277,13 +1285,41 @@ mod tests {
         // `summarize_content_from` sends. It must keep carrying the same
         // formatting contract the instructions block states, or the registry's
         // recorded version describes a prompt nobody sent.
-        for rule in ["under 75 words", "1. Core Insight:", "2-4 node Mermaid flowchart"] {
+        for rule in [
+            "under 75 words",
+            "1. Core Insight:",
+            "only when a reader would learn more",
+        ] {
             assert!(
                 CANONICAL_SUMMARY_SYSTEM_PROMPT.contains(rule),
                 "the summary system prompt dropped: {rule}"
             );
         }
         assert!(CANONICAL_SUMMARY_SYSTEM_PROMPT.contains("Knowledge & Thinking Assistant"));
+
+        // Three prompts carry the diagram clause and all three reach the same
+        // renderer, so they state the same contract or one of them is asking a
+        // model for a diagram the app will restyle out from under it.
+        for prompt in [
+            CANONICAL_SUMMARY_PROMPT_INSTRUCTIONS,
+            CANONICAL_SUMMARY_SYSTEM_PROMPT,
+            CANONICAL_ANALYSIS_SYSTEM_PROMPT,
+        ] {
+            for rule in [
+                // The gate: a diagram is earned, never automatic.
+                "only when a reader would learn more",
+                // One or two focal nodes, reached by class and not by hex.
+                ":::focal",
+                // The theme owns colour; a directive in the source overrides it.
+                "%%{init}%%",
+            ] {
+                assert!(prompt.contains(rule), "a diagram prompt dropped: {rule}");
+            }
+            assert!(
+                !prompt.contains("ALWAYS include"),
+                "a diagram prompt still demands a diagram unconditionally"
+            );
+        }
     }
 
     #[test]

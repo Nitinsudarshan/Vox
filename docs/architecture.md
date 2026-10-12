@@ -97,6 +97,20 @@ See `docs/decisions.md` Decision 70.
 - **The webview has a content security policy** (`tauri.conf.json`), whose
   load-bearing clause is `script-src 'self'`.
 
+- **Every colour comes from one skin**, `native/src/lib/diagramTheme.ts` — the
+  `diagram-design` editorial design system (MIT), ported into the one form
+  Mermaid can consume. Roles are semantic (`paper`, `ink`, `muted`, `accent`),
+  the two skins are swapped by picking a record rather than by threading an
+  `isDark` flag through colour decisions, and `mermaidConfig()` names roles
+  rather than hex. See Decision 76.
+- **The skin is measured, not asserted.** `diagramTheme.test.ts` holds every
+  role to the WCAG ratio its job needs, against the surface it actually sits
+  on, in both skins — the same contract upstream runs in its own CI, with the
+  surfaces Mermaid adds (a node, a subgraph) measured too.
+- **A diagram already on screen follows the theme.** It is a baked SVG, so
+  flipping to light mode used to leave a column of dark diagrams down a light
+  page; `MarkdownView` now watches the root class and re-renders.
+
 Diagrams render inside `DiagramViewport`
 (`native/src/components/shared/DiagramViewport.tsx`) rather than being scaled
 to fit. A summary's flowchart is often several times wider than the panel it

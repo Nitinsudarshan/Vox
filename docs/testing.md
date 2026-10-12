@@ -246,7 +246,7 @@ test pins the growth's shape so a change that makes it worse is visible.
 
 ## 2. Native frontend (`native/src/`)
 
-370 tests, Vitest + React Testing Library, jsdom.
+746 tests, Vitest + React Testing Library, jsdom.
 
 ```bash
 cd native
@@ -292,6 +292,17 @@ Where the coverage sits:
   configured one, that an unconfigured capability offers the control that fixes
   it, and that one failing vault read degrades that surface without hiding the
   others.
+- `lib/diagramTheme.ts` — the contrast contract as a gate rather than a
+  paragraph: every role in the diagram skin held to the WCAG ratio its job
+  needs, against the surface it actually sits on, in both skins; the four
+  ratios the upstream style guide states outright, so a drift between the port
+  and its source is a failing test; and the symmetry argument that lets one
+  label colour be legal on every step of the chart ramp.
+- `components/common/MarkdownView.tsx` — which configuration reaches Mermaid
+  rather than what it draws (jsdom has no layout to measure a label with):
+  `securityLevel: 'strict'`, the `base` theme the skin needs to take at all,
+  no raw hex anywhere in the component, and a diagram being redrawn when the
+  theme flips under it.
 - `lib/soundEffects.ts` — the only code path behind the `dictation_sounds`
   setting, over a stubbed Web Audio API.
 - `webcapture/` — the browser extension's extraction layer, tested against

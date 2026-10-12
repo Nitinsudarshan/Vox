@@ -1,7 +1,27 @@
 import React from 'react';
-import { describe, expect, test } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import mermaid from 'mermaid';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { DIAGRAM_SKIN } from '@/lib/diagramTheme';
+
 import { MarkdownView, mermaidConfig } from './MarkdownView';
+
+// jsdom has no layout, so the real renderer cannot measure a label. The tests
+// below are about which configuration reaches it, not about the SVG it draws.
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(async (id: string) => ({ svg: `<svg id="${id}"><g /></svg>` })),
+  },
+}));
+
+const lastInitialize = () => {
+  const calls = vi.mocked(mermaid.initialize).mock.calls;
+  return calls[calls.length - 1][0] as { themeVariables?: Record<string, unknown> };
+};
 
 describe('MarkdownView layout and containment', () => {
   test('renders markdown tables into structured HTML table with horizontal scroll container', () => {
@@ -75,9 +95,55 @@ describe('mermaid configuration', () => {
     expect(config.sequence?.useMaxWidth).toBe(false);
   });
 
+  test('drives the whole palette from the skin rather than a stock theme', () => {
+    // 'default' and 'dark' compute much of their palette before themeVariables
+    // are applied, so a skin laid over one of them only half-takes. 'base' is
+    // the theme that exists to be driven entirely by the variables.
+    expect(mermaidConfig(true).theme).toBe('base');
+    expect(mermaidConfig(false).theme).toBe('base');
+  });
+
   test('follows the active theme', () => {
-    expect(mermaidConfig(true).theme).toBe('dark');
-    expect(mermaidConfig(false).theme).toBe('default');
+    expect(mermaidConfig(true).themeVariables?.darkMode).toBe(true);
+    expect(mermaidConfig(false).themeVariables?.darkMode).toBe(false);
+    expect(mermaidConfig(true).themeVariables?.background).toBe(DIAGRAM_SKIN.dark.paper2);
+    expect(mermaidConfig(false).themeVariables?.background).toBe(DIAGRAM_SKIN.light.paper2);
+  });
+
+  test('carries no colour of its own', () => {
+    // `rules/design-system.md`: no raw hex in a component. Mermaid wants hex
+    // rather than Tailwind classes, so the hex lives in the token module and
+    // this file names roles.
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/components/common/MarkdownView.tsx'),
+      'utf8',
+    );
+    expect(source.match(/#[0-9a-fA-F]{6}\b/g)).toBeNull();
+  });
+});
+
+describe('a diagram already on screen', () => {
+  afterEach(() => {
+    document.documentElement.classList.remove('dark');
+    vi.mocked(mermaid.initialize).mockClear();
+  });
+
+  test('is redrawn when the theme flips under it', async () => {
+    // A rendered diagram is a baked SVG — its colours are attributes on the
+    // elements — so flipping the theme does nothing to one already mounted.
+    // Switching to light mode used to leave a column of dark diagrams running
+    // down the middle of a light page of meeting summaries.
+    document.documentElement.classList.remove('dark');
+    render(<MarkdownView content={'```mermaid\ngraph TD\nA-->B\n```'} />);
+
+    await waitFor(() => expect(mermaid.initialize).toHaveBeenCalled());
+    expect(lastInitialize().themeVariables?.darkMode).toBe(false);
+
+    act(() => {
+      document.documentElement.classList.add('dark');
+    });
+
+    await waitFor(() => expect(lastInitialize().themeVariables?.darkMode).toBe(true));
   });
 });
 
